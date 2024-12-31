@@ -21,7 +21,7 @@ loom.runs.all {
 def getGitCommit = { ->
     def stdout = providers.exec {
         commandLine 'git', 'rev-parse', '--short', 'HEAD'
-//        workingDir = ".."
+        workingDir = ".."
     }.standardOutput.asText.get().trim()
     return stdout
 }
@@ -29,6 +29,7 @@ def getGitCommit = { ->
 String getVersionSuffix() {
     def stdout = providers.exec {
         commandLine 'git', 'describe', '--tags', '--dirty', '--broken'
+        workingDir = ".."
     }.standardOutput.asText.get()
     stdout = stdout.toString().strip()
     def suffix = ""
