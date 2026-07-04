@@ -161,8 +161,7 @@ public abstract class ClientPacketListenerMixin extends ClientCommonPacketListen
             // we need this for the update chunk status call, so that it can tell starlight what sections are empty and such
             this.enableChunkLight(chunk, chunkX, chunkZ);
 
-            // vanilla no longer need this since 26.2
-            // this.minecraft.levelRenderer.onChunkReadyToRender(chunk.getPos());
+            this.minecraft.levelRenderer.onChunkReadyToRender(chunk.getPos());
         }
     }
 }
