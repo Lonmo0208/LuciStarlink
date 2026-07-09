@@ -110,7 +110,7 @@ public abstract class ClientPacketListenerMixin extends ClientCommonPacketListen
     )
     private void unloadLightDataHook(final ClientPacketListener instance, final ClientboundForgetLevelChunkPacket packet, final Operation<Void> original) {
         if (this.level.getChunkSource().getLightEngine() instanceof ClientStarLightLightingProvider clientStarLightLightingProvider) {
-            clientStarLightLightingProvider.scalablelux$clientRemoveLightData(new ChunkPos(packet.pos().x(), packet.pos().z()));
+            clientStarLightLightingProvider.scalablelux$clientRemoveLightData(new ChunkPos(packet.pos().x, packet.pos().z));
         } else {
             original.call(instance, packet);
         }

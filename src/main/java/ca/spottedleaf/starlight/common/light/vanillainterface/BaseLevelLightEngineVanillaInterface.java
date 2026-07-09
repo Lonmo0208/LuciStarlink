@@ -22,7 +22,7 @@ import net.minecraft.world.level.chunk.LightChunkGetter;
 import net.minecraft.world.level.lighting.LayerLightEventListener;
 import net.minecraft.world.level.lighting.LayerLightSectionStorage;
 import net.minecraft.world.level.lighting.LevelLightEngine;
-import org.jspecify.annotations.Nullable;
+import org.jetbrains.annotations.Nullable;
 
 public class BaseLevelLightEngineVanillaInterface extends LevelLightEngine implements StarLightLightingProvider, ClientStarLightLightingProvider {
 

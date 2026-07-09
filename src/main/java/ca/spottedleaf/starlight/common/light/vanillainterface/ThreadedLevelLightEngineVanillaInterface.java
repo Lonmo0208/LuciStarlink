@@ -25,7 +25,7 @@ import net.minecraft.world.level.chunk.LightChunkGetter;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.lighting.LayerLightEventListener;
 import net.minecraft.world.level.lighting.LayerLightSectionStorage;
-import org.jspecify.annotations.Nullable;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -294,7 +294,7 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
                 // can't really force the chunk to be edged checked, as we need neighbouring chunks - but we don't have
                 // them, so if it's not loaded then i guess we can't do edge checks. later loads of the chunk should
                 // catch what we miss here.
-                this.scalablelux$getLightEngine().checkChunkEdges(chunkPos.x(), chunkPos.z());
+                this.scalablelux$getLightEngine().checkChunkEdges(chunkPos.x, chunkPos.z);
             }
 
 //            this.chunkMap.releaseLightTicket(chunkPos); // vanilla 1.21 no longer does this

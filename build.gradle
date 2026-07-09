@@ -1,5 +1,5 @@
 plugins {
-    id 'net.fabricmc.fabric-loom' version '1.17-SNAPSHOT'
+    id 'net.fabricmc.fabric-loom-remap' version '1.17-SNAPSHOT'
     id 'maven-publish'
     id 'com.gradleup.shadow' version '9.4.0'
     id 'me.modmuss50.mod-publish-plugin' version "2.1.1"
@@ -57,7 +57,8 @@ base {
 dependencies {
     //to change the versions see the gradle.properties file
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
     // Fabric API. This is technically optional, but you probably want it anyway.
     //modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
@@ -100,8 +101,8 @@ java {
     // If you remove this line, sources will not be generated.
     withSourcesJar()
 
-    sourceCompatibility = JavaVersion.VERSION_25
-    targetCompatibility = JavaVersion.VERSION_25
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
 }
 jar {
     archiveClassifier = "preshadow"
@@ -109,10 +110,17 @@ jar {
 }
 
 shadowJar {
-    archiveClassifier = "all"
+    archiveClassifier = "all-dev"
     configurations = [ project.configurations.shadowInclude ]
 
     relocate "com.ishland.flowsched", "ca.spottedleaf.starlight.interndep.flowsched"
+}
+
+remapJar {
+    input = shadowJar.archiveFile
+    archiveFileName = shadowJar.archiveFileName.get().replaceAll("-dev\\.jar\$", ".jar")
+    addNestedDependencies = true
+    dependsOn shadowJar
 }
 
 clean.dependsOn gradle.includedBuild('FlowSched').task(':clean')
@@ -180,7 +188,7 @@ publishMods {
 
         curseforge("curseforgePackage") {
             from cfOptions
-            file = shadowJar.archiveFile
+            file = remapJar.archiveFile
             projectId = "1055925"
         }
     }
@@ -193,7 +201,7 @@ publishMods {
 
         modrinth("modrinthPackage") {
             from mrOptions
-            file = shadowJar.archiveFile
+            file = remapJar.archiveFile
             projectId = "Ps1zyz6x"
         }
     }

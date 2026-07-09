@@ -9,7 +9,7 @@ import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.level.lighting.LayerLightEventListener;
 import net.minecraft.world.level.lighting.LayerLightSectionStorage;
-import org.jspecify.annotations.Nullable;
+import org.jetbrains.annotations.Nullable;
 
 public class CommonLightEngineUtils {
     private CommonLightEngineUtils() {
@@ -36,7 +36,7 @@ public class CommonLightEngineUtils {
     public static void setLightEnabled(StarLightLightingProvider instance, ChunkPos pos, boolean enable) {
         // store state for implementation of lightOnInColumn()
         // needed for proper culling of chunks in the client
-        final long key = pos.pack();
+        final long key = pos.toLong();
         if (enable) {
             instance.scalablelux$getLightingEnabledChunks().add(key);
         } else {
