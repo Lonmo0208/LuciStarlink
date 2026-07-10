@@ -6,4 +6,6 @@ public interface ExtendedAbstractBlockState {
 
     public int scalablelux$getOpacityIfCached();
 
+    public boolean scalablelux$actuallyDynamicLightEmission();
+
 }

@@ -1,5 +1,5 @@
 plugins {
-    id 'net.fabricmc.fabric-loom-remap' version '1.17-SNAPSHOT'
+    id 'org.relativitymc.neo-loom-remap' version '1.17-SNAPSHOT'
     id 'maven-publish'
     id 'com.gradleup.shadow' version '9.4.0'
     id 'me.modmuss50.mod-publish-plugin' version "2.1.1"
@@ -54,11 +54,15 @@ base {
     group = project.maven_group
 }
 
+repositories {
+    maven { url "https://maven.neoforged.net/releases/" }
+}
+
 dependencies {
     //to change the versions see the gradle.properties file
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     mappings loom.officialMojangMappings()
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    forgeUserdev "net.neoforged:neoforge:${project.forge_version}:userdev"
 
     // Fabric API. This is technically optional, but you probably want it anyway.
     //modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
@@ -74,10 +78,10 @@ dependencies {
 
 processResources {
     inputs.property "version", project.version + "+" + project.minecraft_version
-    inputs.property "loader_version", project.loader_version
+    inputs.property "minecraft_version", project.minecraft_version
 
-    filesMatching("fabric.mod.json") {
-        expand "version": project.version + "+" + project.minecraft_version, "loader_version": project.loader_version
+    filesMatching("META-INF/neoforge.mods.toml") {
+        expand "version": project.version + "+" + project.minecraft_version, "minecraft_version": project.minecraft_version
     }
 }
 
@@ -120,6 +124,7 @@ remapJar {
     input = shadowJar.archiveFile
     archiveFileName = shadowJar.archiveFileName.get().replaceAll("-dev\\.jar\$", ".jar")
     addNestedDependencies = true
+    atAccessWideners.add("scalablelux.accesswidener")
     dependsOn shadowJar
 }
 
@@ -165,10 +170,10 @@ afterEvaluate {
 
 publishMods {
     changelog = ghaChangelog
-    modLoaders.add("fabric")
+    modLoaders.add("neoforge")
 
     def envDisplayName = System.getenv("OVERRIDE_DISPLAY_NAME")
-    displayName = envDisplayName != null ? envDisplayName : (project.version + " devbuild for fabric " + project.minecraft_version)
+    displayName = envDisplayName != null ? envDisplayName : (project.version + " devbuild for neoforge " + project.minecraft_version)
 
     def envType = System.getenv("OVERRIDE_RELEASE_TYPE")
     type = envType != null ? me.modmuss50.mpp.ReleaseType.valueOf(envType) : me.modmuss50.mpp.ReleaseType.ALPHA

@@ -1,9 +1,7 @@
 package ca.spottedleaf.starlight.common.config;
 
 import ca.spottedleaf.starlight.common.thread.SchedulingUtil;
-import net.fabricmc.loader.api.FabricLoader;
-import net.fabricmc.loader.api.ModContainer;
-import net.fabricmc.loader.api.metadata.CustomValue;
+import net.neoforged.fml.loading.FMLPaths;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -23,7 +21,7 @@ public class Config {
     static {
         final Properties properties = new Properties();
         final Properties newProperties = new Properties();
-        final Path path = FabricLoader.getInstance().getConfigDir().resolve("scalablelux.properties");
+        final Path path = FMLPaths.CONFIGDIR.get().resolve("scalablelux.properties");
         if (Files.isRegularFile(path)) {
             try (InputStream in = Files.newInputStream(path, StandardOpenOption.CREATE)) {
                 properties.load(in);
@@ -65,30 +63,30 @@ public class Config {
         }
     }
 
-    private static boolean getBoolean(Properties properties, Properties newProperties, String key, boolean def) {
-        boolean boolean0 = getBoolean0(properties, newProperties, key, def);
-        for (ModContainer modContainer : FabricLoader.getInstance().getAllMods()) {
-            final CustomValue incompatibilitiesValue = modContainer.getMetadata().getCustomValue("scalablelux:incompatibleConfig");
-            if (incompatibilitiesValue != null && incompatibilitiesValue.getType() == CustomValue.CvType.ARRAY) {
-                final CustomValue.CvArray incompatibilities = incompatibilitiesValue.getAsArray();
-                for (CustomValue value : incompatibilities) {
-                    if (value.getType() == CustomValue.CvType.STRING && value.getAsString().equals(key)) {
-                        final String message;
-                        if (Boolean.getBoolean("scalablelux.ignoreIncompatibleConfig")) {
-                            message = String.format("Ignoring incompatibility of %s (defined in %s@%s)",
-                                    key, modContainer.getMetadata().getId(), modContainer.getMetadata().getVersion().getFriendlyString());
-                        } else {
-                            message = String.format("Forcing %s in scalablelux.properties to be disabled (defined in %s@%s)",
-                                    key, modContainer.getMetadata().getId(), modContainer.getMetadata().getVersion().getFriendlyString());
-                            boolean0 = false;
-                        }
-                        LOGGER.warn(message);
-                    }
-                }
-            }
-        }
-        return boolean0;
-    }
+//    private static boolean getBoolean(Properties properties, Properties newProperties, String key, boolean def) {
+//        boolean boolean0 = getBoolean0(properties, newProperties, key, def);
+//        for (ModContainer modContainer : FabricLoader.getInstance().getAllMods()) {
+//            final CustomValue incompatibilitiesValue = modContainer.getMetadata().getCustomValue("scalablelux:incompatibleConfig");
+//            if (incompatibilitiesValue != null && incompatibilitiesValue.getType() == CustomValue.CvType.ARRAY) {
+//                final CustomValue.CvArray incompatibilities = incompatibilitiesValue.getAsArray();
+//                for (CustomValue value : incompatibilities) {
+//                    if (value.getType() == CustomValue.CvType.STRING && value.getAsString().equals(key)) {
+//                        final String message;
+//                        if (Boolean.getBoolean("scalablelux.ignoreIncompatibleConfig")) {
+//                            message = String.format("Ignoring incompatibility of %s (defined in %s@%s)",
+//                                    key, modContainer.getMetadata().getId(), modContainer.getMetadata().getVersion().getFriendlyString());
+//                        } else {
+//                            message = String.format("Forcing %s in scalablelux.properties to be disabled (defined in %s@%s)",
+//                                    key, modContainer.getMetadata().getId(), modContainer.getMetadata().getVersion().getFriendlyString());
+//                            boolean0 = false;
+//                        }
+//                        LOGGER.warn(message);
+//                    }
+//                }
+//            }
+//        }
+//        return boolean0;
+//    }
 
     private static boolean getBoolean0(Properties properties, Properties newProperties, String key, boolean def) {
         try {
