@@ -34,7 +34,7 @@ public class CommonLightEngineUtils {
     }
 
     public static void setLightEnabled(StarLightLightingProvider instance, ChunkPos pos, boolean enable) {
-        // store state for implementation of lightOnInColumn()
+        // store state for implementation of lightOnInSection()
         // needed for proper culling of chunks in the client
         final long key = pos.toLong();
         if (enable) {
@@ -78,8 +78,8 @@ public class CommonLightEngineUtils {
         return instance.scalablelux$getLightEngine().getRawBrightness(pos, skyDampen);
     }
 
-    public static boolean lightOnInColumn(StarLightLightingProvider instance, long pos) {
-        final long key = CoordinateUtils.getChunkKey(SectionPos.x(pos), SectionPos.z(pos));
+    public static boolean lightOnInSection(StarLightLightingProvider instance, SectionPos pos) {
+        final long key = CoordinateUtils.getChunkKey(pos.x(), pos.z());
         return instance.scalablelux$getLightingEnabledChunks().contains(key) ||
                 (!instance.scalablelux$getLightEngine().hasBlockLight() || instance.scalablelux$getBlockLightMap().get(key) != null) &&
                         (!instance.scalablelux$getLightEngine().hasSkyLight() || instance.scalablelux$getSkyLightMap().get(key) != null);

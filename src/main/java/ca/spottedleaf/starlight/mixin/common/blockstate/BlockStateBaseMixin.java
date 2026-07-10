@@ -27,6 +27,12 @@ public abstract class BlockStateBaseMixin extends StateHolder<Block, BlockState>
     @Final
     private boolean canOcclude;
 
+    @Shadow
+    protected BlockBehaviour.BlockStateBase.Cache cache;
+
+    @Unique
+    private int opacityIfCached;
+
     @Unique
     private boolean scalablelux$isConditionallyFullOpaque;
 
@@ -43,6 +49,7 @@ public abstract class BlockStateBaseMixin extends StateHolder<Block, BlockState>
     )
     public void initLightAccessState(final CallbackInfo ci) {
         this.scalablelux$isConditionallyFullOpaque = this.canOcclude & this.useShapeForLightOcclusion;
+        this.opacityIfCached = this.cache == null || this.scalablelux$isConditionallyFullOpaque ? -1 : this.cache.lightBlock;
     }
 
     @Override
@@ -50,4 +57,8 @@ public abstract class BlockStateBaseMixin extends StateHolder<Block, BlockState>
         return this.scalablelux$isConditionallyFullOpaque;
     }
 
+    @Override
+    public final int scalablelux$getOpacityIfCached() {
+        return this.opacityIfCached;
+    }
 }

@@ -42,7 +42,7 @@ import java.util.function.IntConsumer;
 
 public final class StarLightInterface {
 
-    public static final TicketType CHUNK_WORK_TICKET = new TicketType(0L, TicketType.FLAG_LOADING);
+    public static final TicketType<ChunkPos> CHUNK_WORK_TICKET = TicketType.create("starlight_chunk_work_ticket", (p1, p2) -> Long.compare(p1.toLong(), p2.toLong()));
 
     /**
      * Can be {@code null}, indicating the light is all empty.

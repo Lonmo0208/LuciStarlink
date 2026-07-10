@@ -51,7 +51,7 @@ public abstract class ClientPacketListenerMixin extends ClientCommonPacketListen
      */
 
     @Shadow
-    protected abstract void applyLightData(final int chunkX, final int chunkZ, final ClientboundLightUpdatePacketData clientboundLightUpdatePacketData, boolean markDirty);
+    protected abstract void applyLightData(final int chunkX, final int chunkZ, final ClientboundLightUpdatePacketData clientboundLightUpdatePacketData);
 
     @Shadow
     protected abstract void enableChunkLight(final LevelChunk levelChunk, final int chunkX, final int chunkZ);
@@ -155,13 +155,13 @@ public abstract class ClientPacketListenerMixin extends ClientCommonPacketListen
                 return;
             }
             // load in light data from packet immediately
-            this.applyLightData(chunkX, chunkZ, packet.getLightData(), true);
+            this.applyLightData(chunkX, chunkZ, packet.getLightData());
             clientStarLightLightingProvider.scalablelux$clientChunkLoad(new ChunkPos(chunkX, chunkZ), chunk);
 
             // we need this for the update chunk status call, so that it can tell starlight what sections are empty and such
             this.enableChunkLight(chunk, chunkX, chunkZ);
 
-            this.minecraft.levelRenderer.onChunkReadyToRender(chunk.getPos());
+//            this.minecraft.levelRenderer.onChunkReadyToRender(chunk.getPos());
         }
     }
 }

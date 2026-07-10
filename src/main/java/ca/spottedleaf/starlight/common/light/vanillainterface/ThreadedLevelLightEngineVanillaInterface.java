@@ -12,10 +12,11 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ChunkMap;
-import net.minecraft.server.level.ChunkTaskDispatcher;
+import net.minecraft.server.level.ChunkTaskPriorityQueueSorter;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ThreadedLevelLightEngine;
-import net.minecraft.util.thread.ConsecutiveExecutor;
+import net.minecraft.util.thread.ProcessorHandle;
+import net.minecraft.util.thread.ProcessorMailbox;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LightLayer;
@@ -48,10 +49,10 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
             final LightChunkGetter lightChunkGetter,
             final ChunkMap chunkMap,
             final boolean hasSkyLight,
-            final ConsecutiveExecutor consecutiveExecutor,
-            final ChunkTaskDispatcher taskDispatcher
+            final ProcessorMailbox<Runnable> processorMailbox,
+            final ProcessorHandle<ChunkTaskPriorityQueueSorter.Message<Runnable>> processorHandle
     ) {
-        super(lightChunkGetter, chunkMap, hasSkyLight, consecutiveExecutor, taskDispatcher);
+        super(lightChunkGetter, chunkMap, hasSkyLight, processorMailbox, processorHandle);
 
         // avoid ClassCastException in cases where custom LightChunkGetters do not return a Level from getLevel()
         if (lightChunkGetter.getLevel() instanceof Level) {
@@ -216,8 +217,8 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
     }
 
     @Override
-    public boolean lightOnInColumn(long sectionZeroNode) {
-        return CommonLightEngineUtils.lightOnInColumn(this, sectionZeroNode);
+    public boolean lightOnInSection(SectionPos sectionPos) {
+        return CommonLightEngineUtils.lightOnInSection(this, sectionPos);
     }
 
     @Override

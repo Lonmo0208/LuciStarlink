@@ -103,8 +103,8 @@ public class BaseLevelLightEngineVanillaInterface extends LevelLightEngine imple
     }
 
     @Override
-    public boolean lightOnInColumn(long sectionZeroNode) {
-        return CommonLightEngineUtils.lightOnInColumn(this, sectionZeroNode);
+    public boolean lightOnInSection(SectionPos sectionPos) {
+        return CommonLightEngineUtils.lightOnInSection(this, sectionPos);
     }
 
     @Override

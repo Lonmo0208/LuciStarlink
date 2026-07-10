@@ -19,11 +19,11 @@ public class ChunkSystemHooks {
     }
 
     public static void addLightTicket(ServerLevel world, ChunkPos pos) {
-        world.getChunkSource().addTicketWithRadius(StarLightInterface.CHUNK_WORK_TICKET, pos, 0);
+        world.getChunkSource().addRegionTicket(StarLightInterface.CHUNK_WORK_TICKET, pos, 0, pos);
     }
 
     public static void removeLightTicket(ServerLevel world, ChunkPos pos) {
-        world.getChunkSource().removeTicketWithRadius(StarLightInterface.CHUNK_WORK_TICKET, pos, 0);
+        world.getChunkSource().removeRegionTicket(StarLightInterface.CHUNK_WORK_TICKET, pos, 0, pos);
     }
 
 }

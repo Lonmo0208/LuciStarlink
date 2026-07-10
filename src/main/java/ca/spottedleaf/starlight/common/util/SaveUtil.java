@@ -4,14 +4,15 @@ import ca.spottedleaf.starlight.common.chunk.ExtendedChunk;
 import ca.spottedleaf.starlight.common.integration.v0.ChunkSystemHooks;
 import ca.spottedleaf.starlight.common.light.SWMRNibbleArray;
 import ca.spottedleaf.starlight.common.light.StarLightEngine;
-import ca.spottedleaf.starlight.common.world.ExtendedSerializableChunkData;
 import com.mojang.logging.LogUtils;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.Level;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.ChunkAccess;
-import net.minecraft.world.level.chunk.DataLayer;
+import net.minecraft.world.level.chunk.ProtoChunk;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
-import net.minecraft.world.level.chunk.storage.SerializableChunkData;
 import org.slf4j.Logger;
 
 import java.util.List;
@@ -21,12 +22,12 @@ public final class SaveUtil {
 
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    public static void prepareSaveVanillaLightHook(final ServerLevel serverLevel, final ChunkAccess chunk, final SerializableChunkData data) {
-        boolean lightCorrect = data.lightCorrect();
-        ((ExtendedSerializableChunkData) (Object) data).scalablelux$setLightCorrect(false);
+    public static void saveVanillaLightHook(final ServerLevel serverLevel, final ChunkAccess chunk, final CompoundTag data) {
+        boolean lightCorrect = data.getBoolean("isLightOn");
+        data.putBoolean("isLightOn", false);
         try {
-            prepareSaveVanillaLightHookReal(serverLevel, chunk, data);
-            ((ExtendedSerializableChunkData) (Object) data).scalablelux$setLightCorrect(lightCorrect);
+            saveVanillaLightHookReal(serverLevel, chunk, data);
+            data.putBoolean("isLightOn", lightCorrect);
         } catch (final Throwable ex) {
             // failing to inject is not fatal so we catch anything here. if it fails, it will have correctly set lit to false
             // for Vanilla to relight on load and it will not set our lit tag so we will relight on load
@@ -37,7 +38,7 @@ public final class SaveUtil {
         }
     }
 
-    private static void prepareSaveVanillaLightHookReal(final ServerLevel serverLevel, final ChunkAccess chunk, final SerializableChunkData data) {
+    private static void saveVanillaLightHookReal(final ServerLevel serverLevel, final ChunkAccess chunk, final CompoundTag data) {
         boolean avoidLightCopy = ChunkSystemHooks.avoidLightCopy();
 
         // replace existing lighting data
@@ -56,37 +57,52 @@ public final class SaveUtil {
             }
         }
 
-        ListIterator<SerializableChunkData.SectionData> iterator = data.sectionData().listIterator(); // mutable in vanilla
-        while (iterator.hasNext()) {
-            SerializableChunkData.SectionData sectionData = iterator.next();
-            int index = sectionData.y() - WorldUtil.getMinLightSection(serverLevel);
+        ListTag sectionsStored = data.getList("sections", 10);
+
+        for (Tag tag : sectionsStored) {
+            CompoundTag sectionData = (CompoundTag) tag;
+            int index = sectionData.getInt("Y") - WorldUtil.getMinLightSection(serverLevel);
             byte[] blockRaw = blockNibbleSaveStates[index] != null ? blockNibbleSaveStates[index].data : null;
             byte[] skyRaw = skyNibbleSaveStates[index] != null ? skyNibbleSaveStates[index].data : null;
-            iterator.set(new SerializableChunkData.SectionData(sectionData.y(), sectionData.chunkSection(), blockRaw != null ? new DataLayer(blockRaw) : null, skyRaw != null ? new DataLayer(skyRaw) : null));
+
+            sectionData.remove("BlockLight");
+            if (blockRaw != null) sectionData.putByteArray("BlockLight", blockRaw);
+
+            sectionData.remove("SkyLight");
+            if (skyRaw != null) sectionData.putByteArray("SkyLight", skyRaw);
         }
+
+//        ListIterator<SerializableChunkData.SectionData> iterator = data.sectionData().listIterator(); // mutable in vanilla
+//        while (iterator.hasNext()) {
+//            SerializableChunkData.SectionData sectionData = iterator.next();
+//            int index = sectionData.y() - WorldUtil.getMinLightSection(serverLevel);
+//            byte[] blockRaw = blockNibbleSaveStates[index] != null ? blockNibbleSaveStates[index].data : null;
+//            byte[] skyRaw = skyNibbleSaveStates[index] != null ? skyNibbleSaveStates[index].data : null;
+//            iterator.set(new SerializableChunkData.SectionData(sectionData.y(), sectionData.chunkSection(), blockRaw != null ? new DataLayer(blockRaw) : null, skyRaw != null ? new DataLayer(skyRaw) : null));
+//        }
     }
 
-    public static void loadVanillaLightHook(final Level world, final SerializableChunkData data, final ChunkAccess into) {
+    public static void loadVanillaLightHook(final ServerLevel world, final ChunkPos chunkPos, final CompoundTag compoundTag, final ProtoChunk into) {
         try {
-            loadVanillaLightHookReal(world, data, into);
+            loadVanillaLightHookReal(world, chunkPos, compoundTag, into);
         } catch (final Throwable ex) {
             // failing to inject is not fatal so we catch anything here. if it fails, then we simply relight. Not a problem, we get correct
             // lighting in both cases.
             if (ex instanceof ThreadDeath) {
                 throw (ThreadDeath)ex;
             }
-            LOGGER.warn("Failed to load light for chunk " + data.chunkPos() + ", light will be recalculated", ex);
+            LOGGER.warn("Failed to load light for chunk " + chunkPos + ", light will be recalculated", ex);
         }
     }
 
-    private static void loadVanillaLightHookReal(final Level world, final SerializableChunkData data, final ChunkAccess into) {
+    private static void loadVanillaLightHookReal(final ServerLevel world, final ChunkPos chunkPos, final CompoundTag compoundTag, final ProtoChunk into) {
         if (into == null) {
             return;
         }
         final int minSection = WorldUtil.getMinLightSection(world);
         final int maxSection = WorldUtil.getMaxLightSection(world);
 
-        ChunkStatus status = data.chunkStatus();
+        ChunkStatus status = into.getPersistedStatus();
         boolean lit = into.isLightCorrect() && status.isOrAfter(ChunkStatus.LIGHT);
 
         into.setLightCorrect(false); // mark as unlit in case we fail parsing
@@ -95,20 +111,30 @@ public final class SaveUtil {
         SWMRNibbleArray[] skyNibbles = StarLightEngine.getFilledEmptyLight(world);
 
         if (lit) {
-            List<SerializableChunkData.SectionData> sectionData = data.sectionData();
-            for (int i = 0, sectionDataSize = sectionData.size(); i < sectionDataSize; i++) {
-                SerializableChunkData.SectionData section = sectionData.get(i);
-                int y = section.y();
+            ListTag sectionsStored = compoundTag.getList("sections", 10);
+            for (Tag tag : sectionsStored) {
+                CompoundTag sectionData = (CompoundTag) tag;
+                int index = sectionData.getInt("Y") - minSection;
 
-                if (section.blockLight() != null) {
-                    // this is where our diff is
-                    blockNibbles[y - minSection] = SWMRNibbleArray.fromVanilla(section.blockLight()); // clone for data safety
-                }
+                byte[] blockRaw = sectionData.contains("BlockLight", Tag.TAG_BYTE_ARRAY) ? sectionData.getByteArray("BlockLight") : null;
+                if (blockRaw != null) blockNibbles[index] = new SWMRNibbleArray(blockRaw);
 
-                if (section.skyLight() != null) {
-                    skyNibbles[y - minSection] = SWMRNibbleArray.fromVanilla(section.skyLight()); // clone for data safety
-                }
+                byte[] skyRaw = sectionData.contains("SkyLight", Tag.TAG_BYTE_ARRAY) ? sectionData.getByteArray("SkyLight") : null;
+                if (skyRaw != null) skyNibbles[index] = new SWMRNibbleArray(skyRaw);
             }
+//            for (int i = 0, sectionDataSize = sectionData.size(); i < sectionDataSize; i++) {
+//                SerializableChunkData.SectionData section = sectionData.get(i);
+//                int y = section.y();
+//
+//                if (section.blockLight() != null) {
+//                    // this is where our diff is
+//                    blockNibbles[y - minSection] = SWMRNibbleArray.fromVanilla(section.blockLight()); // clone for data safety
+//                }
+//
+//                if (section.skyLight() != null) {
+//                    skyNibbles[y - minSection] = SWMRNibbleArray.fromVanilla(section.skyLight()); // clone for data safety
+//                }
+//            }
             // workaround vanilla quirk: skylight in sections below sections with initialized skylight is zero
             {
                 boolean fillWithZero = false;
