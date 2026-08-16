@@ -59,17 +59,39 @@ public final class SaveUtil {
 
         ListTag sectionsStored = data.getList("sections", 10);
 
+        int minLightSection = WorldUtil.getMinLightSection(serverLevel);
+        int maxLightSection = WorldUtil.getMaxLightSection(serverLevel);
+
         for (Tag tag : sectionsStored) {
             CompoundTag sectionData = (CompoundTag) tag;
-            int index = sectionData.getInt("Y") - WorldUtil.getMinLightSection(serverLevel);
+            int index = sectionData.getInt("Y") - minLightSection;
             byte[] blockRaw = blockNibbleSaveStates[index] != null ? blockNibbleSaveStates[index].data : null;
+            blockNibbleSaveStates[index] = null;
             byte[] skyRaw = skyNibbleSaveStates[index] != null ? skyNibbleSaveStates[index].data : null;
+            skyNibbleSaveStates[index] = null;
 
             sectionData.remove("BlockLight");
             if (blockRaw != null) sectionData.putByteArray("BlockLight", blockRaw);
 
             sectionData.remove("SkyLight");
             if (skyRaw != null) sectionData.putByteArray("SkyLight", skyRaw);
+        }
+
+        // we might still have unsaved data, append them to the section list
+        for (int i = minLightSection; i < maxLightSection; i++) {
+            int index = i - minLightSection;
+            byte[] blockRaw = blockNibbleSaveStates[index] != null ? blockNibbleSaveStates[index].data : null;
+            blockNibbleSaveStates[index] = null;
+            byte[] skyRaw = skyNibbleSaveStates[index] != null ? skyNibbleSaveStates[index].data : null;
+            skyNibbleSaveStates[index] = null;
+
+            if (blockRaw != null || skyRaw != null) {
+                CompoundTag sectionData = new CompoundTag();
+                if (blockRaw != null) sectionData.putByteArray("BlockLight", blockRaw);
+                if (skyRaw != null) sectionData.putByteArray("SkyLight", skyRaw);
+                sectionData.putInt("Y", (byte) i);
+                sectionsStored.add(sectionData);
+            }
         }
 
 //        ListIterator<SerializableChunkData.SectionData> iterator = data.sectionData().listIterator(); // mutable in vanilla
