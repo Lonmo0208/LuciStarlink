@@ -24,6 +24,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(ChunkSerializer.class)
 public abstract class SerializableChunkDataMixin {
 
+    @WrapOperation(method = "write", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/chunk/ChunkAccess;isLightCorrect()Z"))
+    private static boolean forceLightIncorrectBeforeSave(ChunkAccess instance, Operation<Boolean> original, ServerLevel world, ChunkAccess chunkAccess1) {
+        if (world.getLightEngine() instanceof StarLightLightingProvider) {
+            return false;
+        } else {
+            return original.call(instance);
+        }
+    }
+
     /**
      * Overwrites vanilla's light data with our own.
      * TODO this needs to be checked on update to account for format changes

@@ -23,7 +23,7 @@ public final class SaveUtil {
     private static final Logger LOGGER = LogUtils.getLogger();
 
     public static void saveVanillaLightHook(final ServerLevel serverLevel, final ChunkAccess chunk, final CompoundTag data) {
-        boolean lightCorrect = data.getBoolean("isLightOn");
+        boolean lightCorrect = chunk.isLightCorrect();
         data.putBoolean("isLightOn", false);
         try {
             saveVanillaLightHookReal(serverLevel, chunk, data);
