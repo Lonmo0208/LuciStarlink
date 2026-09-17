@@ -1,0 +1,62 @@
+plugins {
+    id 'java'
+    id 'java-library'
+    id 'jacoco'
+}
+
+group = 'com.ishland'
+version = '0.0.1-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+configurations {
+    mockitoAgent
+}
+
+dependencies {
+    // https://mvnrepository.com/artifact/it.unimi.dsi/fastutil
+    implementation 'it.unimi.dsi:fastutil:8.5.12'
+    // https://mvnrepository.com/artifact/org.slf4j/slf4j-api
+    implementation 'org.slf4j:slf4j-api:2.0.9'
+
+    // https://mvnrepository.com/artifact/io.reactivex.rxjava3/rxjava
+    api 'io.reactivex.rxjava3:rxjava:3.1.12'
+
+    // https://mvnrepository.com/artifact/ch.qos.logback/logback-core
+    testRuntimeOnly 'ch.qos.logback:logback-classic:1.5.14'
+
+    // https://mvnrepository.com/artifact/org.jctools/jctools-core
+    testImplementation 'org.jctools:jctools-core:4.0.6'
+
+    testImplementation platform('org.junit:junit-bom:5.9.1')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation 'org.mockito:mockito-core:5.21.0'
+    testImplementation 'org.mockito:mockito-junit-jupiter:5.21.0'
+    mockitoAgent('org.mockito:mockito-core:5.21.0') {
+        transitive = false
+    }
+}
+
+test {
+    jvmArgs "-javaagent:${configurations.mockitoAgent.asPath}"
+    useJUnitPlatform()
+    finalizedBy jacocoTestReport
+}
+
+jacocoTestReport {
+    reports {
+        xml.required = true
+        html.required = true
+    }
+    dependsOn test
+}
+
+

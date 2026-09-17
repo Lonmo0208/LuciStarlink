@@ -1,0 +1,199 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.17-SNAPSHOT'
+    id 'maven-publish'
+    id 'com.gradleup.shadow' version '9.4.0'
+    id 'me.modmuss50.mod-publish-plugin' version "2.1.1"
+}
+
+configurations {
+    shadowInclude
+}
+
+loom.runs.all {
+    // https://github.com/SpongePowered/Mixin/wiki/Mixin-Java-System-Properties
+    vmArg("-Dmixin.debug=true")
+}
+
+/*
+ * Gets the version name from the latest Git tag
+ */
+// https://stackoverflow.com/questions/28498688/gradle-script-to-autoversion-and-include-the-commit-hash-in-android
+def getGitCommit = { ->
+    def stdout = providers.exec {
+        commandLine 'git', 'rev-parse', '--short', 'HEAD'
+//        workingDir = ".."
+    }.standardOutput.asText.get().trim()
+    return stdout
+}
+
+String getVersionSuffix() {
+    def stdout = providers.exec {
+        commandLine 'git', 'describe', '--tags', '--dirty', '--broken'
+    }.standardOutput.asText.get()
+    stdout = stdout.toString().strip()
+    def suffix = ""
+    if (stdout.endsWith("-dirty")) {
+        stdout = stdout.substring(0, stdout.length() - "-dirty".length())
+        suffix = "-dirty"
+    }
+    if (stdout.endsWith("-broken")) {
+        stdout = stdout.substring(0, stdout.length() - "-broken".length())
+        suffix = "-broken"
+    }
+    if (stdout.indexOf('-') < 0) {
+        return "0" + suffix;
+    }
+    def split = stdout.split('-')
+    return split[split.length - 2] + suffix
+}
+
+base {
+    archivesName = project.archives_base_name
+    version = project.mod_version + "." + getVersionSuffix()
+    group = project.maven_group
+}
+
+dependencies {
+    //to change the versions see the gradle.properties file
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+
+    // Fabric API. This is technically optional, but you probably want it anyway.
+    //modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+    // PSA: Some older mods, compiled on Loom 0.2.1, might have outdated Maven POMs.
+    // You may need to force-disable transitiveness on them.
+
+    shadowInclude("com.ishland.flowsched:flowsched") {
+        transitive false
+    }
+    implementation("com.ishland.flowsched:flowsched")
+}
+
+processResources {
+    inputs.property "version", project.version + "+" + project.minecraft_version
+    inputs.property "loader_version", project.loader_version
+
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version + "+" + project.minecraft_version, "loader_version": project.loader_version
+    }
+}
+
+// ensure that the encoding is set to UTF-8, no matter what the system default is
+// this fixes some edge cases with special characters not displaying correctly
+// see http://yodaconditions.net/blog/fix-for-java-file-encoding-problems-with-gradle.html
+tasks.withType(JavaCompile) {
+    options.encoding = "UTF-8"
+}
+
+loom {
+    accessWidenerPath = file("src/main/resources/scalablelux.accesswidener")
+}
+
+// Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
+// if it is present.
+// If you remove this task, sources will not be generated.
+java {
+    // Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
+    // if it is present.
+    // If you remove this line, sources will not be generated.
+    withSourcesJar()
+
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+}
+jar {
+    archiveClassifier = "preshadow"
+    from "LICENSE"
+}
+
+shadowJar {
+    archiveClassifier = "all"
+    configurations = [ project.configurations.shadowInclude ]
+
+    relocate "com.ishland.flowsched", "ca.spottedleaf.starlight.interndep.flowsched"
+}
+
+clean.dependsOn gradle.includedBuild('FlowSched').task(':clean')
+
+// make build reproducible
+tasks.withType(AbstractArchiveTask) {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+// configure the maven publication
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            // add all the jars that should be included when publishing to maven
+            artifact(jar) {
+                builtBy jar
+            }
+            artifact(sourcesJar) {
+                builtBy sourcesJar
+            }
+        }
+    }
+
+    // select the repositories you want to publish to
+    repositories {
+        // uncomment to publish to the local maven
+        // mavenLocal()
+    }
+}
+
+
+def ghaChangelog = System.getenv("OVERRIDE_CHANGELOG")
+if (ghaChangelog == null) {
+    ghaChangelog = com.ishland.scalablelux.buildscript.ParseGitHubActionChangelog.getChangelog()
+}
+
+afterEvaluate {
+    logger.lifecycle("Version String: ${version}")
+    logger.lifecycle(ghaChangelog)
+}
+
+publishMods {
+    changelog = ghaChangelog
+    modLoaders.add("fabric")
+
+    def envDisplayName = System.getenv("OVERRIDE_DISPLAY_NAME")
+    displayName = envDisplayName != null ? envDisplayName : (project.version + " devbuild for fabric " + project.minecraft_version)
+
+    def envType = System.getenv("OVERRIDE_RELEASE_TYPE")
+    type = envType != null ? me.modmuss50.mpp.ReleaseType.valueOf(envType) : me.modmuss50.mpp.ReleaseType.ALPHA
+
+    it.version = project.version + "+" + project.minecraft_version.replaceAll("-snapshot-", "-snap-")
+
+    def cfVersions = project.curseforge_minecraft_versions.split(",")
+    if (cfVersions.length != 0) {
+        def cfOptions = curseforgeOptions {
+            accessToken = System.getenv("CURSEFORGE_TOKEN")
+            cfVersions.each { minecraftVersions.add(it.trim()) }
+            client = true
+            server = true
+            changelogType = "markdown"
+            javaVersions.add(JavaVersion.VERSION_25)
+        }
+
+        curseforge("curseforgePackage") {
+            from cfOptions
+            file = shadowJar.archiveFile
+            projectId = "1055925"
+        }
+    }
+
+    {
+        def mrOptions = modrinthOptions {
+            accessToken = System.getenv("MODRINTH_TOKEN")
+            minecraftVersions.add(project.minecraft_version)
+        }
+
+        modrinth("modrinthPackage") {
+            from mrOptions
+            file = shadowJar.archiveFile
+            projectId = "Ps1zyz6x"
+        }
+    }
+}
