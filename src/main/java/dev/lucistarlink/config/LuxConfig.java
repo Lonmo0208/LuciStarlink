@@ -149,6 +149,12 @@ public final class LuxConfig {
                     "See docs/ARCH-V2-GLOBAL-STORAGE.md, stage 2.")
             .define("promptRuntimePublish", false);
 
+    private static final ModConfigSpec.BooleanValue SYNC_RUNTIME_DRAIN = BUILDER
+            .comment("At the end of a runtime tick that published something, wait (bounded) for the light thread to",
+                    "commit it. The write still happens on the light thread; only the waiting moves, so a block",
+                    "edit's light is final when the tick ends. See docs/HANDOVER.md, Unresolved 1.")
+            .define("syncRuntimeDrain", false);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     public static boolean enabled = true;
@@ -176,6 +182,7 @@ public final class LuxConfig {
     public static boolean directSectionInstall = false;
     public static boolean piggybackPublish = false;
     public static boolean promptRuntimePublish = false;
+    public static boolean syncRuntimeDrain = false;
 
     private LuxConfig() {
     }
@@ -221,6 +228,7 @@ public final class LuxConfig {
         directSectionInstall = DIRECT_SECTION_INSTALL.get();
         piggybackPublish = PIGGYBACK_PUBLISH.get();
         promptRuntimePublish = PROMPT_RUNTIME_PUBLISH.get();
+        syncRuntimeDrain = SYNC_RUNTIME_DRAIN.get();
         applyOverrides();
     }
 
@@ -244,6 +252,7 @@ public final class LuxConfig {
         directSectionInstall = overrideBoolean("lucistarlink.directSectionInstall", directSectionInstall);
         piggybackPublish = overrideBoolean("lucistarlink.piggybackPublish", piggybackPublish);
         promptRuntimePublish = overrideBoolean("lucistarlink.promptRuntimePublish", promptRuntimePublish);
+        syncRuntimeDrain = overrideBoolean("lucistarlink.syncRuntimeDrain", syncRuntimeDrain);
         LuxFlags.set(experimentalSectionFastPath, experimentalSkySeedSkip, experimentalDenseIncremental,
                 experimentalInlineRuntime);
         LuxFlags.runtimeAdoption = experimentalRuntimeAdoption;
@@ -252,6 +261,7 @@ public final class LuxConfig {
         LuxFlags.directSectionInstall = directSectionInstall;
         LuxFlags.piggybackPublish = piggybackPublish;
         LuxFlags.promptRuntimePublish = promptRuntimePublish;
+        LuxFlags.syncRuntimeDrain = syncRuntimeDrain;
         LuxFlags.boundaryDeltas = experimentalBoundaryDeltas;
         regionChunks = overrideInt("lucistarlink.regionChunks", regionChunks);
         haloChunks = overrideInt("lucistarlink.haloChunks", haloChunks);

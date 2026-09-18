@@ -337,8 +337,14 @@ public final class LuxEngineController {
             return;
         }
         reapStaleBulkScope();
-        runtimeManager.tick(lightEngine, getter, relighter, RUNTIME_REGION_CHUNKS, runtimeHaloChunks(),
+        boolean published = runtimeManager.tick(lightEngine, getter, relighter, RUNTIME_REGION_CHUNKS, runtimeHaloChunks(),
                 LuxConfig.enableSky, LuxConfig.enableBlock);
+        // The commit itself still happens on the light thread; waiting for it here only moves it inside the tick,
+        // which is where a block edit's light work belongs (it is what the game's own light pipeline does for the
+        // changes it handles). Bounded in the publisher, so a busy light thread degrades to the async path.
+        if (published && LuxFlags.syncRuntimeDrain) {
+            ((dev.lucistarlink.light.runtime.LuxLightPublisher) lightEngine).lucistarlink$drainNow();
+        }
     }
 
     public List<LuxRelightResult> relightRegion(LightChunkGetter getter, ChunkPos anchorChunk) {

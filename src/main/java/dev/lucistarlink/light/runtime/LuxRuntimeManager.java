@@ -66,6 +66,8 @@ public final class LuxRuntimeManager implements AutoCloseable {
     private final ConcurrentHashMap<Long, Long> fullRelightCoalesceUntil = new ConcurrentHashMap<>();
     private volatile long nextTelemetryNanos;
     private volatile boolean closed;
+    /** Set by {@link #tick} when it hands a publication to the light engine. */
+    private boolean publishedThisTick;
 
     public boolean enqueue(BlockChangeRecord record) {
         return record != null && enqueue(record.x(), record.y(), record.z(), record.oldState(), record.newState());
@@ -114,16 +116,23 @@ public final class LuxRuntimeManager implements AutoCloseable {
         return !closed && updateQueue.hasCapacity();
     }
 
-    public void tick(ThreadedLevelLightEngine lightEngine, LightChunkGetter getter, LuxRelighter relighter,
-                     int regionChunks, int haloChunks, boolean enableSky, boolean enableBlock) {
+    /**
+     * Runs one tick's runtime work and reports whether it handed anything to the light engine, so the caller can
+     * wait for that publication to land (see {@code syncRuntimeDrain}) instead of leaving it for the light thread
+     * to pick up after the tick.
+     */
+    public boolean tick(ThreadedLevelLightEngine lightEngine, LightChunkGetter getter, LuxRelighter relighter,
+                        int regionChunks, int haloChunks, boolean enableSky, boolean enableBlock) {
         if (closed) {
-            return;
+            return false;
         }
+        this.publishedThisTick = false;
         scheduleQueuedRegions(lightEngine, getter, relighter, regionChunks, haloChunks, enableSky, enableBlock);
         flushCommits(lightEngine);
         regionCache.trimToSize(LuxConfig.maxCachedRegions, LuxConfig.maxCachedRegionBytes);
         sweepExpiredCoalescingEntries();
         logMemoryTelemetry();
+        return this.publishedThisTick;
     }
 
     /**
@@ -334,6 +343,7 @@ public final class LuxRuntimeManager implements AutoCloseable {
                             LuxBenchmarkSupport.count("lucistarlink.runtime.commit.skippedMissingExpectedChunk");
                             continue;
                         }
+                        this.publishedThisTick = true;
                         publisher.lucistarlink$publish(result, expectedChunk);
                     }
                     lightEngine.tryScheduleUpdate();
@@ -517,6 +527,7 @@ public final class LuxRuntimeManager implements AutoCloseable {
             any = true;
             LuxBenchmarkSupport.count("lucistarlink.runtime.commit.results");
             LuxBenchmarkSupport.count("lucistarlink.runtime.commit.sections", result.sections().size());
+            this.publishedThisTick = true;
             publisher.lucistarlink$publish(result, commit.expectedChunk());
         }
         if (any) {

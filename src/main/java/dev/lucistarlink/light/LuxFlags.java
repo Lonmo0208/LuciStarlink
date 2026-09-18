@@ -80,6 +80,14 @@ public final class LuxFlags {
     public static volatile boolean promptRuntimePublish =
             Boolean.parseBoolean(System.getProperty("lucistarlink.promptRuntimePublish", "false"));
 
+    /**
+     * Waits, at the end of a runtime tick that published something, for the light thread to commit it. The write
+     * still happens on the light thread; only the waiting moves, so the light a block edit produced is final when
+     * the tick ends instead of being committed after it.
+     */
+    public static volatile boolean syncRuntimeDrain =
+            Boolean.parseBoolean(System.getProperty("lucistarlink.syncRuntimeDrain", "false"));
+
     private LuxFlags() {
     }
 

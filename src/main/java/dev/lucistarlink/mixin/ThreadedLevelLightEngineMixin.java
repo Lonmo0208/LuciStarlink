@@ -156,6 +156,30 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
         lucistarlink$addPreTask(result.chunkPos().x, result.chunkPos().z, () -> lucistarlink$publishDirect(result, expectedChunk));
     }
 
+    @Override
+    public void lucistarlink$drainNow() {
+        if (this.lucistarlink$taskMailbox == null) {
+            return;
+        }
+        java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        long startedAt = System.nanoTime();
+        this.lucistarlink$taskMailbox.tell(() -> {
+            try {
+                lucistarlink$drainQueuedLightTasks();
+            } finally {
+                latch.countDown();
+            }
+        });
+        try {
+            if (!latch.await(50L, TimeUnit.MILLISECONDS)) {
+                LuxBenchmarkSupport.count("lucistarlink.runtime.syncDrain.timeout");
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+        LuxBenchmarkSupport.recordSince("lucistarlink.runtime.syncDrain", startedAt);
+    }
+
     @Unique
     private CompletableFuture<Void> lucistarlink$publishAsync(LuxRelightResult result, int chunkX, int chunkZ) {
         if (LuxFlags.piggybackPublish) {
