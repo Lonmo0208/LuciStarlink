@@ -109,6 +109,7 @@ public final class LuxRelighter {
         for (BlockChangeRecord change : changes) {
             data.markColumnSectionsWithinReach(change.x() - bounds.minBlockX(), change.z() - bounds.minBlockZ(), 15, reach);
         }
+        LuxBenchmarkSupport.count("lucistarlink.runtime.materializeReach.bits", reach.cardinality());
         int halo = bounds.haloChunks();
         int chunkCount = bounds.regionChunks() + halo * 2;
         int adopted = 0;
@@ -384,11 +385,17 @@ public final class LuxRelighter {
         RegionLightData data = state.data();
         // cells a neighbouring region published into the engine since this image was last used must be re-read
         // first, otherwise they are stale baselines for the propagation below
+        long untimedStart = LuxBenchmarkSupport.start();
         refreshExternalSections(getter, data, state);
+        LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.job.refreshExternal", untimedStart);
         if (!batch.fullRelight()) {
+            untimedStart = LuxBenchmarkSupport.start();
             materializeReach(getter, data, batch);
+            LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.job.materializeReach", untimedStart);
         }
+        untimedStart = LuxBenchmarkSupport.start();
         haloTouchedScratch.set(changesNearBorder(batch, data.bounds));
+        LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.job.changesNearBorder", untimedStart);
         long epochAfterRefresh = state.externalEpoch();
         state.touch();
         publishEngine.setCurrentLightSource(currentSourceFor(getter));
