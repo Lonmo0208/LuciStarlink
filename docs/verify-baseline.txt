@@ -1,5 +1,9 @@
-f46b19cc2c2f50591c47dedc3d28b5f2 *lucistarlink-1.21.1-0.1.0.jar
+61ff6be117c3f179108015f41c4ee13c *lucistarlink-1.21.1-0.1.0.jar
 
 构建：./gradlew build -PbenchmarkAllowScalableLux=true -PbenchmarkAllowLucis=true
+      （JAVA_HOME 与 PATH 都必须指向 JDK 21；见 docs/HANDOVER.md 的构建铁律）
 测试：21 pass / 0 fail / 1 inherited skip
-用途：本次验证的成品 jar（区域模式默认，directSectionInstall=off, worldgenHaloPublish=on）
+配置：region 模式为默认（directSectionInstall=off、worldgenHaloPublish=on、piggybackPublish=off）
+用途：本轮验收（sky_hole per-pass min 中位 0.651 ms、其余三负载无回退、边界值级与 vanilla 逐位一致）
+      所用的成品 jar。注意：directSectionInstall=on 的更快路线存在偶发 block 光分歧（HANDOVER
+      Unresolved 2），因此不作为默认。
