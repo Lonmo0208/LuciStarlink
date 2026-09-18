@@ -40,14 +40,19 @@ behaviour 0.1.0 shipped.
 
 ### Measurements (see docs/TASK-PERF-SKY.md for the full record)
 * Against **vanilla** and **ScalableLux**, settled-world protocol, same-session interleaved runs, ≥5 reps,
-  exact two-sided Mann-Whitney p, median of per-pass minima:
+  exact two-sided Mann-Whitney p, median of per-pass minima. **Two independent interleaved sessions are shown as
+  ranges**: every direction was replicated with perfect separation, magnitudes vary up to ~40% between sessions:
 
   | workload | vanilla | LuciStarlink | ScalableLux | vs vanilla | vs ScalableLux |
   |---|---|---|---|---|---|
-  | `block_toggle_border` | 3.440 | **0.807** | 1.642 | **4.3× faster** | **2.05× faster** (p=0.008) |
-  | `structure_cube` | 3.689 | **1.737** | 3.039 | **2.1× faster** | **1.77× faster** (p=0.008) |
-  | `dense_chunk_patch` | 3.157 | **1.797** | 1.490 | **1.76× faster** | 1.21× slower (p=0.095) |
-  | `sky_hole` | 0.757 | 0.718 | **0.355** | parity | 2.0× slower |
+  | `block_toggle_border` | 3.44 | **0.70–0.81** | 1.64–1.75 | **4.3–4.9× faster** | **2.05–2.49× faster** (p=0.008) |
+  | `structure_cube` | 3.69–4.33 | **1.74–2.43** | 3.04–3.19 | **1.8–2.1× faster** | **1.31–1.77× faster** (p=0.008) |
+  | `dense_chunk_patch` | 3.02–3.16 | **1.80–2.45** | 1.42–1.49 | **1.23–1.76× faster** | 1.21–1.73× slower (p≤0.095) |
+  | `sky_hole` | 0.76–0.82 | 0.71–0.82 | **0.36–0.44** | parity (p=0.69) | 1.87–2.0× slower (p≤0.016) |
+
+  The 1.0.0 correctness fixes were verified performance-neutral in a same-session interleaved A/B of the two jars
+  (`structure_cube` 2.315 vs 2.384 ms, p=1.00; `sky_hole` p=0.70), so the ranges above are session drift, not a
+  cost of the fixes.
 
 * What the `sky_hole` gap is: fourteen candidate levers were tested under a pass metric that measures when our
   light actually reaches the engine, and every one was null or worse (coalescing window, notification fan-out,
