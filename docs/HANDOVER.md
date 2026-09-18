@@ -90,35 +90,41 @@ light thread itself (both handles are backed by the same processor mailbox), so 
 hop and not a thread wakeup; and a mixin class cannot live in `net.minecraft.server.level` under NeoForge - the
 module system rejects the split package at boot (`ResolutionException: Module minecraft contains package ...`).
 
-## Unresolved 2 (open question, NOT a finding): worldgen block light cannot be judged with the current probe
+## Unresolved 2 (mostly resolved): the full-column block probe was the problem, not (proven) the engine
 
-What is solid:
-* **Sky light is bit-identical to vanilla in every run and every configuration, and survives save/reload
-  bit-exactly** (12 fingerprint runs, `quiesceTicks=20` each). That is the sky path's correctness evidence.
-* The strip scenario's `worldgen neighbour-stale marked` counter fires as designed: 59 with
-  `worldgenHaloPublish=false` (0 with it on, where every changed neighbour cell is published instead).
-* The runtime border path is unaffected by any of this: `block_toggle_border`/`edge_toggle` report
-  `publish.halo.sections` 774/255/252/752, `externalMarked.sections` 222/23, `externalRefresh.sections` 192/2 and
-  `rerunBaselineMoved` 14, all non-zero, no errors (`lucistarlink-halo-check.sh`).
+Final state after a day of chasing this:
 
-What is NOT solid (and was claimed and retracted twice today - do not repeat):
-* Block-light fingerprints in this scenario are **not an oracle**: vanilla itself produced
-  `strip=6360d66772317286, 6360d66772317286, 71ba939013cde497` over three identical gated runs, and three
-  different values for `beyond`. Our engine varies too, but so does the reference, so the earlier readings
-  ("the direct install breaks block light", "the worldgen publish order is to blame") have **no evidence**.
-* The probe reports the engine quiet for 20 ticks, yet parts of the world are still changing at read time
-  (generation streaming, fluid/shape interactions). Sky light is insensitive to those changes, block light is not.
+* **Full-column block-light hashes are not reproducible in a generated world - for vanilla either.** Three
+  identical gated vanilla runs gave `strip=6360d66772317286, 6360d66772317286, 71ba939013cde497`; with a
+  120 s settle they differ again (`0e49a2a7...` vs `69e40f34...`, and different `beyond`). The likely cause is
+  block changes whose timing is not fixed by the seed (lava/water and shape interactions, where block light is
+  sensitive and sky light - being 0 or 15 in those spots - is not). Every claim that the block signal pointed at
+  one of our switches ("the direct install breaks block light", "the worldgen publish order is to blame") was
+  **retracted**; there is no evidence for either.
+* **The probe now takes optional y bounds** (`/lucistarlink dumplight <label> <x1> <z1> <x2> <z2> [y1] [y2]`), so
+  it can be aimed at a band that the fluid interactions cannot reach.
+* **In such a band our light equals vanilla bit-exactly, both layers, reproducibly.** `mc-smoketest/ls-border-edit.sh`
+  loads the world, places glowstone across the chunk border at x=15/16 through the runtime path, and fingerprints
+  the band y=90..112 over x 0..31 and x 8..24. Two runs per engine, all four readings identical:
 
-Next action, in order:
-1. Make the scenario deterministic *by construction*: flat or void world, no fluids, no random ticks, chunk
-   ticking stopped (or the fingerprint taken from a frozen copy) before reading. Only then is a block-light
-   comparison meaningful.
-2. Re-run the single-variable bisect on the stable scenario: vanilla reference, then `enableBlock=false`
-   (block light delegated to vanilla, we publish sky only), then `enableWorldgen=false`, then default.
-3. Only if 1 and 2 show a real divergence, add the publish-order guard the worldgen path lacks (a publication
-   must not overwrite engine data newer than its own image; the runtime path has `externalMarked`/
-   `rerunBaselineMoved` for this, the worldgen path has nothing). Candidate: per-section publish sequence with
-   "skip sections a newer publisher already wrote", bounded like the coalescing map.
+  | scenario | vanilla (2 runs) | our engine, default config (2 runs) |
+  |---|---|---|
+  | `edit` (x 0..31) | sky `013c3846466ff9d5` / block `61fb027e7d51ee31` | sky `013c3846466ff9d5` / block `61fb027e7d51ee31` |
+  | `edit_border` (x 8..24) | sky `c4aed9ab13e5d3b5` / block `8f33931a596c664c` | sky `c4aed9ab13e5d3b5` / block `8f33931a596c664c` |
+
+  That is the runtime border case (glowstone on a border, neighbour must light up) at value level, not just by
+  counter: identical to vanilla, in both layers, reproducibly.
+* Sky light was never in doubt: bit-identical to vanilla in every run and configuration, and it survives
+  save/reload bit-exactly.
+* Counters, unchanged from the earlier sessions' acceptance list: `worldgen neighbour-stale marked` = 59 with
+  `worldgenHaloPublish=false` (mechanism fires in the "generate one chunk beyond loaded terrain" scenario);
+  runtime border workloads report `publish.halo.sections` 774/255/252/752, `externalMarked.sections` 222/23,
+  `externalRefresh.sections` 192/2, `rerunBaselineMoved` 14, no errors.
+
+Still open: whether the *worldgen* path diverges anywhere the band probe can see. To answer it, generate into a
+world without fluids (superflat/void) or fingerprint a band that a worldgen job provably wrote, and only then
+decide whether the publish-order guard (a publication must not overwrite engine data newer than its image; the
+runtime path has `externalMarked`/`rerunBaselineMoved`, the worldgen path has nothing) is needed.
 
 ## Unresolved 3 (correctness): worldgen border ordering
 
