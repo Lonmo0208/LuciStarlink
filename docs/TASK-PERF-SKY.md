@@ -173,7 +173,16 @@ SL 的 apply 比我们大（同步完成，光值当场算完）；我们的 app
 
 ## 9. 本轮留下的开关与量具
 
-- `-Dlucistarlink.notifyNeighbourSections=false/true`（L2 开关，**默认 true = 保持现状**）：机制上严格更省（7× 更少通知），但无可测收益、客户端边界渲染未测 → **不翻默认**。
-- `-Dlucistarlink.publishCoalesceNanos=`（L1 窗口，默认 250000）。
-- 基准每轮现在打印 `elapsedUs / applyUs / waitUs` + `drainUs / queueLatUs / notifyUs / runUpdUs / publishUs / notifyPostUs` + `drains / tasks / sections / notifies / identical` 的**本轮增量**（此前只有整毫秒与阶段总量，无法区分快慢轮）。
-- 工具：`mc-smoketest/ab-prop.sh`（任意系统属性的交错 A/B）、`ab-compare.ps1`（分组 + 中位 + 精确 U/p）。
+### 9.0 本轮最后两个实验（洁净协议）
+- **合并窗口 250 µs vs 5 ms（n=8+8）**：中位 0.822 → 0.739（p=0.28 不显著），但 **5 ms 组把 1.25–1.40 的慢轮全消掉了**（B 组最大 0.833）。**判定为不可用**：窗口拉长后，pass 的计时在"我们的发布真正落地之前"就结束了（量具少报），所以那不是真提升。顺带确认了 pass 的计时与发布之间存在**错位**：`elapsed` 取自引擎 future 的时间戳，而发布（drain/tasks/sections）可能落在测量窗口之外 —— 这也是为什么很多 pass 显示 `drains=0 tasks=0 sections=0`。
+- **内联阈值 8 vs 64（n=6+6）**：中位 0.793 → 0.916（p=0.48）→ 否定。机制量显示该负载本来就大多走内联（`inlineExecuted` 50/54），所以内联/worker 分裂不是双峰来源。
+- **新线索（下一步的第一优先）**：同一负载下**我们自己的运行时作业耗时在 0.3 ms 到 11 ms 之间波动**（`stage.runtime.job.runtime` 在单轮窗口内出现过 `5402/12`、`11409/9`、`5304/10` 这样的值）。这才是"2× 慢"的另一半 —— 不在测量侧，而在我们自己的运行期流水线（很可能是同一次编辑被拆成跨多个 tick 的多批处理）。**下一步先量它**：一次 pass 的 25 个改动在引擎里最终被拆成几批、每批多大、跨几个 tick。
+
+## 10. 本轮留下的开关与量具（原 §9）
+
+- `-Dlucistarlink.benchmark.prepareRing=3` 与 `-Dlucistarlink.benchmark.quiesceSettleMs=1000`：**协议修正，后续所有测量都要带**（§7.8）。
+- `-Dlucistarlink.notifyNeighbourSections=false/true`（L2 开关，默认 true）。
+- `-Dlucistarlink.publishPrioritiseRuntime=true/false`（L8 开关，默认 false）。
+- `-Dlucistarlink.publishCoalesceNanos=`（默认 250000）、`-Dlucistarlink.runtime.inlineBatchChanges=`（默认 8）。
+- 基准每轮打印 `elapsedUs/applyUs/waitUs/pend` + `drainUs/queueLatUs/notifyUs/runUpdUs/publishUs/notifyPostUs` + `drains/tasks/sections/notifies/identical/qDuringDrain/wgChunks/wgComputeUs/rtTickUs/rtJobUs` 的**本轮增量**。
+- 工具：`mc-smoketest/ab-prop.sh`（任意系统属性的交错 A/B，支持 `EXTRA_JVM_A/B`）、`ab-interleaved.sh`（我们↔SL，支持 `EXTRA_JVM`）、`ab-compare.ps1`（分组 + 中位 + 精确 U/p）、`pass-attribution.ps1`（逐轮归因）。
