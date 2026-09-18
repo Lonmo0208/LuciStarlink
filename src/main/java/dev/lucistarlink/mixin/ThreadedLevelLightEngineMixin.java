@@ -56,6 +56,28 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     private static final boolean LUCIS_NOTIFY_NEIGHBOURS =
             Boolean.parseBoolean(System.getProperty("lucistarlink.notifyNeighbourSections", "true"));
 
+    /**
+     * Whether runtime publishes get their own lane ahead of world-generation publishes in the drain batch, and
+     * whether a single drain round is capped.
+     *
+     * <p>Both publish through the same light thread, so a player's edit is queued behind whatever bulk work is in
+     * flight. Measured on {@code sky_hole}: the publish batch's queue latency (queued -> drain starts) averages
+     * 0.91 ms, the largest single term on the pass path, while the edit's own compute is 0.13 ms and its publish
+     * 0.06 ms. Shortening the coalescing window does not help (250 -> 50 us measured p=0.73) because the wait is
+     * mostly "the previous drain has not finished yet", and a world-generation drain can hold the light thread
+     * for a long time. This lane is meant to bound that: the runtime task is taken first by the next round, and a
+     * bulk round cannot grow past {@code lucistarlink.publishDrainBulkCap} tasks.
+     *
+     * <p>Off by default (FIFO, unchanged behaviour) until the interleaved A/B and the correctness gates pass.
+     */
+    @Unique
+    private static final boolean LUCIS_PRIORITISE_RUNTIME =
+            Boolean.parseBoolean(System.getProperty("lucistarlink.publishPrioritiseRuntime", "false"));
+
+    @Unique
+    private static final int LUCIS_DRAIN_BULK_CAP =
+            Math.max(1, Integer.getInteger("lucistarlink.publishDrainBulkCap", 64));
+
     @Unique
     private LightChunkGetter lucistarlink$chunkSource;
     @Unique
@@ -68,6 +90,9 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     private final Object lucistarlink$publishLock = new Object();
     @Unique
     private final Deque<LuxQueuedLightTask> lucistarlink$pendingLightTasks = new ArrayDeque<>();
+    /** Runtime (edit-sized) publishes, drained ahead of the bulk lane when prioritisation is on. */
+    @Unique
+    private final Deque<LuxQueuedLightTask> lucistarlink$pendingRuntimeTasks = new ArrayDeque<>();
     @Unique
     private final ArrayDeque<LuxQueuedLightTask> lucistarlink$publishBatch = new ArrayDeque<>(1000);
     @Unique
@@ -395,13 +420,14 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
 
     @Unique
     private void lucistarlink$addPreTask(int chunkX, int chunkZ, Runnable task) {
-        lucistarlink$enqueueLightTask(chunkX, chunkZ, lucistarlink$queueLevel(chunkX, chunkZ), task, null, LuxFlags.promptRuntimePublish);
+        lucistarlink$enqueueLightTask(chunkX, chunkZ, lucistarlink$queueLevel(chunkX, chunkZ), task, null,
+                LuxFlags.promptRuntimePublish, true);
     }
 
     @Unique
     private CompletableFuture<Void> lucistarlink$addPostTask(int chunkX, int chunkZ, Runnable preTask) {
         CompletableFuture<Void> future = new CompletableFuture<>();
-        lucistarlink$enqueueLightTask(chunkX, chunkZ, lucistarlink$queueLevel(chunkX, chunkZ), preTask, future, false);
+        lucistarlink$enqueueLightTask(chunkX, chunkZ, lucistarlink$queueLevel(chunkX, chunkZ), preTask, future, false, false);
         return future;
     }
 
@@ -412,15 +438,20 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
 
     @Unique
     private void lucistarlink$enqueueLightTask(int chunkX, int chunkZ, IntSupplier queueLevel, Runnable preTask,
-                                               CompletableFuture<Void> completion, boolean prompt) {
+                                               CompletableFuture<Void> completion, boolean prompt, boolean runtime) {
         this.lucistarlink$sorterMailbox.tell(ChunkTaskPriorityQueueSorter.message(() -> {
             synchronized (this.lucistarlink$publishLock) {
-                if (this.lucistarlink$pendingLightTasks.isEmpty()) {
+                Deque<LuxQueuedLightTask> lane = runtime && LUCIS_PRIORITISE_RUNTIME
+                        ? this.lucistarlink$pendingRuntimeTasks
+                        : this.lucistarlink$pendingLightTasks;
+                if (this.lucistarlink$pendingLightTasks.isEmpty() && this.lucistarlink$pendingRuntimeTasks.isEmpty()) {
                     this.lucistarlink$batchFirstQueuedNanos = System.nanoTime();
                     this.lucistarlink$batchPrompt = prompt;
                 }
-                this.lucistarlink$pendingLightTasks.addLast(new LuxQueuedLightTask(preTask, completion));
+                lane.addLast(new LuxQueuedLightTask(preTask, completion));
                 LuxBenchmarkSupport.count("lucistarlink.publish_batch.queued");
+                LuxBenchmarkSupport.count(runtime ? "lucistarlink.publish_batch.lane.runtime"
+                        : "lucistarlink.publish_batch.lane.bulk");
             }
             lucistarlink$schedulePublishDrain(this.lucistarlink$batchPrompt ? 0L : LUCIS_PUBLISH_COALESCE_NANOS);
         }, ChunkPos.asLong(chunkX, chunkZ), queueLevel));
@@ -453,8 +484,16 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
         this.lucistarlink$pendingLightNotifications.clear();
         this.lucistarlink$pendingLightNotificationKeys.clear();
         long firstQueuedNanos;
+        boolean runtimeQueued = false;
         synchronized (this.lucistarlink$publishLock) {
-            int count = Math.min(1000, this.lucistarlink$pendingLightTasks.size());
+            // the runtime lane is taken first: an edit must not wait behind a bulk world-generation round
+            int runtimeCount = Math.min(1000, this.lucistarlink$pendingRuntimeTasks.size());
+            for (int index = 0; index < runtimeCount; index++) {
+                batch.add(this.lucistarlink$pendingRuntimeTasks.removeFirst());
+            }
+            runtimeQueued = !this.lucistarlink$pendingRuntimeTasks.isEmpty();
+            int bulkCap = LUCIS_PRIORITISE_RUNTIME ? Math.max(1, LUCIS_DRAIN_BULK_CAP - runtimeCount) : 1000;
+            int count = Math.min(bulkCap, this.lucistarlink$pendingLightTasks.size());
             for (int index = 0; index < count; index++) {
                 batch.add(this.lucistarlink$pendingLightTasks.removeFirst());
             }
@@ -496,11 +535,15 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
             this.lucistarlink$pendingLightNotificationKeys.clear();
             this.lucistarlink$publishScheduled.set(false);
             boolean hasMore;
+            boolean hasRuntime;
             synchronized (this.lucistarlink$publishLock) {
-                hasMore = !this.lucistarlink$pendingLightTasks.isEmpty();
+                hasMore = !this.lucistarlink$pendingLightTasks.isEmpty() || !this.lucistarlink$pendingRuntimeTasks.isEmpty();
+                hasRuntime = !this.lucistarlink$pendingRuntimeTasks.isEmpty();
             }
             if (hasMore) {
-                lucistarlink$schedulePublishDrain(this.lucistarlink$batchPrompt ? 0L : LUCIS_PUBLISH_COALESCE_NANOS);
+                // a waiting runtime edit goes out promptly; bulk work keeps the coalescing window
+                boolean prompt = this.lucistarlink$batchPrompt || (LUCIS_PRIORITISE_RUNTIME && (hasRuntime || runtimeQueued));
+                lucistarlink$schedulePublishDrain(prompt ? 0L : LUCIS_PUBLISH_COALESCE_NANOS);
             }
         }
     }
