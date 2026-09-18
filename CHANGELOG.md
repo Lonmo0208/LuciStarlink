@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.2 — the light-dump commands no longer return a plausible-looking empty reading
+
+A dev-client session ran `/lucistarlink dumplight` twice with the arguments shifted by one (the label was a
+coordinate, the box was empty). An empty box still produced a well-formed fingerprint - both hashes read the FNV
+offset basis, `cbf29ce484222325` - which is indistinguishable from a real measurement unless you know that
+constant, so two runs were lost and a reader could have taken it for data.
+
+`dumplight` now logs a warning when its box sampled no cells, printing the syntax, the box it actually used and the
+world's build-height range. No behaviour change for a correct call.
+
 ## 1.0.1 — configuration regression fix
 
 Found by running the dev client against an existing installation (the configuration file it had written earlier):

@@ -204,5 +204,15 @@ public final class LuciStarlinkCommand {
         LuciStarlink.LOGGER.info(String.format(java.util.Locale.ROOT,
                 "LUCIS_LIGHT_FINGERPRINT label=%s sky=%016x block=%016x samples=%d y=[%d,%d] quiesceTicks=%d",
                 label, skyHash, blockHash, samples, minY, maxY, waitedTicks));
+        if (samples == 0L) {
+            // An empty box still prints a well-formed fingerprint - the FNV offset basis - which reads like a real
+            // measurement. A dev session lost two runs to exactly that: the arguments had been shifted by one, so
+            // the label was a coordinate and the box was empty. Say so instead of returning a plausible hash.
+            LuciStarlink.LOGGER.warn("LuciStarlink dumplight label={} sampled no cells: the box was empty. "
+                            + "Syntax is /lucistarlink dumplight <label> <x1> <z1> <x2> <z2> [y1] [y2] "
+                            + "(got x=[{},{}] z=[{},{}] y=[{},{}] in a world with y=[{},{}])",
+                    label, Math.min(x1, x2), Math.max(x1, x2), Math.min(z1, z2), Math.max(z1, z2),
+                    minY, maxY, level.getMinBuildHeight(), level.getMaxBuildHeight());
+        }
     }
 }

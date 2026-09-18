@@ -185,3 +185,10 @@ Changes for 1.0.1
   which would have switched the world-generation halo off, leaving a light seam on the border of a chunk generated
   beside an already-loaded neighbour. The world-generation path now treats 0 as 1 (the key's useful range there is
   1-2), and the config comment, the README row and CHANGELOG explain why. No other key changed meaning.
+
+Changes for 1.0.2
+-----------------
+
+* The light-dump commands now warn when their box sampled no cells (printing the syntax, the box used and the
+  world's height range). An empty box used to print the FNV offset basis as both hashes, which looks like a real
+  fingerprint unless you know that constant; a dev session lost two runs to it.
