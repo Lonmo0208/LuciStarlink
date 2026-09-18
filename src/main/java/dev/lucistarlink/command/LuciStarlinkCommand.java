@@ -48,13 +48,24 @@ public final class LuciStarlinkCommand {
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> dumpLightCommand() {
+        // the y bounds are optional: with them the probe can be aimed at a band that is not affected by the
+        // randomly-timed fluid interactions of a generated world (which make a full-column block-light hash
+        // irreproducible even for vanilla - see docs/HANDOVER.md, Unresolved 2)
+        var y1 = Commands.argument("y1", com.mojang.brigadier.arguments.IntegerArgumentType.integer());
+        var y2 = Commands.argument("y2", com.mojang.brigadier.arguments.IntegerArgumentType.integer());
         return Commands.literal("dumplight")
                 .then(Commands.argument("label", com.mojang.brigadier.arguments.StringArgumentType.word())
                         .then(Commands.argument("x1", com.mojang.brigadier.arguments.IntegerArgumentType.integer())
                                 .then(Commands.argument("z1", com.mojang.brigadier.arguments.IntegerArgumentType.integer())
                                         .then(Commands.argument("x2", com.mojang.brigadier.arguments.IntegerArgumentType.integer())
                                                 .then(Commands.argument("z2", com.mojang.brigadier.arguments.IntegerArgumentType.integer())
-                                                        .executes(LuciStarlinkCommand::dumpLight))))));
+                                                        .executes(context -> dumpLight(context,
+                                                                Integer.MIN_VALUE, Integer.MAX_VALUE))
+                                                        .then(Commands.argument("y1", com.mojang.brigadier.arguments.IntegerArgumentType.integer())
+                                                                .then(Commands.argument("y2", com.mojang.brigadier.arguments.IntegerArgumentType.integer())
+                                                                        .executes(context -> dumpLight(context,
+                                                                                com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "y1"),
+                                                                                com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "y2"))))))))));
     }
 
     /**
@@ -77,7 +88,7 @@ public final class LuciStarlinkCommand {
      * engine has had {@link #DUMP_QUIESCE_TICKS} consecutive quiet ticks: light engine work queues empty and no
      * pending runtime or worldgen work. Otherwise the probe races the light thread and reports noise.
      */
-    private static int dumpLight(com.mojang.brigadier.context.CommandContext<CommandSourceStack> context) {
+    private static int dumpLight(com.mojang.brigadier.context.CommandContext<CommandSourceStack> context, int y1, int y2) {
         String label = com.mojang.brigadier.arguments.StringArgumentType.getString(context, "label");
         int x1 = com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "x1");
         int z1 = com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "z1");
@@ -99,21 +110,21 @@ public final class LuciStarlinkCommand {
                     server.tell(new net.minecraft.server.TickTask(server.getTickCount() + 1, this));
                     return;
                 }
-                logFingerprint(label, level, x1, z1, x2, z2, waited[0]);
+                logFingerprint(label, level, x1, z1, x2, z2, y1, y2, waited[0]);
             }
         }));
         return 1;
     }
 
     private static void logFingerprint(String label, net.minecraft.server.level.ServerLevel level,
-                                       int x1, int z1, int x2, int z2, long waitedTicks) {
+                                       int x1, int z1, int x2, int z2, int y1, int y2, long waitedTicks) {
         net.minecraft.world.level.lighting.LevelLightEngine lightEngine = level.getLightEngine();
         net.minecraft.world.level.lighting.LayerLightEventListener sky =
                 lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.SKY);
         net.minecraft.world.level.lighting.LayerLightEventListener block =
                 lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.BLOCK);
-        int minY = level.getMinBuildHeight();
-        int maxY = level.getMaxBuildHeight();
+        int minY = Math.max(level.getMinBuildHeight(), y1);
+        int maxY = Math.min(level.getMaxBuildHeight(), y2);
         long skyHash = 0xcbf29ce484222325L;
         long blockHash = 0xcbf29ce484222325L;
         long samples = 0L;
@@ -129,7 +140,7 @@ public final class LuciStarlinkCommand {
             }
         }
         LuciStarlink.LOGGER.info(String.format(java.util.Locale.ROOT,
-                "LUCIS_LIGHT_FINGERPRINT label=%s sky=%016x block=%016x samples=%d quiesceTicks=%d",
-                label, skyHash, blockHash, samples, waitedTicks));
+                "LUCIS_LIGHT_FINGERPRINT label=%s sky=%016x block=%016x samples=%d y=[%d,%d] quiesceTicks=%d",
+                label, skyHash, blockHash, samples, minY, maxY, waitedTicks));
     }
 }

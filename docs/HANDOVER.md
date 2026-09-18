@@ -163,10 +163,18 @@ Jar not present in the rig (`mc-smoketest/mods` expects `c2me-*.jar` / `*Generat
 * `mc-smoketest/ls-run.sh <tag> <reps> [extra -D ...]` - single-workload benchmark run, prints wall + the publish metrics.
 * `mc-smoketest/ls-border-scenario.sh gen|reload <tag> [extra -D ...]` - strip -> one chunk beyond -> fingerprints,
   then `save-all flush` + stop; `reload` boots the same world and fingerprints again (save/reload round trip).
-  Datapack functions cannot use `stop`/`save-all` (not dispatcher commands) - the script feeds them on stdin.
+  `DUMP1_DELAY`/`DUMP2_DELAY` (seconds, default 25) push the two dumps later for a longer settle - needed if the
+  world is still changing at read time (see Unresolved 2). The script refuses to run if the generated datapack
+  functions contain unexpanded shell syntax.
+* `mc-smoketest/ls-border-edit.sh <tag> [extra -D ...]` - same world, but places glowstone across a chunk border
+  through the runtime path and fingerprints it: the runtime-border counterpart of the worldgen scenario.
 * `/lucistarlink dumplight <label> <x1> <z1> <x2> <z2>` - quiescence-gated light fingerprint, logged as
-  `LUCIS_LIGHT_FINGERPRINT label=... sky=... block=... samples=... quiesceTicks=...`. Two runs of the same
-  configuration must produce identical values; this is the only cheap probe that catches the class of bug in
-  Unresolved 2.
-* `/lucistarlink flags` / `status` - now also prints `worldgenHaloPublish`, `directSectionInstall` and the
-  worldgen neighbour-stale counter.
+  `LUCIS_LIGHT_FINGERPRINT label=... sky=... block=... samples=... quiesceTicks=...`. Sky light is a usable oracle
+  (bit-stable across runs and identical to vanilla); block light is NOT until the world is deterministic by
+  construction - vanilla itself varies there.
+* `/lucistarlink flags` / `status` - prints `worldgenHaloPublish`, `directSectionInstall` and the worldgen
+  neighbour-stale counter.
+* Rig lessons that cost time today: datapack functions cannot use `stop`/`save-all` (feed them on stdin after a
+  delay - the script does) and a *quoted* heredoc in a generator script silently puts `${VAR}` into the
+  datapack, which makes the whole function fail to load and the scenario never run (hence the self-check);
+  `JAVA_HOME`, not just `PATH`, must point at JDK 21 or Gradle fails with a confusing internal error.
