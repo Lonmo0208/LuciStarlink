@@ -12,7 +12,7 @@ three strongest public designs in this space into one engine.
 It is **not** a scheduler over vanilla light tasks and **not** a Starlight fork: it owns the computation
 (material image + propagation) per region and publishes only dirty sections back into the vanilla engine.
 
-> Status: **0.1.0 — server-side engine, correct across region borders, memory-bounded, saves safe.**
+> Status: **1.0.0 — server-side engine, correct across region borders, memory-bounded, saves safe.**
 > Benchmarked against **vanilla** and **ScalableLux** in same-session interleaved runs (the three engines
 > alternate round by round, ≥5 reps each; statistic = the median of per-pass minima over a run; every
 > comparison carries an exact two-sided Mann-Whitney p). All numbers below use the settled-world protocol
@@ -53,7 +53,8 @@ automation and the benchmark harness. Important knobs:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `regionChunks` | 1 | owned region size in chunks per axis |
+| `regionChunks` | 1 | owned region size in chunks per axis, for the world-generation image and the runtime regions |
+| `haloChunks` | 1 | read-only halo (in chunks) of the world-generation image: 1 covers the 15-block light travel distance, 0 stops propagation at the chunk edge and can leave a border seam |
 | `haloPublish` | **on** | publish the halo chunks' dirty sections so light computed across a border reaches the neighbouring chunk immediately |
 | `runtimeHaloChunks` | **1** | halo for runtime jobs. `1` gives vanilla-equivalent chunk borders (light travels 15 blocks); `0` is faster but truncates cross-chunk light propagation |
 | `worldgenHaloPublish` | **on** | the same for worldgen relights. `off` hands far fewer sections to the light engine, but a chunk generated beside an already-loaded neighbour then keeps its old border light until it is relit (can show as a seam) |

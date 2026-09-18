@@ -19,12 +19,17 @@ public final class LuxConfig {
             .define("enabled", true);
 
     private static final ModConfigSpec.IntValue REGION_CHUNKS = BUILDER
-            .comment("Owned region size in chunks per axis")
+            .comment("Owned region size in chunks per axis, for both the world-generation and the runtime path.",
+                    "Larger regions amortise bookkeeping over more chunks but make each job's working image",
+                    "bigger and its latency longer; 1 is the measured default.")
             .defineInRange("regionChunks", 1, 1, 16);
 
     private static final ModConfigSpec.IntValue HALO_CHUNKS = BUILDER
-            .comment("Read-only halo size in chunks")
-            .defineInRange("haloChunks", 0, 0, 2);
+            .comment("Read-only halo size in chunks for the world-generation image: how far beyond the owned",
+                    "chunk a generated chunk computes light so that it can be published into an already-loaded",
+                    "neighbour. 1 covers the 15-block light travel distance; 0 stops propagation at the chunk",
+                    "edge, which leaves a light seam on the border until the neighbour is relit.")
+            .defineInRange("haloChunks", 1, 0, 2);
 
     private static final ModConfigSpec.IntValue RUNTIME_HALO_CHUNKS = BUILDER
             .comment("Halo size in chunks for runtime (block update) jobs.",

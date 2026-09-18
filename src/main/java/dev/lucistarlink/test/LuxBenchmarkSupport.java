@@ -57,16 +57,6 @@ public final class LuxBenchmarkSupport {
      * 0.91 ms, i.e. the reported time did not respond to our own publish volume at all. A pass therefore ends at
      * the later of the engine's timestamp and the last drain that ran after it applied its changes.
      */
-    private static volatile long LAST_DRAIN_END_NANOS;
-
-    public static void markDrainEnd() {
-        LAST_DRAIN_END_NANOS = System.nanoTime();
-    }
-
-    public static long lastDrainEndNanos() {
-        return LAST_DRAIN_END_NANOS;
-    }
-
     public static Snapshot snapshot() {
         if (!enabled()) {
             return new Snapshot(Map.of(), Map.of());

@@ -294,6 +294,12 @@ public final class LuxRelighter {
 
     public LuxRelightResult relightPreparedChunk(ChunkPos chunkPos, RegionLightData data, boolean enableSky, boolean enableBlock,
                                                  LightChunkGetter getter) {
+        // The world-generation path publishes its halo according to worldgenHaloPublish, so the runtime path's
+        // "did this job's changes come near a border" flag must not decide it: the flag is a thread local, and a
+        // world-generation relight that runs on the server thread (the worker pool runs past its cap there) would
+        // otherwise inherit the last runtime job's answer - skipping both the halo publication and the
+        // neighbour-stale marking, which is exactly the permanent seam those two exist to prevent.
+        haloTouchedScratch.set(Boolean.TRUE);
         long startedAt = LuxBenchmarkSupport.start();
         if (enableSky) {
             skyLightEngine.compute(data);
@@ -407,7 +413,8 @@ public final class LuxRelighter {
             LuxBenchmarkSupport.count("lucistarlink.runtime.jobs.rerunBaselineMoved");
             return RuntimeRelightOutcome.stale(results);
         }
-        return RuntimeRelightOutcome.publish(results, changesNearBorder(batch, data.bounds));
+        return RuntimeRelightOutcome.publish(results,
+                batch.fullRelight() || changesNearBorder(batch, data.bounds));
     }
 
     private List<LuxRelightResult> computeRuntimeRegion(LightChunkGetter getter, RuntimeRegionState state,
@@ -459,6 +466,10 @@ public final class LuxRelighter {
 
         if (batch.fullRelight()) {
             LuxBenchmarkSupport.count("lucistarlink.runtime.region.fullRelight");
+            // a full relight recomputes the whole image, so its halo is touched by definition - but its change list
+            // is empty (the trigger was a bulk write, not records), and changesNearBorder() on an empty list is
+            // always false, which used to skip both the halo publication and the neighbour marking
+            haloTouchedScratch.set(Boolean.TRUE);
             byte[] borderBefore = deltaSink != null && LuxFlags.boundaryDeltas ? BorderDeltaSupport.snapshotBorder(data, borderScratch.get()) : null;
             long startedAt = LuxBenchmarkSupport.start();
             extractor.populate(getter, data, coreChunk);

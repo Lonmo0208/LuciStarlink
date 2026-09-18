@@ -138,3 +138,42 @@ Not done / not pending
   * Heightmap/column-driven sky propagation (M1) was evaluated and **rejected** as a non-lever; it is not
     "pending" as the M0 section above lists it.
 
+
+Changes for 1.0.0 (source review round)
+---------------------------------------
+
+Correctness
+  * The world-generation path used to read the runtime path's "changes near a border" thread local to decide whether
+    to publish its halo and mark neighbours stale. A world-generation relight that ran on the server thread (the
+    worker pool runs past its cap there) inherited the last runtime job's answer, so a neighbouring chunk could keep
+    stale border light - the permanent seam those two mechanisms exist to prevent. The world-generation path now sets
+    that state itself.
+  * `RuntimeUpdateQueue.drainTo` removed a region's entry and then drained the object it had resolved; an enqueue
+    that had resolved that object before the removal added its records to an entry no longer in the map, so nothing
+    drained them and the reservation count stayed high. Drain now uses `compute`, which shares a lock with
+    `computeIfAbsent`.
+  * A full relight carries no change records, and `changesNearBorder` on an empty change list is always false, so
+    every bulk-write-triggered relight skipped both its halo publication and the neighbour marking; the full-relight
+    path now states that its halo is touched.
+  * A runtime job that threw lost its batch (the region was released without requeueing); it now requeues.
+  * `publishedThisTick` is volatile; the publish batch's "first queued" timestamp is reset per batch so a stale
+    timestamp cannot inflate the queue-latency metric.
+
+Configuration
+  * `regionChunks` and `haloChunks` were documented knobs that nothing read; both are now wired with defaults equal
+    to the values the code previously hardcoded (1 and 1), so behaviour is unchanged for existing configuration.
+
+Removed
+  * Members verified unreferenced across the source tree: `LuxChunkSnapshot`, the superseded
+    `LuxBenchmarkSupport.flushMarker`/`markDrainEnd` helpers, a duplicate import in `LuxRegionExtractor`, the unused
+    `RuntimeColumns.fullDepthRepair` field, and a missing `queuedCurrent` assignment in the sky seeding loop.
+  * The rejected boundary-delta prototype (`experimentalBoundaryDeltas`, `BorderDeltaSupport`) remains, default off,
+    and is listed for removal in 1.1.
+
+Measurement (recorded in docs/TASK-PERF-SKY.md)
+  * Against vanilla and ScalableLux, settled-world protocol, same-session interleaved runs with exact two-sided
+    Mann-Whitney p: `block_toggle_border` 0.807 against vanilla's 3.440 and ScalableLux's 1.642;
+    `structure_cube` 1.737 against 3.689 and 3.039; `dense_chunk_patch` 1.797 against 3.157 and 1.490;
+    `sky_hole` 0.718 against 0.757 and 0.355.
+  * Fourteen candidate levers for the `sky_hole` gap were measured and refuted; the gap is the asynchronous
+    delivery chain itself rather than a missing optimisation.

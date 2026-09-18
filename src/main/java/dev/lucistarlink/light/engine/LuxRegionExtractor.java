@@ -3,7 +3,6 @@ package dev.lucistarlink.light.engine;
 import dev.lucistarlink.light.LuxConstants;
 import dev.lucistarlink.light.LuxFlags;
 import dev.lucistarlink.light.LightMaterial;
-import dev.lucistarlink.light.LuxFlags;
 import dev.lucistarlink.light.LightMaterialCache;
 import dev.lucistarlink.light.region.RegionBounds;
 import dev.lucistarlink.light.region.RegionLightData;

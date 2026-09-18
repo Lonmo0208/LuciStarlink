@@ -30,7 +30,10 @@ public final class LuxRuntimeManager implements AutoCloseable {
     private static final int MAX_RUNTIME_REGION_SUBMITS_PER_TICK = Integer.getInteger("lucistarlink.runtime.maxSubmitsPerTick", 0);
     private static final int MAX_RUNTIME_PENDING_RECORDS = Integer.getInteger("lucistarlink.runtime.maxPendingRecords", 131_072);
     private static final long FULL_RELIGHT_COALESCE_NANOS = Long.getLong("lucistarlink.runtime.fullRelightCoalesceNanos", 5_000_000_000L);
-    private static final int RUNTIME_REGION_CHUNKS = Math.max(1, Math.min(Integer.getInteger("lucistarlink.runtimeRegionChunks", 1), 16));
+    /** Owned region size in chunks: the config key, with the hidden property as a rig-only override. */
+    private static int runtimeRegionChunks() {
+        return Math.max(1, Math.min(Integer.getInteger("lucistarlink.runtimeRegionChunks", LuxConfig.regionChunks), 16));
+    }
 
     /**
      * Coalescing is a short-lived dedup window, so its bookkeeping must not outlive it:
@@ -67,7 +70,7 @@ public final class LuxRuntimeManager implements AutoCloseable {
     private volatile long nextTelemetryNanos;
     private volatile boolean closed;
     /** Set by {@link #tick} when it hands a publication to the light engine. */
-    private boolean publishedThisTick;
+    private volatile boolean publishedThisTick;
 
     public boolean enqueue(BlockChangeRecord record) {
         return record != null && enqueue(record.x(), record.y(), record.z(), record.oldState(), record.newState());
@@ -77,7 +80,7 @@ public final class LuxRuntimeManager implements AutoCloseable {
         if (closed) {
             return false;
         }
-        long regionKey = regionKey(x >> 4, z >> 4, RUNTIME_REGION_CHUNKS);
+        long regionKey = regionKey(x >> 4, z >> 4, runtimeRegionChunks());
         if (isFullRelightCoalescing(regionKey)) {
             if (!updateQueue.enqueueFullRelight(regionKey, 1)) {
                 LuxBenchmarkSupport.count("lucistarlink.runtime.requeued.coalesceTableFull");
@@ -145,7 +148,7 @@ public final class LuxRuntimeManager implements AutoCloseable {
         if (closed) {
             return false;
         }
-        long regionKey = regionKey(chunkX, chunkZ, RUNTIME_REGION_CHUNKS);
+        long regionKey = regionKey(chunkX, chunkZ, runtimeRegionChunks());
         if (updateQueue.hasRegion(regionKey) || scheduledRegions.contains(regionKey)) {
             return true;
         }
@@ -358,6 +361,14 @@ public final class LuxRuntimeManager implements AutoCloseable {
                     }
                     commitQueue.add(new RuntimeCommit(result, expectedChunk));
                 }
+            } catch (Throwable throwable) {
+                // A throwing job used to lose its batch outright: the owner is released below and the region
+                // removed from the scheduled set, so nothing would ever resubmit this edit's changes and that
+                // region would keep the light it had. Requeue is idempotent, so the cost of a spurious requeue
+                // after a genuine failure is a retry, not duplicate light.
+                LuxBenchmarkSupport.count("lucistarlink.runtime.jobs.failed");
+                LuciStarlink.LOGGER.warn("LuciStarlink runtime job failed, requeueing its changes", throwable);
+                requeue(regionKey, batch);
             } finally {
                 LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.job.runtime", jobStartedAt);
                 ownerTable.release(regionKey, ownerId);
@@ -418,12 +429,12 @@ public final class LuxRuntimeManager implements AutoCloseable {
                 continue;
             }
             // every region image that covers this chunk: origins within halo chunks of it
-            int minOriginX = Math.floorDiv(chunkPos.x - halo, RUNTIME_REGION_CHUNKS) * RUNTIME_REGION_CHUNKS;
-            int maxOriginX = Math.floorDiv(chunkPos.x + halo, RUNTIME_REGION_CHUNKS) * RUNTIME_REGION_CHUNKS;
-            int minOriginZ = Math.floorDiv(chunkPos.z - halo, RUNTIME_REGION_CHUNKS) * RUNTIME_REGION_CHUNKS;
-            int maxOriginZ = Math.floorDiv(chunkPos.z + halo, RUNTIME_REGION_CHUNKS) * RUNTIME_REGION_CHUNKS;
-            for (int originX = minOriginX; originX <= maxOriginX; originX += RUNTIME_REGION_CHUNKS) {
-                for (int originZ = minOriginZ; originZ <= maxOriginZ; originZ += RUNTIME_REGION_CHUNKS) {
+            int minOriginX = Math.floorDiv(chunkPos.x - halo, runtimeRegionChunks()) * runtimeRegionChunks();
+            int maxOriginX = Math.floorDiv(chunkPos.x + halo, runtimeRegionChunks()) * runtimeRegionChunks();
+            int minOriginZ = Math.floorDiv(chunkPos.z - halo, runtimeRegionChunks()) * runtimeRegionChunks();
+            int maxOriginZ = Math.floorDiv(chunkPos.z + halo, runtimeRegionChunks()) * runtimeRegionChunks();
+            for (int originX = minOriginX; originX <= maxOriginX; originX += runtimeRegionChunks()) {
+                for (int originZ = minOriginZ; originZ <= maxOriginZ; originZ += runtimeRegionChunks()) {
                     if (originX == bounds.originChunkX() && originZ == bounds.originChunkZ()) {
                         continue;
                     }

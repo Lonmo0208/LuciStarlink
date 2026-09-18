@@ -553,12 +553,10 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
             throw throwable;
         } finally {
             this.lucistarlink$drainRunning.set(false);
-            if (this.lucistarlink$drainPublished) {
-                // only a drain that handed sections over completes a pass; an empty round (or one that only
-                // processed other work) must not move the benchmark's end timestamp by a tick
-                LuxBenchmarkSupport.markDrainEnd();
-                this.lucistarlink$drainPublished = false;
-            }
+            // a stale timestamp from an earlier batch would be reported as this batch's queue latency, and the
+            // metric is what the tuning decisions in docs/TASK-PERF-SKY.md are based on
+            this.lucistarlink$batchFirstQueuedNanos = 0L;
+            this.lucistarlink$drainPublished = false;
             batch.clear();
             this.lucistarlink$pendingLightNotifications.clear();
             this.lucistarlink$pendingLightNotificationKeys.clear();

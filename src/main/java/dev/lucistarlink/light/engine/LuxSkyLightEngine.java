@@ -557,6 +557,7 @@ public final class LuxSkyLightEngine {
             if (canImproveSky(data, current, upIndex)) {
                 if (!queuedCurrent) {
                     queue.enqueue(current, index);
+                    queuedCurrent = true;
                     seeds++;
                 }
             } else if (canImproveSky(data, up, index)) {

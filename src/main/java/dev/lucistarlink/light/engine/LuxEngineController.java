@@ -33,7 +33,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class LuxEngineController {
-    private static final int RUNTIME_REGION_CHUNKS = Math.max(1, Math.min(Integer.getInteger("lucistarlink.runtimeRegionChunks", 1), 16));
+    /**
+     * Owned region size in chunks for the runtime path: the config key, with the hidden property as an override so
+     * the benchmark rig can vary it without a rebuild. The config key used to be read by nothing at all, which made
+     * it a knob that did nothing (the live paths hardcoded 1 or read the hidden property).
+     */
+    public static int runtimeRegionChunks() {
+        return Math.max(1, Math.min(Integer.getInteger("lucistarlink.runtimeRegionChunks", LuxConfig.regionChunks), 16));
+    }
 
     /**
      * A bulk write scope is closed by its caller. If the caller throws in between (or never closes it),
@@ -103,7 +110,7 @@ public final class LuxEngineController {
 
         RegionLightData data;
         long extractStartedAt = LuxBenchmarkSupport.start();
-        data = relighter.extractChunkData(getter, chunk, 1, 1);
+        data = relighter.extractChunkData(getter, chunk, runtimeRegionChunks(), Math.max(0, LuxConfig.haloChunks));
         LuxBenchmarkSupport.recordSince("lucistarlink.stage.worldgen.extract", extractStartedAt);
 
         if (!tryReserveWorldgenSlot()) {
@@ -356,12 +363,12 @@ public final class LuxEngineController {
         int maxChunkZ = Math.floorDiv(maxZExclusive - 1, 16);
         long changesPerRegion = Math.max(1L, estimatedChanges / Math.max(1,
                 regionCount(minChunkX, maxChunkX, minChunkZ, maxChunkZ)));
-        int minRegionChunkX = Math.floorDiv(minChunkX, RUNTIME_REGION_CHUNKS) * RUNTIME_REGION_CHUNKS;
-        int maxRegionChunkX = Math.floorDiv(maxChunkX, RUNTIME_REGION_CHUNKS) * RUNTIME_REGION_CHUNKS;
-        int minRegionChunkZ = Math.floorDiv(minChunkZ, RUNTIME_REGION_CHUNKS) * RUNTIME_REGION_CHUNKS;
-        int maxRegionChunkZ = Math.floorDiv(maxChunkZ, RUNTIME_REGION_CHUNKS) * RUNTIME_REGION_CHUNKS;
-        for (int regionChunkZ = minRegionChunkZ; regionChunkZ <= maxRegionChunkZ; regionChunkZ += RUNTIME_REGION_CHUNKS) {
-            for (int regionChunkX = minRegionChunkX; regionChunkX <= maxRegionChunkX; regionChunkX += RUNTIME_REGION_CHUNKS) {
+        int minRegionChunkX = Math.floorDiv(minChunkX, runtimeRegionChunks()) * runtimeRegionChunks();
+        int maxRegionChunkX = Math.floorDiv(maxChunkX, runtimeRegionChunks()) * runtimeRegionChunks();
+        int minRegionChunkZ = Math.floorDiv(minChunkZ, runtimeRegionChunks()) * runtimeRegionChunks();
+        int maxRegionChunkZ = Math.floorDiv(maxChunkZ, runtimeRegionChunks()) * runtimeRegionChunks();
+        for (int regionChunkZ = minRegionChunkZ; regionChunkZ <= maxRegionChunkZ; regionChunkZ += runtimeRegionChunks()) {
+            for (int regionChunkX = minRegionChunkX; regionChunkX <= maxRegionChunkX; regionChunkX += runtimeRegionChunks()) {
                 if (!LuxCompat.isSablePlotChunk(level, regionChunkX, regionChunkZ)) {
                     scope.recordRegion(RegionBounds.regionKey(regionChunkX, regionChunkZ), changesPerRegion);
                 }
@@ -433,7 +440,7 @@ public final class LuxEngineController {
             return;
         }
         reapStaleBulkScope();
-        boolean published = runtimeManager.tick(lightEngine, getter, relighter, RUNTIME_REGION_CHUNKS, runtimeHaloChunks(),
+        boolean published = runtimeManager.tick(lightEngine, getter, relighter, runtimeRegionChunks(), runtimeHaloChunks(),
                 LuxConfig.enableSky, LuxConfig.enableBlock);
         // The commit itself still happens on the light thread; waiting for it here only moves it inside the tick,
         // which is where a block edit's light work belongs (it is what the game's own light pipeline does for the
@@ -521,18 +528,18 @@ public final class LuxEngineController {
     }
 
     private static int regionCount(int minChunkX, int maxChunkX, int minChunkZ, int maxChunkZ) {
-        int minRegionX = Math.floorDiv(minChunkX, RUNTIME_REGION_CHUNKS);
-        int maxRegionX = Math.floorDiv(maxChunkX, RUNTIME_REGION_CHUNKS);
-        int minRegionZ = Math.floorDiv(minChunkZ, RUNTIME_REGION_CHUNKS);
-        int maxRegionZ = Math.floorDiv(maxChunkZ, RUNTIME_REGION_CHUNKS);
+        int minRegionX = Math.floorDiv(minChunkX, runtimeRegionChunks());
+        int maxRegionX = Math.floorDiv(maxChunkX, runtimeRegionChunks());
+        int minRegionZ = Math.floorDiv(minChunkZ, runtimeRegionChunks());
+        int maxRegionZ = Math.floorDiv(maxChunkZ, runtimeRegionChunks());
         return (maxRegionX - minRegionX + 1) * (maxRegionZ - minRegionZ + 1);
     }
 
     private static long regionKeyForBlock(BlockPos pos) {
         int chunkX = SectionPos.blockToSectionCoord(pos.getX());
         int chunkZ = SectionPos.blockToSectionCoord(pos.getZ());
-        int originChunkX = Math.floorDiv(chunkX, RUNTIME_REGION_CHUNKS) * RUNTIME_REGION_CHUNKS;
-        int originChunkZ = Math.floorDiv(chunkZ, RUNTIME_REGION_CHUNKS) * RUNTIME_REGION_CHUNKS;
+        int originChunkX = Math.floorDiv(chunkX, runtimeRegionChunks()) * runtimeRegionChunks();
+        int originChunkZ = Math.floorDiv(chunkZ, runtimeRegionChunks()) * runtimeRegionChunks();
         return RegionBounds.regionKey(originChunkX, originChunkZ);
     }
 

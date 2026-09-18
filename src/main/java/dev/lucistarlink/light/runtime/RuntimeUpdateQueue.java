@@ -80,18 +80,30 @@ public final class RuntimeUpdateQueue {
 
     public int drainTo(Map<Long, RuntimeRegionBatch> drained) {
         int count = 0;
-        for (Map.Entry<Long, PendingRegion> entry : pendingByRegion.entrySet()) {
-            PendingRegion pending = pendingByRegion.remove(entry.getKey());
-            if (pending == null) {
+        // A plain remove(key) followed by pending.drain() can lose work: an enqueue that had already resolved the
+        // PendingRegion through computeIfAbsent before the remove would add its records to an object that is no
+        // longer in the map, and nothing would ever drain them (the reservation count stayed high as well).
+        // compute() takes the same bin lock as computeIfAbsent, so either the enqueue lands before the drain and is
+        // included, or it lands after the entry is gone and creates a fresh one for the next round.
+        for (Long key : new java.util.ArrayList<>(pendingByRegion.keySet())) {
+            DrainedRegion[] holder = new DrainedRegion[1];
+            pendingByRegion.compute(key, (ignored, pending) -> {
+                if (pending == null) {
+                    return null;
+                }
+                holder[0] = pending.drain();
+                return null;
+            });
+            DrainedRegion drainedRegion = holder[0];
+            if (drainedRegion == null) {
                 continue;
             }
-            DrainedRegion drainedRegion = pending.drain();
             RuntimeRegionBatch batch = drainedRegion.batch();
             if (batch.isEmpty()) {
                 continue;
             }
             count += drainedRegion.reservations();
-            drained.merge(entry.getKey(), batch, RuntimeUpdateQueue::mergeBatches);
+            drained.merge(key, batch, RuntimeUpdateQueue::mergeBatches);
         }
         pendingCount.addAndGet(-count);
         return count;

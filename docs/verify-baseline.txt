@@ -1,21 +1,30 @@
-7bfe9d7883d6f8271583ad2a8be7959a *lucistarlink-1.21.1-0.1.0.jar
+858bd44016586066e5694fd287dc9bae *lucistarlink-1.21.1-1.0.0.jar
 
 构建（发布件，不带任何 benchmark 开关）：
-  ./gradlew build                      ← 正式发布用这个；互斥声明必须是 incompatible
+  ./gradlew clean build                ← 正式发布用这个；互斥声明必须是 incompatible
     （注意：rig 版要额外带 -PbenchmarkAllowScalableLux=true -PbenchmarkAllowLucis=true，
-      那会把声明改成 discouraged，只能用于 mc-smoketest 里的四路对照，绝不能进 dist/）
+      那会把声明改成 discouraged，只能用于 mc-smoketest 里的对照，绝不能进 dist/）
   JAVA_HOME 与 PATH 都必须指向 JDK 21；见 docs/HANDOVER.md 的构建铁律
 测试：21 tests / 0 failures / 0 errors / 1 inherited skip
 默认（全部为默认，未开启任何实验开关）：
-  region 发布路线；directSectionInstall=off、worldgenHaloPublish=on、piggybackPublish=off、
-  promptRuntimePublish=off、syncRuntimeDrain=off
-本次重建原因：监工更正了 LuxConfig 里 directSectionInstall 的注释（它还在引用顺序组那个没复现的
-  0.87 -> 0.60 ms 数字），并补齐 README / NOTICE / CHANGELOG。行为零改动，注释进 jar 需重建。
-  已核对：新注释在类文件内、"0.87 -> 0.60" 已不在；互斥声明 starlight/scalablelux/lucis 全为 incompatible。
-本次重建原因：为 `sky_hole` 提速任务（docs/TASK-PERF-SKY.md）加了两个东西 —— 基准的**每轮增量埋点**（pass 行现在打印
-  elapsedUs/applyUs/waitUs + drain/queueLat/notify/runUpd/publish 增量，此前只有整毫秒与阶段总量），以及
-  `-Dlucistarlink.notifyNeighbourSections=`（L2 开关，**默认 true = 与上一版行为完全一致**）。默认行为零改动；
-  实测结果与下一步见 TASK-PERF-SKY.md §7-§8。
-已验证（本 jar）：见 docs/HANDOVER.md「Measurement results added this session」；
-  客户端同步用例证据见 mc-smoketest/clientcase-evidence/；
-  交错 A/B 两组数据与显著性见 docs/SUPERVISOR-NEXT-ROUND.md §10-11。
+  region 发布路线；regionChunks=1、haloChunks=1、runtimeHaloChunks=1、haloPublish=on、
+  worldgenHaloPublish=on；experimentalBoundaryDeltas=off、directSectionInstall=off、
+  piggybackPublish=off、promptRuntimePublish=off、syncRuntimeDrain=off、
+  -Dlucistarlink.notifyNeighbourSections 默认 true、-Dlucistarlink.promptDispatch 默认 false
+
+1.0.0 与 0.1.0 的差别（详见 CHANGELOG.md / NOTICE）：
+  * 自检修出的 4 个正确性修复（worldgen 误用运行时 ThreadLocal 导致跳发光环与跳过 stale 标记；
+    RuntimeUpdateQueue 的 drain 与 enqueue 竞态会静默丢改动；fullRelight 从不发布光环；
+    作业抛异常时批次丢失）；
+  * regionChunks / haloChunks 两个"文档里有效、实际没人读"的配置键已接通（默认值下行为不变）；
+  * 清理已验证无引用的死成员；被否决的 boundary-delta 原型保留（默认关），列入 1.1 清理。
+  默认行为与 0.1.0 完全一致 —— 新增/重测的开关全部保持原默认。
+
+发布前验证：
+  * 21 项差分测试全绿；
+  * 相邻成对探针（同一世界快照、同一次运行时边界编辑）：无流体气层带（y 90~112）与原版逐位一致
+    （edit / edit_border 两个标签）；全列 block 指纹两侧都不同，且原版自己跨会话也不同 → 不是判据；
+  * 内存预算、存档往返、客户端同步见 docs/HANDOVER.md 与 mc-smoketest/clientcase-evidence/。
+性能（settled-world 协议、同场交错、≥5 轮、精确 U/p，详见 docs/TASK-PERF-SKY.md）：
+  对照原版：拆建 4.3×、结构 2.1×、密集 1.76×、天空持平；
+  对照 ScalableLux：拆建 2.05×、结构 1.77×、密集慢 21%、天空慢 2.0×（异步交付链，14 个杠杆已全部实测否定）。
