@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.1 — configuration regression fix
+
+Found by running the dev client against an existing installation (the configuration file it had written earlier):
+NeoForge reported `Configuration file … is not correct. Correcting`, and the corrected file carried
+**`haloChunks = 0`**.
+
+1.0.0 made `haloChunks` live (before that the key did nothing and the world-generation path hardcoded 1), so every
+configuration written by an older build — which stores the old default 0 — would have read it literally and switched
+the world-generation halo **off**: a chunk generated beside an already-loaded neighbour would stop propagating at the
+chunk edge and leave that neighbour's border light stale, i.e. the exact seam the halo exists to prevent.
+
+The world-generation path now treats 0 as 1 (the key's useful range there is 1–2), and the config comment, the
+README row and this note say why. No other key changed meaning: `regionChunks` defaulted to 1 before and after.
+Verified: clean build, 21 tests with 1 inherited skip, metadata declares `starlight`/`scalablelux`/`lucis`
+incompatible, and a dev-client launch loads 1.0.1 with the boot log and flags line as expected.
+
 ## 1.0.0 — first release
 
 The engine described under 0.1.0 below, plus what a full source review and a long measurement campaign changed.

@@ -27,8 +27,9 @@ public final class LuxConfig {
     private static final ModConfigSpec.IntValue HALO_CHUNKS = BUILDER
             .comment("Read-only halo size in chunks for the world-generation image: how far beyond the owned",
                     "chunk a generated chunk computes light so that it can be published into an already-loaded",
-                    "neighbour. 1 covers the 15-block light travel distance; 0 stops propagation at the chunk",
-                    "edge, which leaves a light seam on the border until the neighbour is relit.")
+                    "neighbour. 1 covers the 15-block light travel distance; 0 would stop propagation at the chunk",
+                    "edge and leave a light seam on the border, so it is treated as 1 on this path (0 also appears",
+                    "in configurations written by older builds, where this key did nothing and the code used 1).")
             .defineInRange("haloChunks", 1, 0, 2);
 
     private static final ModConfigSpec.IntValue RUNTIME_HALO_CHUNKS = BUILDER

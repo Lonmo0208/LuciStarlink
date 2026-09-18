@@ -177,3 +177,11 @@ Measurement (recorded in docs/TASK-PERF-SKY.md)
     `sky_hole` 0.718 against 0.757 and 0.355.
   * Fourteen candidate levers for the `sky_hole` gap were measured and refuted; the gap is the asynchronous
     delivery chain itself rather than a missing optimisation.
+
+Changes for 1.0.1
+-----------------
+
+* `haloChunks` became live in 1.0.0, and every configuration written by an older build stores its old default 0 -
+  which would have switched the world-generation halo off, leaving a light seam on the border of a chunk generated
+  beside an already-loaded neighbour. The world-generation path now treats 0 as 1 (the key's useful range there is
+  1-2), and the config comment, the README row and CHANGELOG explain why. No other key changed meaning.

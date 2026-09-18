@@ -110,7 +110,14 @@ public final class LuxEngineController {
 
         RegionLightData data;
         long extractStartedAt = LuxBenchmarkSupport.start();
-        data = relighter.extractChunkData(getter, chunk, runtimeRegionChunks(), Math.max(0, LuxConfig.haloChunks));
+        // The world-generation image must keep a halo: 0 stops propagation at the chunk edge, so a chunk generated
+        // beside an already-loaded neighbour would leave that neighbour's border light stale (the seam the halo
+        // exists to prevent). The config key used to be inert while this call hardcoded 1, so a configuration
+        // written by an older build carries haloChunks=0; reading it literally would have switched that protection
+        // off for every existing installation. 0 is therefore treated as 1 here, and the key's useful range on this
+        // path is 1..2.
+        int worldgenHalo = Math.max(1, LuxConfig.haloChunks);
+        data = relighter.extractChunkData(getter, chunk, runtimeRegionChunks(), worldgenHalo);
         LuxBenchmarkSupport.recordSince("lucistarlink.stage.worldgen.extract", extractStartedAt);
 
         if (!tryReserveWorldgenSlot()) {
