@@ -199,13 +199,11 @@ cp build/libs/lucistarlink-1.21.1-0.1.0.jar dist/lucistarlink-region-0.1.0.jar  
 6. **存储层的两个隐蔽细节（2026-09-18 实测踩到）**：
    - `LayerLightSectionStorage.updatingSectionData` 带 2 项查找缓存（`DataLayerStorageMap.lastSectionKeys/lastSections`）。**直接 `setLayer` 之后必须 `clearCache()`**，否则后续 `getStoredLevel`/`getDataLayer(pos, true)` 仍会返回被替换掉的旧层，表现为"写入没生效"。
    - `queuedSections` 里的待处理层会**遮蔽**直接写入的层（`getDataLayerData` 先查 `queuedSections`）。直装时必须同时 `queuedSections.remove(sectionPos)`，否则客户端包与序列化会读到旧数据。
-7. **"谁最后写"竞态（新发现，比记账更隐蔽）**：并发的区域作业如果都往共享区块的边界 section 发布 halo，就是**写-写竞态**——最后写的赢，而谁最后写取决于线程时序。已实测（静默门探针）：strip 场景里 **vanilla 在 x 0..63 稳定复现**（两次逐位相同），而我们的引擎在**同一子区域 4 次运行 4 个不同值**，且与 `directSectionInstall`、`worldgenHaloPublish` 开关无关（两者都试过）——所以这是**世界生成发布顺序**的问题，不是某一刀造成的。
-   - ⚠️ 同时必须承认探针的边界：同一场景里 x 48..79 区域**连 vanilla 都不稳定**（两次不同），说明该区域在读指纹时仍在变化；凡是这类区域的指纹**不能当判定依据**。sky 光在所有运行中逐位一致、且能通过存档往返。
-   - 对策（阶段 2 必须做）：
-     1. 先让场景**天然确定**（平坦/虚空世界、无流体与随机 tick，或停 tick 后再读），否则任何结论都不可信；
-     2. 再逐项二分（`enableBlock=false` → `enableWorldgen=false`）；
-     3. 然后加**发布顺序闸**：不允许用比引擎现值更旧的镜像覆盖 —— runtime 路径已有 `externalMarked`/`rerunBaselineMoved`，worldgen 路径**完全没有**。候选实现：每 section 记录"镜像年龄"（发布序号），被更新的发布者写过的 section 直接跳过；映射要有界（照抄 coalescing map 的清扫预算）。
-   - 验收补充：**确定性**必须单列一项——同一配置连跑 2 次，指纹必须逐位相同，且只在"稳定区域"上比较（这是本轮唯一能抓住这类竞态的廉价探针，见 `docs/HANDOVER.md` 的 `/lucistarlink dumplight`）。
+7. **"谁最后写"竞态（待证实，不要当结论用）**：并发的区域作业若都往共享区块的边界 section 发布，理论上就是写-写竞态——最后写的赢。但**本轮的指纹证据不足以判定它真实存在**：同一场景下 **vanilla 自己**三次 gated 运行在 x 0..63 得到两个相同值和一个不同值，x 48..79 三次全不同。探针报告引擎静默 20 tick，但世界在读指纹时仍在变化（生成流式推进、流体/形状交互），sky 光对这些变化不敏感、block 光敏感——所以 block 指纹目前**不是可用的判定依据**，我们引擎的波动也**不能**归因于发布顺序（该结论已两次收回）。
+   - 结论：这条风险**保留观察**，但必须先满足下面的前置条件才允许展开调查，否则又是浪费一轮。
+   - 前置条件：场景**天然确定**（平坦/虚空世界、无流体、无随机 tick、停 tick 或冻结副本后再读）；满足后先做单变量二分（vanilla 参照 → `enableBlock=false` → `enableWorldgen=false` → 默认），**只有确认存在分歧**才动下面的闸：
+   - 对策（若被证实）：不允许用比引擎现值更旧的镜像覆盖 —— runtime 路径已有 `externalMarked`/`rerunBaselineMoved`，worldgen 路径**完全没有**。候选实现：每 section 记录"镜像年龄"（发布序号），被更新的发布者写过的 section 直接跳过；映射要有界（照抄 coalescing map 的清扫预算）。
+   - 已确认的正面证据（可以引用）：sky 光在所有运行中与 vanilla 逐位一致、且通过存档往返；`worldgen neighbour-stale marked` 在 `worldgenHaloPublish=false` 的"边缘再生成一块"场景里为 59（机制生效）；runtime 边界场景 `halo sections published` / `externalMarked` / `externalRefresh` / `rerunBaselineMoved` 全部非零。
 8. **提交是"调度 + 时机"问题，不是"数据搬运"问题**：原版存储是**单写者**（只有光照线程能写，`ThreadedLevelLightEngine` 把每个写入都包成 `addTask`），所以"回写成本几乎为零"只对"换数组"成立，对"提交落地"不成立。而且实测表明：**触发时机比省下的一跳更重要**——用 250 µs 定时器主动 drain（单 pass 最小值 0.48–0.87 ms）优于依赖原版 `tryScheduleUpdate()` 被动触发（1.24 ms，且有 14.6 ms 停顿）。详见 §3 阶段 2。
 
 ---
@@ -220,7 +218,7 @@ cp build/libs/lucistarlink-1.21.1-0.1.0.jar dist/lucistarlink-region-0.1.0.jar  
 | 边界正确性 | 区块边界放荧石 → 隔壁亮度 | 隔壁立刻正确（附证据计数） |
 | 生成边界 | 已加载地带边缘再生成一块 | 邻居被正确标记/重算（附计数） |
 | 存档安全 | 放灯后立刻 `save-all flush` → 重启 | 光还在；无报错 |
-| **确定性** | `/lucistarlink dumplight` 同配置连跑 2 次（可 `mc-smoketest/ls-border-scenario.sh gen`） | 指纹逐位相同，且与 vanilla 对照一致 |
+| **确定性** | `/lucistarlink dumplight` 同配置连跑 2 次（`mc-smoketest/ls-border-scenario.sh gen`） | 指纹逐位相同，且与 vanilla 对照一致。**前置条件**：场景必须先做到天然确定（平坦/虚空、无流体与随机 tick、停 tick 或冻结副本后再读）——当前 strip 场景连 vanilla 都不可复现，见 §5 第 7 条 |
 | 内存 | 长跑 30 分钟 + 遥测 | 缓存与队列有界，无持续增长 |
 | 兼容 | 与 Sable / C2ME 等同装 | 无光照发散、无崩溃 |
 
