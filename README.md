@@ -13,21 +13,24 @@ It is **not** a scheduler over vanilla light tasks and **not** a Starlight fork:
 (material image + propagation) per region and publishes only dirty sections back into the vanilla engine.
 
 > Status: **0.1.0 — server-side engine, correct across region borders, memory-bounded, saves safe.**
-> Measured against ScalableLux in same-session interleaved runs (our run and ScalableLux's alternate round by
-> round, ≥5 reps each; statistic = the median of per-pass minima; every comparison carries an exact two-sided
-> Mann-Whitney p):
-> * `block_toggle_border` **0.636** vs 2.285 and `structure_cube` **1.757** vs 3.540 — decisive wins
->   (p = 0.008 each; in both, all five of our runs beat all five of ScalableLux's).
-> * `dense_chunk_patch` — **no difference** on per-pass minimum (1.990 vs 2.210, then 2.342 vs 2.217 in an
->   independent replica; the two groups disagree in direction, so the earlier "ahead by 10%" is withdrawn).
->   Its wall time is 2.5–3.1× slower in both groups because of a rare ~30 ms pass — the open performance item.
-> * `sky_hole` — behind by **~2.0×** once the benchmark no longer lets world-generation light work land
->   inside the measured window (0.708 vs 0.355 ms median, 10+10 interleaved runs, perfect separation
->   p < 0.0001). The earlier "25–35%" figure was measured with the old protocol, which inflated both engines
->   and inflated ScalableLux more, so it understated this gap. ScalableLux's edge is structural: it never hands
->   sections to the light engine at all, which is what the V2 storage mode
->   ([docs/ARCH-V2-GLOBAL-STORAGE.md](docs/ARCH-V2-GLOBAL-STORAGE.md)) exists for. See
->   [docs/TASK-PERF-SKY.md](docs/TASK-PERF-SKY.md) §7.8–7.9 for the protocol defect and the corrected numbers.
+> Benchmarked against **vanilla** and **ScalableLux** in same-session interleaved runs (the three engines
+> alternate round by round, ≥5 reps each; statistic = the median of per-pass minima over a run; every
+> comparison carries an exact two-sided Mann-Whitney p). All numbers below use the settled-world protocol
+> (`-Dlucistarlink.benchmark.prepareRing=3 -Dlucistarlink.benchmark.quiesceSettleMs=1000`); see
+> [docs/TASK-PERF-SKY.md](docs/TASK-PERF-SKY.md) §7.8 for why the older numbers were not comparable.
+>
+> | workload | vanilla | LuciStarlink | ScalableLux | vs vanilla | vs ScalableLux |
+> |---|---|---|---|---|---|
+> | `block_toggle_border` | 3.440 | **0.807** | 1.642 | **4.3× faster** | **2.05× faster** (p=0.008) |
+> | `structure_cube` | 3.689 | **1.737** | 3.039 | **2.1× faster** | **1.77× faster** (p=0.008) |
+> | `dense_chunk_patch` | 3.157 | **1.797** | 1.490 | **1.76× faster** | 1.21× slower (p=0.095) |
+> | `sky_hole` | 0.757 | 0.718 | **0.355** | parity (p=0.31) | 2.0× slower (p<0.0001) |
+>
+> Wall time (the whole run rather than the best pass) tells the same story: 3.7× / 2.4× / 1.5× faster than
+> vanilla, 1.9× / 1.85× faster than ScalableLux, 16% behind it on `dense_chunk_patch` and 2.2× behind it on
+> `sky_hole` — where we are at vanilla level. ScalableLux's edge on that one workload is structural: it never
+> hands sections to the light engine at all, which is what the V2 storage mode
+> ([docs/ARCH-V2-GLOBAL-STORAGE.md](docs/ARCH-V2-GLOBAL-STORAGE.md)) exists for.
 > Absolute numbers drift up to ~40% between groups of one session, so **only same-run interleaved comparisons
 > count** — see [docs/SUPERVISOR-NEXT-ROUND.md](docs/SUPERVISOR-NEXT-ROUND.md) §10–11.
 > The client-sync case is verified: light placed on a chunk border reaches a connected client within 2 s,

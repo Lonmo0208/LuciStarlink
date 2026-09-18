@@ -43,32 +43,30 @@ server.
 ### Performance (lazy materialisation, and what was rejected)
 * Halo light and halo materials are now materialised per section on demand: region init 435.3 → 0.87 ms,
   material extraction 56.8 → 5.6–13.9 ms.
-* Measured against ScalableLux in same-session **interleaved** runs (round-by-round alternation, ≥5 reps each,
-  median of per-pass minima; `sky_hole` and `dense_chunk_patch` were then replicated in a second independent
-  interleaved group):
+* Measured against **vanilla** and **ScalableLux** in same-session **interleaved** runs (the three engines
+  alternate round by round, ≥5 reps each, median of per-pass minima, exact two-sided Mann-Whitney p), all under
+  the settled-world protocol `prepareRing=3` + `quiesceSettleMs=1000`:
 
-  | workload | LuciStarlink | ScalableLux | verdict |
-  |---|---|---|---|
-  | `block_toggle_border` | **0.636** | 2.285 | win, p = 0.008 (all 5 runs faster) |
-  | `structure_cube` | **1.757** | 3.540 | win, p = 0.008 (all 5 runs faster) |
-  | `dense_chunk_patch` | 1.990 / 2.342 | 2.210 / 2.217 | **no difference**: the two groups disagree in direction, p = 0.095 and 0.841 |
-  | `sky_hole` | 0.767 / 0.666 | 0.572 / 0.535 | behind, but see below |
+  | workload | vanilla | LuciStarlink | ScalableLux | vs vanilla | vs ScalableLux |
+  |---|---|---|---|---|---|
+  | `block_toggle_border` | 3.440 | **0.807** | 1.642 | **4.3× faster** (p=0.008) | **2.05× faster** (p=0.008) |
+  | `structure_cube` | 3.689 | **1.737** | 3.039 | **2.1× faster** (p=0.008) | **1.77× faster** (p=0.008) |
+  | `dense_chunk_patch` | 3.157 | **1.797** | 1.490 | **1.76× faster** (p=0.008) | 1.21× slower (p=0.095) |
+  | `sky_hole` | 0.757 | 0.718 | **0.355** | parity (p=0.31) | 2.0× slower (p<0.0001) |
 
-  **Corrected after the protocol defect was found**: the runs above let world-generation light work land inside
-  the measured window (generating a chunk that borders a measured chunk queues light work *for that measured
-  chunk*), which inflated both engines and ScalableLux more. With `prepareRing=3` and a 1 s quiesce settle
-  window, a 10+10 interleaved group gives **0.708 vs 0.355 ms (p < 0.0001, perfect separation)** — i.e. behind
-  by ~2.0×, not 25–35%. The measured cost structure behind that: our pipeline spends ~0.25 ms in the publish
-  coalescing window plus ~0.4 ms in the drain (publish, engine re-absorption, client notifications), while
-  ScalableLux applies its light update synchronously in ~0.3 ms and never queues anything.
-  `directSectionInstall` (which skips the engine's re-absorption) shows −37% under the clean protocol at n=6,
-  p=0.18 — promising but not established, and it carries the correctness caveat described above.
-  See docs/TASK-PERF-SKY.md §7.8–7.9.
+  Wall time agrees: 3.7× / 2.4× / 1.5× faster than vanilla; 1.9× / 1.85× faster than ScalableLux; 16% behind
+  on `dense_chunk_patch`, 2.2× behind on `sky_hole` (where we sit at vanilla level).
 
-  So two workloads win decisively, one is a tie, and `sky_hole` lags for a structural reason: ScalableLux does
-  not hand sections to the light engine at all, which is the V2 storage mode's territory, not a tuning knob.
-  `dense_chunk_patch`'s **wall** time is 2.5–3.1× worse in both groups (a rare ~30 ms pass) — recorded as the
-  open performance item.
+  **Two earlier claims had to be corrected when the protocol defect was found** (the measured window was
+  letting world-generation light work in: generating a chunk that borders a measured chunk queues light work
+  *for that measured chunk*, which inflated both engines but ScalableLux more): the "ahead by 10%" on
+  `dense_chunk_patch` is gone — under the clean protocol we are 16–21% behind there — and the old
+  "25–35% behind on `sky_hole`" understated the gap, which is ~2.0×. The rare ~30 ms pass that made
+  `dense_chunk_patch`'s wall 2.5–3.1× worse also turned out to be the same protocol artifact; it is 16% now.
+  Our cost structure on `sky_hole`: apply ~0.12 ms + publish coalescing window ~0.25 ms + drain ~0.4 ms
+  (publish, engine re-absorption, client notifications), against ScalableLux's ~0.3 ms synchronous update with
+  no queue and no hand-over. `directSectionInstall` (skips the re-absorption) measures −37% at n=6, p=0.18 —
+  promising but not established. See docs/TASK-PERF-SKY.md §7.8–7.9.
 * Four reschedulings were measured and **rejected** (`promptRuntimePublish` +44%, 2 ms coalescing window,
   `syncRuntimeDrain` neutral, worldgen core-only publish neutral), and `directSectionInstall`'s sequential
   −31% did not reproduce interleaved (no workload significant, p = 0.22–0.84), so no publish-path switch is
