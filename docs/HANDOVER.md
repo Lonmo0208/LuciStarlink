@@ -55,40 +55,43 @@ Instruments added this session (all `-Dlucistarlink.debug=true`):
 `bench.pass_ticks`, `publish_batch.{queueLatency,runLightUpdates,notify}`, `publish_direct.{queueData,notifyQueue}`,
 `publish.notify.posted`, `worldgen.publish.{core,halo}.sections`, plus the pre-existing stage metrics.
 
-## Unresolved 1 (performance): `sky_hole` is still ~0.9 ms above the acceptance line
+## Unresolved 1 (performance): the bar is met, ScalableLux is still ahead on `sky_hole`
 
-Current state (per-pass min, median over 4-5 reps): queued route **0.87 ms**, direct install **0.60 ms**
-(`-Dlucistarlink.directSectionInstall=true`); wall minima 4.92 ms and 3.78 ms respectively. ScalableLux's own
-per-pass minimum in the same harness is ~0.69-0.80 ms, vanilla ~1.0 ms.
+Measured this session on the same rig, per-pass minima from `lucistarlink-light-benchmark.jsonl`:
 
-Mechanism, now measured rather than guessed: the cost is **the hand-off to the engine**, split in two:
-(a) the engine's next `runLightUpdates` pass re-deriving/absorbing what we handed over
-(`markNewInconsistencies`, `swapSectionMap` full section-map copy per drain, notifications) - removed by the
-direct install, measured -31% on per-pass minimum;
-(b) **the scheduling round-trip itself**, which survives the direct install because the engine's storage is
-single-writer (light thread only): our publish still goes sorter mailbox -> private drain queue (with the
-250 us `publishCoalesceNanos`) -> taskMailbox, while the barrier waits on a separate `runUpdate` task.
+| engine | `sky_hole` per-pass minima | wall total (4 passes) |
+|---|---|---|
+| ours, shipped default (region route), 5 runs | 0.651 / 1.018 / 0.976 / 0.602 / 0.595 -> **median 0.651 ms** | 4.55 / 4.75 / 4.82 / 4.90 / 4.30 |
+| ScalableLux, 3 runs | 0.598 / 0.299 / 0.593 -> **median 0.593 ms** | 3.05 / 2.15 / 2.82 |
 
-Rejected hypotheses (do not re-test): halo machinery (`runtimeHaloChunks=0`), measurement artifact, our sky
-algorithm (`stage.runtime.incremental.sky` 0.2-0.5 ms), per-job pipeline handoff, the notification fan-out
-(dropping it to radius 0 saves 62% of `publish_direct` and changes no wall number - reverted), the coalescing
-delay alone (`publishCoalesceNanos=0`, no effect), worldgen core-only publishing (worth ~4% and much lower
-variance, but not the missing 0.9 ms).
+So the agreed bar (per-pass minimum median <= 1.0 ms, which replaced the old "wall <= 3.0 ms" after the
+measurement-discipline change) **is met by the shipped default**, but ScalableLux is still ~10% ahead per pass,
+has a much better best pass (0.299 ms) and is ~1.5x ahead on the wall number. The gap is specific to this
+workload: this session's other three read dense_chunk_patch 9.49, block_toggle_border 5.25, structure_cube 8.40
+(walls), against the same day's four-way numbers for SL (18.8/26.3, 12.0/16.2, 19.9/28.5).
 
-Next action (in order):
-1. Decide the scheduling question with the evidence now in hand (see ARCH-V2 §3 stage 2 and risk 8): the piggyback
-   variant implemented this session (`piggybackPublish`, default off) commits at `runUpdate` HEAD via a vanilla
-   task trigger and measured **worse** (per-pass minimum 0.48 -> 1.24 ms, plus one 14.6 ms stall), because the
-   trigger waits for vanilla's `tryScheduleUpdate`. The 250 us private drain is currently the *better* trigger.
-   Two remaining routes: (a) a prompt, deterministic trigger for the same-pass commit; (b) do small edits inline
-   on the server thread (compute *and* commit) the way ScalableLux does, which is where its 0.69-0.80 ms
-   per-pass minimum comes from.
-2. Only after the correctness items below: re-measure with >=5 reps and per-pass minima, four-way.
+Why: our light work reaches the engine asynchronously (job -> publish queue -> drain on the light thread), while
+ScalableLux computes and commits inside the tick, so its measured pass contains no hand-off at all. Two remaining
+routes, both written up in ARCH-V2 §3 stage 2: (a) a prompt, deterministic trigger that lands our commit in the
+same `runUpdate` the barrier waits for; (b) compute *and* commit small edits inline on the server thread, the way
+ScalableLux does. The storage prototype (`directSectionInstall`) removes the engine-side absorption and measured
+0.599 ms median per-pass minimum, i.e. no better than the default within noise, and it carries the divergence
+rate of Unresolved 2 - so it stays off.
 
-Also settled this session, so nobody re-derives them: the sorter-mailbox callbacks of the light engine run on the
-light thread itself (both handles are backed by the same processor mailbox), so a second task there is a queue
-hop and not a thread wakeup; and a mixin class cannot live in `net.minecraft.server.level` under NeoForge - the
-module system rejects the split package at boot (`ResolutionException: Module minecraft contains package ...`).
+Mechanisms settled this session (do not re-derive):
+* the harness's per-pass number is "apply -> the light engine's mailboxes report idle"; `bench.barrier.poll` = 1
+  per pass means the work finished inside the apply tick, and `bench.pass_wall_actual` is exactly one tick;
+* `ThreadedLevelLightEngine.runUpdate()` calls `super.runLightUpdates()` unconditionally, so whatever we queued is
+  absorbed inside the barrier's own pass. That is the hand-off cost, and it is why the notification fan-out (62%
+  of `publish_direct` in our own drain) moved no wall number at all;
+* the light engine's sorter-mailbox callbacks already run on the light thread, so an extra task there is a queue
+  hop, not a thread wakeup;
+* `piggybackPublish` (commit at `runUpdate` HEAD, triggered by one vanilla task) measured **worse**: per-pass
+  minimum 0.48 -> 1.24 ms plus a 14.6 ms stall, because the trigger waits for vanilla's `tryScheduleUpdate` while
+  the private drain's 250 us timer is prompt. Committing in the same pass is not the win; being prompt is;
+* rejected (do not re-test): halo machinery, measurement artifact, our sky algorithm, per-job pipeline handoff,
+  notification fan-out, the coalescing delay alone, worldgen core-only publishing (~4%, lower variance - kept as
+  an opt-in switch), `runtimeHaloChunks=0`, and - from an earlier session - the heightmap-sky lever.
 
 ## Unresolved 2 (open bug, now reproducible): our engine occasionally writes block light vanilla does not
 
