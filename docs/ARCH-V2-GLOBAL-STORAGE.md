@@ -146,10 +146,13 @@ cp build/libs/lucistarlink-1.21.1-0.1.0.jar dist/lucistarlink-region-0.1.0.jar  
 
 ### 阶段 2：storage 模式的提交路径（拿到主要收益）
 - 作业提交改为"原子换进存储"；删除该模式下的邮箱投递与通知扇出。
-- **必须写明"提交怎么调度"**（2026-09-18 实测修正）：存储是单写者（只有光照线程能写），换数组本身几乎免费，但把换数组**送到光照线程**的那一跳不免费——测得的剩余 ~0.8 ms 全在这里。私有队列 + 延迟合并（现在的 `publishCoalesceNanos=250µs` + 自己的 drain 任务）比原版机制**多一次 mailbox 唤醒**，而且 barrier 等的恰恰是原版那一轮。
-  - 推荐做法：把发布任务**搭进原版自己的任务表**（`ThreadedLevelLightEngine.lightTasks`，类型 `PRE_UPDATE`），这样"我们的写入 → `super.runLightUpdates()` → barrier 的 wait 任务"在**同一次 `runUpdate()`** 里完成，省掉一次唤醒和 250 µs 合并延迟；不要新增第二条私有投递路径。
-  - 实现要点：`TaskType` 是包私有枚举，需要一个**同包** mixin（`package net.minecraft.server.level`，单独的 mixin json）暴露 `@Invoker addTask(...)`，并在该接口里用 default 方法包一层 `lucistarlink$addPreUpdateTask(x, z, level, runnable)`，调用方只调 default 方法。
-  - 效果预期（待验证）：直装 + 自己的 drain 实测单 pass 最小值中位 0.87 → 0.60 ms；去掉私有投递这一跳后才有机会进 3.0 ms。
+- **必须写明"提交怎么调度"**（2026-09-18 实测修正）：存储是单写者（只有光照线程能写），换数组本身几乎免费，但把换数组**送到光照线程**、并且让"引擎承认空闲"发生在**同一轮**，才是成本所在——测得的剩余 ~0.9 ms 在这里。
+  - **先纠正两个被实测推翻的假设**：
+    1. "私有投递多一次 mailbox 唤醒"——不成立。`ChunkMap` 里 `ThreadedLevelLightEngine` 的 `taskMailbox` 是 `processormailbox`（"light" 线程），而它的 `sorterMailbox` 是 `queueSorter.getProcessor(processormailbox, false)`，**回调同样跑在光照线程上**；多一条任务只是一次队列跳，不是线程唤醒。
+    2. "同包 mixin 可以拿到 `TaskType`"——**做不到**。把类放进 `net.minecraft.server.level` 会让 `lucistarlink` 模块与 `minecraft` 模块争抢同一个包，NeoForge 在模块路径上直接 `ResolutionException: Module minecraft contains package net.minecraft.server.level, module lucistarlink exports package net.minecraft.server.level to minecraft`，服务器起不来（实测踩到，jar 一换就崩）。任何"同包 mixin json"的方案都作废。
+  - **可用做法（已实现、默认关）**：`@Inject(method = "runUpdate", at = @At("HEAD"))` 在光照线程上、在引擎自己的 `runLightUpdates()` 与 POST_UPDATE（barrier 等的就是它）之前提交，完全不需要包私有类型；触发用一条普通引擎任务（`updateSectionStatus`，对已初始化的 section 是幂等空操作）让 `lightTasks` 非空。
+  - **实测结论（负面）**：这版本反而更慢——单 pass 最小值 0.48 → 1.24 ms，还出现一次 14.6 ms 的停顿。原因是触发依赖原版 `tryScheduleUpdate()`（要等下一次 `pollTask`），而现在的私有 drain 用 250 µs 定时器反而**更及时**。触发时机比省下的那一跳重要得多。
+  - 因此阶段 2 的调度要重新论证：要么找到"确定性及时触发 + 同轮提交"的办法（例如在光照线程的下一次 `pollTask` 里挂提交，而不是等 `tryScheduleUpdate`），要么**放弃用调度优化去追这 0.9 ms**，改走"小编辑在服务端线程内联完成（含提交）"这条路——ScalableLux 正是因为它同步做完，才有 0.69–0.80 ms 的 per-pass 最小值。两条路都要按 §6 的测量口径验收。
 - 新增配置 `lightEngineMode = region | storage`（默认 `region`），以及命令行/JVM 开关 `-Dlucistarlink.lightEngineMode=storage`。
 - 验收（storage 模式，全部满足才允许继续）：
   1. 差分套件全绿；
@@ -199,7 +202,7 @@ cp build/libs/lucistarlink-1.21.1-0.1.0.jar dist/lucistarlink-region-0.1.0.jar  
 7. **"谁最后写"竞态（新发现，比记账更隐蔽）**：并发的区域作业如果都往共享区块的边界 section 发布 halo，就是**写-写竞态**——最后写的赢，而谁最后写取决于线程时序。已实测：`sky_hole`/strip 场景下，同一配置连跑三次 **block 光指纹每次不同**，而纯 vanilla 两次完全一致；`enableBlock=false`（block 光交回原版、我们只发 sky）两次一致但**仍不等于 vanilla**，说明分歧出在"用较早的镜像覆盖引擎里较新的数据"这一层，而不是光照算法本身。
    - 对策（阶段 2 必须做）：发布前校验该 section 的**基线是否移动过**（引擎现值 vs 我们计算时采用的基线），移动过就不允许用旧镜像覆盖——runtime 路径已有 `externalMarked`/`rerunBaselineMoved` 那套，worldgen 路径目前**没有**这道闸。
    - 验收补充：**确定性**必须单列一项——同一配置连跑 2 次，指纹必须逐位相同（这是本轮唯一能抓住这类竞态的廉价探针，见 `docs/HANDOVER.md` 的 `/lucistarlink dumplight`）。
-8. **提交一定是"调度"问题，不是"数据搬运"问题**：原版存储是**单写者**（只有光照线程能写，`ThreadedLevelLightEngine` 把每个写入都包成 `addTask`）。所以"回写成本几乎为零"只对"换数组"成立，对"提交落地"不成立——见 §3 阶段 2 的调度要求。
+8. **提交是"调度 + 时机"问题，不是"数据搬运"问题**：原版存储是**单写者**（只有光照线程能写，`ThreadedLevelLightEngine` 把每个写入都包成 `addTask`），所以"回写成本几乎为零"只对"换数组"成立，对"提交落地"不成立。而且实测表明：**触发时机比省下的一跳更重要**——用 250 µs 定时器主动 drain（单 pass 最小值 0.48–0.87 ms）优于依赖原版 `tryScheduleUpdate()` 被动触发（1.24 ms，且有 14.6 ms 停顿）。详见 §3 阶段 2。
 
 ---
 

@@ -61,6 +61,15 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     @Unique
     private final AtomicBoolean lucistarlink$publishScheduled = new AtomicBoolean();
     @Unique
+    private final java.util.concurrent.atomic.AtomicInteger lucistarlink$publishesInFlight =
+            new java.util.concurrent.atomic.AtomicInteger();
+    @Unique
+    private final java.util.concurrent.ConcurrentLinkedQueue<Runnable> lucistarlink$pendingPublishes =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+    @Unique
+    private final java.util.concurrent.ConcurrentLinkedQueue<CompletableFuture<Void>> lucistarlink$publishCompletions =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+    @Unique
     private volatile long lucistarlink$batchFirstQueuedNanos;
     @Unique
     private final ThreadLocal<Long> lucistarlink$checkBlockStartedAt = new ThreadLocal<>();
@@ -137,12 +146,95 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
 
     @Override
     public void lucistarlink$publish(LuxRelightResult result, LightChunk expectedChunk) {
+        if (LuxFlags.piggybackPublish) {
+            lucistarlink$scheduleEngineTask(result.chunkPos().x, result.chunkPos().z, lucistarlink$triggerSection(result),
+                    () -> lucistarlink$publishDirect(result, expectedChunk), null);
+            return;
+        }
         lucistarlink$addPreTask(result.chunkPos().x, result.chunkPos().z, () -> lucistarlink$publishDirect(result, expectedChunk));
     }
 
     @Unique
     private CompletableFuture<Void> lucistarlink$publishAsync(LuxRelightResult result, int chunkX, int chunkZ) {
+        if (LuxFlags.piggybackPublish) {
+            CompletableFuture<Void> completion = new CompletableFuture<>();
+            lucistarlink$scheduleEngineTask(chunkX, chunkZ, lucistarlink$triggerSection(result),
+                    () -> lucistarlink$publishDirect(result, null), completion);
+            return completion;
+        }
         return lucistarlink$addPostTask(chunkX, chunkZ, () -> lucistarlink$publishDirect(result, null));
+    }
+
+    @Unique
+    private static SectionPos lucistarlink$triggerSection(LuxRelightResult result) {
+        return result.sections().isEmpty() ? null : result.sections().get(0).sectionPos();
+    }
+
+    /**
+     * Queues a publication for the next engine update pass and makes sure such a pass happens. The engine task
+     * used as the trigger is a section status update, which is what the engine itself uses to announce that a
+     * section now holds light; for an already initialised section it changes nothing, so it is a pure wakeup.
+     */
+    @Unique
+    private void lucistarlink$scheduleEngineTask(int chunkX, int chunkZ, SectionPos triggerSection,
+                                                 Runnable publish, CompletableFuture<Void> completion) {
+        this.lucistarlink$pendingPublishes.add(() -> {
+            publish.run();
+            if (completion != null) {
+                this.lucistarlink$publishCompletions.add(completion);
+            }
+        });
+        this.lucistarlink$publishesInFlight.incrementAndGet();
+        ThreadedLevelLightEngine self = (ThreadedLevelLightEngine) (Object) this;
+        if (triggerSection != null) {
+            // tryScheduleUpdate only posts a pass when the engine already has a task or light work, so the batch
+            // needs one ordinary engine task of its own to become visible
+            self.updateSectionStatus(triggerSection, false);
+        }
+        self.tryScheduleUpdate();
+    }
+
+    /**
+     * Runs the publications that are waiting, on the light thread, at the start of an engine update pass.
+     *
+     * <p>{@code runUpdate()} is the only place where the section storage may be written, and it is also the
+     * pass that runs {@code super.runLightUpdates()} and then the POST_UPDATE tasks a caller installed through
+     * {@code waitForPendingTasks} - the ones the benchmark's barrier waits for. Committing here therefore puts
+     * our write and the acknowledgement of it into the same pass, instead of adding a mailbox wakeup of our own
+     * plus the coalescing delay the private drain needs.
+     *
+     * <p>The pass is triggered by enqueueing one ordinary engine task (a section status update on a section we
+     * are publishing, which is idempotent for an initialised section), so no package-private member of the
+     * engine is needed - a mixin living in the engine's own package does not work under NeoForge's module
+     * system (the module contains that package already).
+     */
+    @Unique
+    private void lucistarlink$runPendingPublications() {
+        int drained = this.lucistarlink$publishesInFlight.getAndSet(0);
+        if (drained == 0) {
+            return;
+        }
+        long startedAt = LuxBenchmarkSupport.start();
+        Runnable publish;
+        while ((publish = this.lucistarlink$pendingPublishes.poll()) != null) {
+            publish.run();
+        }
+        LuxBenchmarkSupport.recordSince("lucistarlink.publish_batch.drain", startedAt);
+        LuxBenchmarkSupport.count("lucistarlink.publish_batch.tasks", drained);
+        long notifyStartedAt = LuxBenchmarkSupport.start();
+        lucistarlink$notifyPublishedLightSections();
+        LuxBenchmarkSupport.recordSince("lucistarlink.publish_batch.notify", notifyStartedAt);
+        CompletableFuture<Void> completion;
+        while ((completion = this.lucistarlink$publishCompletions.poll()) != null) {
+            completion.complete(null);
+        }
+    }
+
+    @Inject(method = "runUpdate", at = @At("HEAD"))
+    private void lucistarlink$publishBeforeLightUpdate(CallbackInfo ci) {
+        if (LuxFlags.piggybackPublish) {
+            lucistarlink$runPendingPublications();
+        }
     }
 
     @Unique

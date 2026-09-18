@@ -63,6 +63,14 @@ public final class LuxFlags {
     public static volatile boolean directSectionInstall =
             Boolean.parseBoolean(System.getProperty("lucistarlink.directSectionInstall", "false"));
 
+    /**
+     * Schedule publications on the light engine's own task list (with the engine's {@code runUpdate} doing the
+     * write, its own light update pass and any wait task in one go) instead of through our private queue with
+     * its coalescing delay. See {@code net.minecraft.server.level.LuciStarlinkLightEngineTaskAccess}.
+     */
+    public static volatile boolean piggybackPublish =
+            Boolean.parseBoolean(System.getProperty("lucistarlink.piggybackPublish", "false"));
+
     private LuxFlags() {
     }
 

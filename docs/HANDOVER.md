@@ -76,14 +76,19 @@ delay alone (`publishCoalesceNanos=0`, no effect), worldgen core-only publishing
 variance, but not the missing 0.9 ms).
 
 Next action (in order):
-1. **Piggyback the commit on the engine's own task list**: `ThreadedLevelLightEngine.lightTasks` holds
-   `PRE_UPDATE` tasks that `runUpdate` runs *before* `super.runLightUpdates()` and before the harness's own wait
-   tasks, so our write and the barrier's acknowledgement land in the same `runUpdate` - removing one mailbox
-   wakeup, the 250 us delay and the private queue. `TaskType` is package-private, so this needs a mixin in
-   package `net.minecraft.server.level` (separate mixin json) exposing
-   `@Invoker addTask(int,int,IntSupplier,TaskType,Runnable)` plus a `default` wrapper
-   `lucistarlink$addPreUpdateTask(x, z, level, runnable)`; callers must not name `TaskType` themselves.
+1. Decide the scheduling question with the evidence now in hand (see ARCH-V2 §3 stage 2 and risk 8): the piggyback
+   variant implemented this session (`piggybackPublish`, default off) commits at `runUpdate` HEAD via a vanilla
+   task trigger and measured **worse** (per-pass minimum 0.48 -> 1.24 ms, plus one 14.6 ms stall), because the
+   trigger waits for vanilla's `tryScheduleUpdate`. The 250 us private drain is currently the *better* trigger.
+   Two remaining routes: (a) a prompt, deterministic trigger for the same-pass commit; (b) do small edits inline
+   on the server thread (compute *and* commit) the way ScalableLux does, which is where its 0.69-0.80 ms
+   per-pass minimum comes from.
 2. Only after the correctness items below: re-measure with >=5 reps and per-pass minima, four-way.
+
+Also settled this session, so nobody re-derives them: the sorter-mailbox callbacks of the light engine run on the
+light thread itself (both handles are backed by the same processor mailbox), so a second task there is a queue
+hop and not a thread wakeup; and a mixin class cannot live in `net.minecraft.server.level` under NeoForge - the
+module system rejects the split package at boot (`ResolutionException: Module minecraft contains package ...`).
 
 ## Unresolved 2 (correctness, found this session): block light diverges from vanilla and is not reproducible
 
