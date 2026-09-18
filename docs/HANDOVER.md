@@ -197,3 +197,27 @@ runtime publications 1.114; coalescing window 2 ms 1.049; synchronous wait for o
 0.784; worldgen core-only publishing 0.756 (neutral, kept as an opt-in); direct install 0.599 (the only variant
 that beat the default, blocked only by the switch discipline now that Unresolved 2 came out clean). Vanilla's own
 per-pass minimum on `sky_hole` is ~1.0 ms.
+
+## Interleaved A/B (the number to quote): ours vs ScalableLux, alternating, n=5, nothing else running
+
+`mc-smoketest/ab-interleaved.sh 5` - ours and ScalableLux alternate run by run, fresh world each run, same rig
+and JVM flags; grouped by the `label` the jsonl now records.
+
+| workload | ours per-pass min (median) | SL per-pass min (median) | ours wall | SL wall |
+|---|---|---|---|---|
+| `sky_hole` | 0.767 | **0.572** | 4.87 | 4.71 |
+| `dense_chunk_patch` | **1.990** | 2.210 | 34.7 | **11.1** |
+| `block_toggle_border` | **0.636** | 2.285 | **5.31** | 10.76 |
+| `structure_cube` | **1.757** | 3.540 | **9.35** | 18.63 |
+
+Settled by this run:
+* **Three of four workloads win on both metrics** (per-pass minimum and wall). `sky_hole` loses on per-pass
+  minimum by ~34% (0.767 vs 0.572) - bigger than the ~10% the sequential groups suggested, smaller than the
+  ~74% an independent reader derived from the unlabelled jsonl.
+* `dense_chunk_patch`'s wall loses (34.7 vs 11.1) even though its per-pass minimum wins: **one pass out of four
+  occasionally costs ~30 ms** instead of ~2 ms. Reproduced when running alone (walls 34.3 / 10.0 / 36.3; the slow
+  runs have a single 29-46 ms pass), so it is not an interleaving artifact. Open item, needs its own look - the
+  candidate is a large batch's commit meeting concurrent worldgen publication. The agreed metric (per-pass
+  minimum) is unaffected, which is exactly why it is the agreed metric.
+* Sequential groups are not comparable: the same configuration measured 0.651-0.776 in one group and 0.767 in
+  the interleaved group, and 9.5 vs 34.7 on dense's wall.
