@@ -142,6 +142,13 @@ public final class LuxConfig {
                     "coalescing delay. Off by default until it has the same measured backing as the direct install.")
             .define("piggybackPublish", false);
 
+    private static final ModConfigSpec.BooleanValue PROMPT_RUNTIME_PUBLISH = BUILDER
+            .comment("Hand a small runtime edit's publication to the light thread immediately instead of",
+                    "through the publish coalescing timer. The timer batches worldgen publications usefully, but on",
+                    "the latency path of a single edit it is a hop through the timer thread.",
+                    "See docs/ARCH-V2-GLOBAL-STORAGE.md, stage 2.")
+            .define("promptRuntimePublish", false);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     public static boolean enabled = true;
@@ -168,6 +175,7 @@ public final class LuxConfig {
     public static boolean worldgenHaloPublish = true;
     public static boolean directSectionInstall = false;
     public static boolean piggybackPublish = false;
+    public static boolean promptRuntimePublish = false;
 
     private LuxConfig() {
     }
@@ -212,6 +220,7 @@ public final class LuxConfig {
         worldgenHaloPublish = WORLGEEN_HALO_PUBLISH.get();
         directSectionInstall = DIRECT_SECTION_INSTALL.get();
         piggybackPublish = PIGGYBACK_PUBLISH.get();
+        promptRuntimePublish = PROMPT_RUNTIME_PUBLISH.get();
         applyOverrides();
     }
 
@@ -234,6 +243,7 @@ public final class LuxConfig {
         worldgenHaloPublish = overrideBoolean("lucistarlink.worldgenHaloPublish", worldgenHaloPublish);
         directSectionInstall = overrideBoolean("lucistarlink.directSectionInstall", directSectionInstall);
         piggybackPublish = overrideBoolean("lucistarlink.piggybackPublish", piggybackPublish);
+        promptRuntimePublish = overrideBoolean("lucistarlink.promptRuntimePublish", promptRuntimePublish);
         LuxFlags.set(experimentalSectionFastPath, experimentalSkySeedSkip, experimentalDenseIncremental,
                 experimentalInlineRuntime);
         LuxFlags.runtimeAdoption = experimentalRuntimeAdoption;
@@ -241,6 +251,7 @@ public final class LuxConfig {
         LuxFlags.worldgenHaloPublish = worldgenHaloPublish;
         LuxFlags.directSectionInstall = directSectionInstall;
         LuxFlags.piggybackPublish = piggybackPublish;
+        LuxFlags.promptRuntimePublish = promptRuntimePublish;
         LuxFlags.boundaryDeltas = experimentalBoundaryDeltas;
         regionChunks = overrideInt("lucistarlink.regionChunks", regionChunks);
         haloChunks = overrideInt("lucistarlink.haloChunks", haloChunks);

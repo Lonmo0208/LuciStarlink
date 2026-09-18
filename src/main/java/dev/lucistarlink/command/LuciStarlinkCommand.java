@@ -44,7 +44,69 @@ public final class LuciStarlinkCommand {
                             LuxFlags.denseIncremental, LuxFlags.inlineRuntime)), false);
                     return 1;
                 }))
-                .then(dumpLightCommand());
+                .then(dumpLightCommand())
+                .then(dumpPlaneCommand());
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> dumpPlaneCommand() {
+        return Commands.literal("dumpplane")
+                .then(Commands.argument("label", com.mojang.brigadier.arguments.StringArgumentType.word())
+                        .then(Commands.argument("y", com.mojang.brigadier.arguments.IntegerArgumentType.integer())
+                                .then(Commands.argument("x1", com.mojang.brigadier.arguments.IntegerArgumentType.integer())
+                                        .then(Commands.argument("z1", com.mojang.brigadier.arguments.IntegerArgumentType.integer())
+                                                .then(Commands.argument("x2", com.mojang.brigadier.arguments.IntegerArgumentType.integer())
+                                                        .then(Commands.argument("z2", com.mojang.brigadier.arguments.IntegerArgumentType.integer())
+                                                                .executes(LuciStarlinkCommand::dumpPlane)))))));
+    }
+
+    /**
+     * Prints the raw light values of one horizontal plane, one line per z, so two runs can be diffed to the exact
+     * cell. The hash probe says *that* two runs differ; this says *where*, which is what a divergence needs.
+     */
+    private static int dumpPlane(com.mojang.brigadier.context.CommandContext<CommandSourceStack> context) {
+        String label = com.mojang.brigadier.arguments.StringArgumentType.getString(context, "label");
+        int y = com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "y");
+        int x1 = com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "x1");
+        int z1 = com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "z1");
+        int x2 = com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "x2");
+        int z2 = com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "z2");
+        net.minecraft.server.MinecraftServer server = context.getSource().getServer();
+        net.minecraft.server.level.ServerLevel level = context.getSource().getLevel();
+        server.tell(new net.minecraft.server.TickTask(server.getTickCount() + 1, new Runnable() {
+            private int waited;
+            private int quiet;
+
+            @Override
+            public void run() {
+                waited++;
+                boolean idle = !level.getLightEngine().hasLightWork()
+                        && !LuxServices.controller().hasPendingRuntimeWork()
+                        && !LuxServices.controller().hasPendingWorldgenWork();
+                quiet = idle ? quiet + 1 : 0;
+                if (quiet < DUMP_QUIESCE_TICKS && waited < DUMP_MAX_WAIT_TICKS) {
+                    server.tell(new net.minecraft.server.TickTask(server.getTickCount() + 1, this));
+                    return;
+                }
+                net.minecraft.core.BlockPos.MutableBlockPos pos = new net.minecraft.core.BlockPos.MutableBlockPos();
+                net.minecraft.world.level.lighting.LevelLightEngine lightEngine = level.getLightEngine();
+                StringBuilder sky = new StringBuilder();
+                StringBuilder block = new StringBuilder();
+                for (int z = Math.min(z1, z2); z <= Math.max(z1, z2); z++) {
+                    sky.setLength(0);
+                    block.setLength(0);
+                    for (int x = Math.min(x1, x2); x <= Math.max(x1, x2); x++) {
+                        pos.set(x, y, z);
+                        sky.append(Character.forDigit(lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.SKY)
+                                .getLightValue(pos), 16));
+                        block.append(Character.forDigit(lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.BLOCK)
+                                .getLightValue(pos), 16));
+                    }
+                    LuciStarlink.LOGGER.info("LUCIS_LIGHT_PLANE label={} y={} z={} x=[{},{}] sky={} block={}",
+                            label, y, z, Math.min(x1, x2), Math.max(x1, x2), sky, block);
+                }
+            }
+        }));
+        return 1;
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> dumpLightCommand() {

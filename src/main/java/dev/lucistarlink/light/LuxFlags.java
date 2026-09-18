@@ -71,6 +71,15 @@ public final class LuxFlags {
     public static volatile boolean piggybackPublish =
             Boolean.parseBoolean(System.getProperty("lucistarlink.piggybackPublish", "false"));
 
+    /**
+     * Hands a runtime publication (a small edit's result) to the light thread immediately instead of going
+     * through the coalescing timer. The timer batches, but it also costs a hop through the timer thread on the
+     * critical path of every small edit; worldgen keeps coalescing because there throughput matters more than
+     * latency. Measured as the "prompt" half of the scheduling question - see docs/ARCH-V2-GLOBAL-STORAGE.md.
+     */
+    public static volatile boolean promptRuntimePublish =
+            Boolean.parseBoolean(System.getProperty("lucistarlink.promptRuntimePublish", "false"));
+
     private LuxFlags() {
     }
 

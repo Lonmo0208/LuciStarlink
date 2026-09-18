@@ -72,6 +72,8 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     @Unique
     private volatile long lucistarlink$batchFirstQueuedNanos;
     @Unique
+    private volatile boolean lucistarlink$batchPrompt;
+    @Unique
     private final ThreadLocal<Long> lucistarlink$checkBlockStartedAt = new ThreadLocal<>();
 
     protected ThreadedLevelLightEngineMixin(LightChunkGetter chunkSource, boolean hasBlockLight, boolean hasSkyLight) {
@@ -349,13 +351,13 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
 
     @Unique
     private void lucistarlink$addPreTask(int chunkX, int chunkZ, Runnable task) {
-        lucistarlink$enqueueLightTask(chunkX, chunkZ, lucistarlink$queueLevel(chunkX, chunkZ), task, null);
+        lucistarlink$enqueueLightTask(chunkX, chunkZ, lucistarlink$queueLevel(chunkX, chunkZ), task, null, LuxFlags.promptRuntimePublish);
     }
 
     @Unique
     private CompletableFuture<Void> lucistarlink$addPostTask(int chunkX, int chunkZ, Runnable preTask) {
         CompletableFuture<Void> future = new CompletableFuture<>();
-        lucistarlink$enqueueLightTask(chunkX, chunkZ, lucistarlink$queueLevel(chunkX, chunkZ), preTask, future);
+        lucistarlink$enqueueLightTask(chunkX, chunkZ, lucistarlink$queueLevel(chunkX, chunkZ), preTask, future, false);
         return future;
     }
 
@@ -365,25 +367,37 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     }
 
     @Unique
-    private void lucistarlink$enqueueLightTask(int chunkX, int chunkZ, IntSupplier queueLevel, Runnable preTask, CompletableFuture<Void> completion) {
+    private void lucistarlink$enqueueLightTask(int chunkX, int chunkZ, IntSupplier queueLevel, Runnable preTask,
+                                               CompletableFuture<Void> completion, boolean prompt) {
         this.lucistarlink$sorterMailbox.tell(ChunkTaskPriorityQueueSorter.message(() -> {
             synchronized (this.lucistarlink$publishLock) {
                 if (this.lucistarlink$pendingLightTasks.isEmpty()) {
                     this.lucistarlink$batchFirstQueuedNanos = System.nanoTime();
+                    this.lucistarlink$batchPrompt = prompt;
                 }
                 this.lucistarlink$pendingLightTasks.addLast(new LuxQueuedLightTask(preTask, completion));
                 LuxBenchmarkSupport.count("lucistarlink.publish_batch.queued");
             }
-            lucistarlink$schedulePublishDrain();
+            lucistarlink$schedulePublishDrain(this.lucistarlink$batchPrompt ? 0L : LUCIS_PUBLISH_COALESCE_NANOS);
         }, ChunkPos.asLong(chunkX, chunkZ), queueLevel));
     }
 
+    /**
+     * Hands the batch to the light thread. A zero delay posts the drain straight onto the mailbox; any positive
+     * delay goes through {@code CompletableFuture.delayedExecutor}, which costs an extra hop through the timer
+     * thread even when the delay is zero - which is why "coalesce delay = 0" measured no improvement earlier,
+     * while posting directly is what the promptness of the private drain actually came from.
+     */
     @Unique
-    private void lucistarlink$schedulePublishDrain() {
+    private void lucistarlink$schedulePublishDrain(long delayNanos) {
         if (this.lucistarlink$taskMailbox == null || !this.lucistarlink$publishScheduled.compareAndSet(false, true)) {
             return;
         }
-        CompletableFuture.delayedExecutor(LUCIS_PUBLISH_COALESCE_NANOS, TimeUnit.NANOSECONDS)
+        if (delayNanos <= 0L) {
+            this.lucistarlink$taskMailbox.tell(this::lucistarlink$drainQueuedLightTasks);
+            return;
+        }
+        CompletableFuture.delayedExecutor(delayNanos, TimeUnit.NANOSECONDS)
                 .execute(() -> this.lucistarlink$taskMailbox.tell(this::lucistarlink$drainQueuedLightTasks));
     }
 
@@ -442,7 +456,7 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
                 hasMore = !this.lucistarlink$pendingLightTasks.isEmpty();
             }
             if (hasMore) {
-                lucistarlink$schedulePublishDrain();
+                lucistarlink$schedulePublishDrain(this.lucistarlink$batchPrompt ? 0L : LUCIS_PUBLISH_COALESCE_NANOS);
             }
         }
     }
