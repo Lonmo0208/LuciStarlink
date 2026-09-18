@@ -199,12 +199,18 @@ cp build/libs/lucistarlink-1.21.1-0.1.0.jar dist/lucistarlink-region-0.1.0.jar  
 6. **存储层的两个隐蔽细节（2026-09-18 实测踩到）**：
    - `LayerLightSectionStorage.updatingSectionData` 带 2 项查找缓存（`DataLayerStorageMap.lastSectionKeys/lastSections`）。**直接 `setLayer` 之后必须 `clearCache()`**，否则后续 `getStoredLevel`/`getDataLayer(pos, true)` 仍会返回被替换掉的旧层，表现为"写入没生效"。
    - `queuedSections` 里的待处理层会**遮蔽**直接写入的层（`getDataLayerData` 先查 `queuedSections`）。直装时必须同时 `queuedSections.remove(sectionPos)`，否则客户端包与序列化会读到旧数据。
-7. **"谁最后写"竞态（仍未证实；但已排除一个误判来源）**：全列 block 指纹在含流体的世界里**连 vanilla 都不可复现**（三次同配置两次同值一次异值；静置 120 s 后仍不同）——所以"直装破坏 block 光""worldgen 发布顺序有罪"这两个说法**都已被收回**，它们的证据来源是探针本身不可用。
-   - ✅ 已确认的正面证据（可以引用）：探针加了可选 y 范围后，在**无流体气层**（y 90..112）里做"区块边界放荧石"的 runtime 场景，**我们与 vanilla 逐位相同（sky 与 block 两层都相同）**；sky 光在所有运行中与 vanilla 逐位一致并通过存档往返；`worldgen neighbour-stale marked` = 59（`worldgenHaloPublish=false` 的边缘生成场景）；runtime 边界计数（halo/externalMarked/externalRefresh/rerunBaselineMoved）全部非零、无报错。
-   - 仍未证实：**worldgen 路径**是否存在同类竞态。要回答它，必须把生成放进无流体世界（超平坦/虚空）或只对"某个 worldgen 作业确实写过"的气层比对——**在此之前不允许再拿全列指纹下结论**。
-   - 对策（若被证实）：不允许用比引擎现值更旧的镜像覆盖 —— runtime 路径已有 `externalMarked`/`rerunBaselineMoved`，worldgen 路径**完全没有**。候选实现：每 section 记录"镜像年龄"（发布序号），被更新的发布者写过的 section 直接跳过；映射要有界（照抄 coalescing map 的清扫预算）。
+   - **不要替换 DataLayer 对象，要原地写字节**：`DataLayer.getData()` 返回内部数组，光照线程会继续往它持有的那个对象里写；`setLayer` 换掉对象后那些写会落进被遗弃的数组（丢失），且没有标不一致就没人重算。改用 `System.arraycopy` 写进引擎已有的层（没有层时才 `setLayer`）——已实现（commit 69b817e）。
+7. **偶发 block 光分歧（已复现，未修）**：加了 y 范围的气层探针（y 90..112，避开流体交互）之后**判据可用了**：`ls-border-edit.sh` 在区块边界 x=15/16 放荧石，**vanilla 每次都读 `sky 013c3846466ff9d5 / block 61fb027e7d51ee31`（3/3）**；我们的引擎多数运行读同一个值，但另一些运行读**第二个同样稳定的值** `block 4d50732804a9a46d`（当前计数 **7 对 / 6 偏**）。已确立的约束：
+   - **两条发布路线都出现**（默认排队与 `directSectionInstall=true`）→ 不是安装机制的问题；本轮加的"原位拷贝"没有改变比例（5 跑 2 偏）。
+   - **sky 光每一次都与 vanilla 逐位相同**（含所有偏差运行）→ 只有 block 光会走另一条分支。
+   - **不粘滞**：偏差运行之后 vanilla 立刻读回 vanilla 值，我们下一次通常也是 → 是"偶尔走另一分支"，不是被写坏的世界状态。
+   - 偏差值出现时自身可复现 → **确定性的另一分支**（时序相关），可调试，不是噪声。
+   - `haloPublish=false` 在此**不是**有效单变量探针（气层覆盖邻居区块，关掉 halo 改变了该写什么，会读出第三个值）。
+   - 下一步：气层探针上的单变量二分（`experimentalRuntimeAdoption=false` 首轮因全量重算变慢、静默门未满足而未出数，需加长等待），再依次 `experimentalDenseIncremental` / `experimentalSectionFastPath` / `experimentalSkySeedSkip`；若指向采纳，则"运行时作业采纳了邻居基线、之后又发布进已被别人改动的区块"就是漏洞点（即 `externalMarked`/`rerunBaselineMoved` 那道闸的窗口），修法就是下面的候选实现。
+   - 候选实现（修法）：不允许用比引擎现值更旧的镜像覆盖 —— 每 section 记录"镜像年龄"（发布序号），被更新的发布者写过的 section 直接跳过；映射要有界（照抄 coalescing map 的清扫预算）。
+   - **对 storage 模式的要求**：修好之前 `directSectionInstall` **不能**作默认——同样的分歧率，而且它跳过引擎复查（没有兜底）。
    - 验收补充：**确定性**只能在"无流体气层"上判定；全列 block 指纹不构成判据（见 §6）。
-8. **提交是"调度 + 时机"问题，不是"数据搬运"问题**：原版存储是**单写者**（只有光照线程能写，`ThreadedLevelLightEngine` 把每个写入都包成 `addTask`），所以"回写成本几乎为零"只对"换数组"成立，对"提交落地"不成立。而且实测表明：**触发时机比省下的一跳更重要**——用 250 µs 定时器主动 drain（单 pass 最小值 0.48–0.87 ms）优于依赖原版 `tryScheduleUpdate()` 被动触发（1.24 ms，且有 14.6 ms 停顿）。详见 §3 阶段 2。
+9. **提交是"调度 + 时机"问题，不是"数据搬运"问题**：原版存储是**单写者**（只有光照线程能写，`ThreadedLevelLightEngine` 把每个写入都包成 `addTask`），所以"回写成本几乎为零"只对"换数组"成立，对"提交落地"不成立。而且实测表明：**触发时机比省下的一跳更重要**——用 250 µs 定时器主动 drain（单 pass 最小值 0.48–0.87 ms）优于依赖原版 `tryScheduleUpdate()` 被动触发（1.24 ms，且有 14.6 ms 停顿）。详见 §3 阶段 2。
 
 ---
 

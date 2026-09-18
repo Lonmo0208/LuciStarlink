@@ -90,41 +90,39 @@ light thread itself (both handles are backed by the same processor mailbox), so 
 hop and not a thread wakeup; and a mixin class cannot live in `net.minecraft.server.level` under NeoForge - the
 module system rejects the split package at boot (`ResolutionException: Module minecraft contains package ...`).
 
-## Unresolved 2 (mostly resolved): the full-column block probe was the problem, not (proven) the engine
+## Unresolved 2 (open bug, now reproducible): our engine occasionally writes block light vanilla does not
 
-Final state after a day of chasing this:
+The band probe (y 90..112, above the fluid interactions, optional y bounds in `/lucistarlink dumplight`) is a
+usable oracle after all: `ls-border-edit.sh` places glowstone across the chunk border at x=15/16 through the
+runtime path, and **vanilla reads sky `013c3846466ff9d5` / block `61fb027e7d51ee31` over x 0..31 in every run
+(3/3)**, `edit_border` (x 8..24) `sky c4aed9ab13e5d3b5 / block 8f33931a596c664c`.
 
-* **Full-column block-light hashes are not reproducible in a generated world - for vanilla either.** Three
-  identical gated vanilla runs gave `strip=6360d66772317286, 6360d66772317286, 71ba939013cde497`; with a
-  120 s settle they differ again (`0e49a2a7...` vs `69e40f34...`, and different `beyond`). The likely cause is
-  block changes whose timing is not fixed by the seed (lava/water and shape interactions, where block light is
-  sensitive and sky light - being 0 or 15 in those spots - is not). Every claim that the block signal pointed at
-  one of our switches ("the direct install breaks block light", "the worldgen publish order is to blame") was
-  **retracted**; there is no evidence for either.
-* **The probe now takes optional y bounds** (`/lucistarlink dumplight <label> <x1> <z1> <x2> <z2> [y1] [y2]`), so
-  it can be aimed at a band that the fluid interactions cannot reach.
-* **In such a band our light equals vanilla bit-exactly, both layers, reproducibly.** `mc-smoketest/ls-border-edit.sh`
-  loads the world, places glowstone across the chunk border at x=15/16 through the runtime path, and fingerprints
-  the band y=90..112 over x 0..31 and x 8..24. Two runs per engine, all four readings identical:
+Our engine reads exactly that in most runs, but in the rest it reads a second, equally stable value
+(`sky 013c3846466ff9d5 / block 4d50732804a9a46d`). Counted so far: **7 conforming, 6 divergent** runs. What is
+established about it:
 
-  | scenario | vanilla (2 runs) | our engine, default config (2 runs) |
-  |---|---|---|
-  | `edit` (x 0..31) | sky `013c3846466ff9d5` / block `61fb027e7d51ee31` | sky `013c3846466ff9d5` / block `61fb027e7d51ee31` |
-  | `edit_border` (x 8..24) | sky `c4aed9ab13e5d3b5` / block `8f33931a596c664c` | sky `c4aed9ab13e5d3b5` / block `8f33931a596c664c` |
+* **Both publish routes show it** - the default queued route and `directSectionInstall=true`. It is therefore NOT
+  the install mechanism, and the in-place byte copy added this session (which does remove a real lost-write
+  hazard when the layer object was swapped under the light thread) did not change the rate: 2/5 divergent.
+* **Sky light is identical to vanilla in every run**, divergent ones included. Only block light moves.
+* **Not sticky**: vanilla immediately after a divergent run reads the vanilla value again, and our next run
+  usually does too. It is a computation/publish path that picks the other branch sometimes, not a saved state,
+  and it does not corrupt the world for other engines.
+* The divergent value is itself reproducible when it appears, so it is a deterministic alternative outcome
+  (a timing-dependent branch), not noise - which is what makes it debuggable.
+* `haloPublish=false` is NOT a valid single-variable probe here: it changes what is published at all (the band
+  covers the neighbour chunk) and reads a third value by design.
 
-  That is the runtime border case (glowstone on a border, neighbour must light up) at value level, not just by
-  counter: identical to vanilla, in both layers, reproducibly.
-* Sky light was never in doubt: bit-identical to vanilla in every run and configuration, and it survives
-  save/reload bit-exactly.
-* Counters, unchanged from the earlier sessions' acceptance list: `worldgen neighbour-stale marked` = 59 with
-  `worldgenHaloPublish=false` (mechanism fires in the "generate one chunk beyond loaded terrain" scenario);
-  runtime border workloads report `publish.halo.sections` 774/255/252/752, `externalMarked.sections` 222/23,
-  `externalRefresh.sections` 192/2, `rerunBaselineMoved` 14, no errors.
-
-Still open: whether the *worldgen* path diverges anywhere the band probe can see. To answer it, generate into a
-world without fluids (superflat/void) or fingerprint a band that a worldgen job provably wrote, and only then
-decide whether the publish-order guard (a publication must not overwrite engine data newer than its image; the
-runtime path has `externalMarked`/`rerunBaselineMoved`, the worldgen path has nothing) is needed.
+Next actions:
+1. Single-variable bisect on the runtime path, all with the band probe and >=3 runs per config:
+   `experimentalRuntimeAdoption=false` (in flight), then `experimentalDenseIncremental=false`,
+   `experimentalSectionFastPath=false`, `experimentalSkySeedSkip=false`.
+2. If adoption is implicated, the hole is that a runtime job may adopt a neighbour's baseline, then publish into
+   it after another job moved it - the same class the `externalMarked`/`rerunBaselineMoved` guard covers, so the
+   guard has a window. A per-section publish sequence ("do not overwrite engine data newer than your image") is
+   the candidate fix, exactly as ARCH-V2 risk 7 says.
+3. Only after that: revisit whether the faster `directSectionInstall` route can become the default (it currently
+   cannot - same divergence rate, plus it skips the engine's re-check).
 
 ## Unresolved 3 (correctness): worldgen border ordering
 
