@@ -1,0 +1,95 @@
+LuciStarlink - NOTICE and attribution
+=====================================
+
+LuciStarlink is a derived work. It is distributed under the GNU Lesser General Public License v3
+(see LICENSE). The obligations of that license apply to this and any further redistribution.
+
+Upstream works
+--------------
+
+1. Lucis  (https://github.com/DenisMasterHerobrine/Lucis)  - LGPLv3
+   Copyright (c) DenisMasterHerobrine
+   LuciStarlink's engine core is derived from Lucis 2.0 (itself derived from Lucis 1.x). The region-owned
+   light image, region coalescing and worker scheduling, homogeneity certificates, uniform-source sky seed
+   skipping, adoption-backed region init, exact incremental skylight repair, change-class routing, the
+   differential test suite (EngineDifferentialTest, ReferenceLightEngine, CrossRegionDifferentialTest), the
+   in-server benchmark harness (LuxServerBenchmark, benchmark-*.ps1) and the three design documents in docs/
+   originate there.
+
+2. Starlight / ScalableLux  (https://github.com/PaperMC/Starlight, https://github.com/RelativityMC/ScalableLux)
+   - LGPLv3. Copyright (c) Spottedleaf, ishland and contributors.
+   LuciStarlink takes design ideas (not code) from this lineage: byte-budgeted accounting of cached light
+   data, heightmap/column-driven skylight propagation, and intra-job parallel propagation. Where those ideas
+   are implemented here, they were re-expressed against LuciStarlink's region model.
+
+Changes relative to Lucis 2.0 (M0)
+----------------------------------
+
+Identity
+  * New mod id `lucistarlink`, display name `LuciStarlink`, package `dev.lucistarlink`, class prefix `Lux*`,
+    entry class `LuciStarlink`. Resource, mixin config, asset namespace, benchmark metric keys, system
+    properties (`lucistarlink.*`) and benchmark run directories renamed accordingly.
+
+Memory safety
+  * `RegionLightData.byteSize()` added; `OwnedRegionCache.trimToSize(entries, bytes)` now bounds the region
+    cache by memory as well as by entry count (a single region is megabytes, so the entry cap was not a real
+    bound). At least one region is always retained.
+  * `LuxConfig.maxCachedRegionMegabytes` (default 256 MiB) plus `-Dlucistarlink.maxCachedRegionMegabytes=`.
+  * `RuntimeUpdateQueue.enqueueFullRelight` now returns false once the region table reaches
+    `maxPendingRecords` instead of growing without bound; refusal is counted, and existing regions are still
+    accepted.
+  * `LuxRuntimeManager.close()` also clears the drained-batch scratch map.
+
+Correctness / lifecycle
+  * `runtimeHaloChunks` config (default 1) wired into runtime jobs; `0` logs a warning explaining that
+    cross-chunk light propagation is truncated at region borders.
+  * `LuxEngineController` gained a `closed` flag: disabled hooks degrade to vanilla lighting, `shutdown()` is
+    idempotent and clears its thread locals, `relightChunkAsync` no longer risks rejection after shutdown.
+  * Leaked runtime bulk-write scopes are reaped after `lucistarlink.runtime.bulk.maxIdleNanos` (default 30 s)
+    with a warning, instead of silently suppressing all later block-change light updates on that thread.
+  * When runtime updates are disabled, already-computed commits are still flushed so their chunk references
+    are released.
+
+Observability
+  * Boot log reports the region cache budget; `verboseLogging` prints a periodic memory telemetry line for the
+    region cache, coalescing map, queues, pending batches, commits and scheduled regions.
+
+Not yet ported (roadmap, see docs/roadmap-and-provenance.md)
+  * Heightmap/column-driven sky propagation (M1), save/load and mod-compat hardening (M2), intra-job
+    parallelism and client-side support (M3), and a correct cross-region boundary continuation to replace the
+    disabled `experimentalBoundaryDeltas` prototype (M2).
+
+Changes for cross-region light correctness (M2, runtime path)
+-------------------------------------------------------------
+
+* Halo publication (`haloPublish`, default on): a job now publishes the dirty sections of its halo chunks in
+  addition to its owned chunk, so light computed across a region border reaches the neighbouring chunk
+  immediately. Previously only the owned chunk was published, which left a dark seam at chunk borders until
+  something else touched the neighbouring region. Cost is proportional to the light that actually crossed
+  (dirty-section tracking), and `LuxPublishEngine.publishChunk` now accepts any chunk inside the image
+  instead of silently refusing everything outside the core.
+* External-section refresh: regions whose image overlaps a published chunk are marked, and re-read exactly
+  those sections from the engine before their next job uses the image as a baseline. This keeps every region
+  image consistent with the engine, which is what the disabled cross-region delta prototype
+  (`experimentalBoundaryDeltas`) failed to do without oscillating.
+* Baseline-moved guard: a job records the external-mark epoch after refreshing and, if it moved while the job
+  ran, re-queues the batch instead of publishing values derived from a stale baseline. Counted as
+  `lucistarlink.runtime.jobs.rerunBaselineMoved`.
+* Fixed (inherited): the adoption-backed region init discarded the batch's own block changes, so a light
+  source placed in a region that had no prior runtime job never lit up (the engine is bypassed for those
+  changes, so adoption alone cannot contain them). Adoption now applies the batch on top of the adopted
+  baseline. Counted as `lucistarlink.runtime.init.adoptedChanges`.
+* Telemetry extended with halo/external/rerun counters; the effective flags are logged at boot.
+
+Save-side light safety (M2b)
+----------------------------
+
+* New mixin `ChunkSerializerMixin` redirects the `isLightCorrect` read in `ChunkSerializer.write`: a chunk whose
+  region still has queued or in-flight engine work is written as light-not-correct, so the game relights it on
+  load. Nothing relights a chunk that loads as light-correct, so without this a chunk saved during a pending
+  light update (place a torch, quit immediately) would come back with that light permanently missing.
+* `forceLightIncorrectOnSave` (default off) forces the flag for *every* chunk, which is what ScalableLux ships.
+  It additionally covers a chunk whose neighbour was generated after it was saved, at the cost of relighting
+  every chunk on load. The precise mode is the default because it costs nothing on unaffected chunks.
+* Counters: `lucistarlink.save.forcedLightIncorrect.pendingWork` / `.global` (surfaced in the telemetry line).
+

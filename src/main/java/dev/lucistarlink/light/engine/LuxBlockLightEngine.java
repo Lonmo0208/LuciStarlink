@@ -1,0 +1,367 @@
+package dev.lucistarlink.light.engine;
+
+import dev.lucistarlink.light.region.RegionBounds;
+import dev.lucistarlink.light.region.RegionLightData;
+import dev.lucistarlink.light.runtime.RuntimeLightChangeBuffer;
+import dev.lucistarlink.light.runtime.RuntimeRegionBatch;
+import dev.lucistarlink.light.util.IntBucketQueue;
+import dev.lucistarlink.light.util.IntRingQueue;
+
+public final class LuxBlockLightEngine {
+    private static final int REMOVAL_LEVEL_BITS = 4;
+    private static final int REMOVAL_LEVEL_MASK = (1 << REMOVAL_LEVEL_BITS) - 1;
+
+    private final ThreadLocal<Queues> queues = ThreadLocal.withInitial(Queues::new);
+
+    public void compute(RegionLightData data) {
+        Queues queues = this.queues.get();
+        IntBucketQueue queue = queues.lightQueue;
+        queue.clear();
+        RegionBounds bounds = data.bounds;
+        byte[] emissionArray = data.emission;
+        byte[] blockLight = data.blockLight;
+        int volume = bounds.volume();
+        int area = bounds.area();
+        int width = bounds.widthBlocks();
+        int depth = bounds.depthBlocks();
+        int height = bounds.heightBlocks();
+
+        for (int index = 0; index < volume; index++) {
+            int emission = emissionArray[index] & 0xF;
+            blockLight[index] = (byte) emission;
+            if (emission <= 0) {
+                continue;
+            }
+            if (emission > 1) {
+                queue.enqueue(emission, index);
+            }
+        }
+        data.markCoreBlockSectionsDirty();
+
+        int index;
+        while ((index = queue.poll()) >= 0) {
+            int current = data.blockLight[index] & 0xF;
+            if (current <= 1) {
+                continue;
+            }
+
+            int y = index / area;
+            int rem = index - y * area;
+            int z = rem / width;
+            int x = rem - z * width;
+
+            if (x + 1 < width) spreadTo(data, queue, current, x + 1, y, z, index + data.offsetPosX);
+            if (x > 0) spreadTo(data, queue, current, x - 1, y, z, index + data.offsetNegX);
+            if (z + 1 < depth) spreadTo(data, queue, current, x, y, z + 1, index + data.offsetPosZ);
+            if (z > 0) spreadTo(data, queue, current, x, y, z - 1, index + data.offsetNegZ);
+            if (y + 1 < height) spreadTo(data, queue, current, x, y + 1, z, index + data.offsetPosY);
+            if (y > 0) spreadTo(data, queue, current, x, y - 1, z, index + data.offsetNegY);
+        }
+    }
+
+    public void applyRuntimeChanges(RegionLightData data, RuntimeLightChangeBuffer changes) {
+        Queues queues = this.queues.get();
+        IntBucketQueue queue = queues.lightQueue;
+        IntRingQueue removals = queues.removals;
+        queue.clear();
+        removals.clear();
+
+        for (int i = 0; i < changes.size(); i++) {
+            long change = changes.get(i);
+            int index = RuntimeLightChangeBuffer.localIndex(change);
+            int oldLight = data.blockLight[index] & 0xF;
+            int oldOpacity = RuntimeLightChangeBuffer.oldOpacity(change);
+            int newOpacity = RuntimeLightChangeBuffer.newOpacity(change);
+            int oldEmission = RuntimeLightChangeBuffer.oldEmission(change);
+            int newEmission = RuntimeLightChangeBuffer.newEmission(change);
+
+            data.blockLight[index] = (byte) newEmission;
+            data.markDirtyBlockIndex(index);
+
+            if (oldLight > 0 && (newEmission < oldEmission || newOpacity > oldOpacity)) {
+                enqueueRemoval(removals, index, oldLight);
+            }
+
+            if (newEmission > 1) {
+                queue.enqueue(newEmission, index);
+            }
+
+            enqueueNeighborAdds(data, queue, index);
+        }
+
+        processRemovals(data, queue, removals);
+        processAdds(data, queue);
+    }
+
+    public void applyRuntimeChangesFast(RegionLightData data, RuntimeLightChangeBuffer changes) {
+        if (!changes.blockFastEligible()) {
+            applyRuntimeChanges(data, changes);
+            return;
+        }
+
+        applyRuntimeChangesFastEligible(data, changes);
+    }
+
+    public void applyRuntimeChangesFastEligible(RegionLightData data, RuntimeLightChangeBuffer changes) {
+        IntBucketQueue queue = queues.get().lightQueue;
+        queue.clear();
+        for (int i = 0; i < changes.size(); i++) {
+            long change = changes.get(i);
+            int index = RuntimeLightChangeBuffer.localIndex(change);
+            int emission = RuntimeLightChangeBuffer.newEmission(change);
+            int oldLight = data.blockLight[index] & 0xF;
+            if (emission <= oldLight) {
+                continue;
+            }
+            data.blockLight[index] = (byte) emission;
+            data.markDirtyBlockIndex(index);
+            if (emission > 1) {
+                queue.enqueue(emission, index);
+            }
+        }
+
+        processAdds(data, queue);
+    }
+
+    private void clearImmediateNeighbors(RegionLightData data, int index) {
+        int x = data.localX(index);
+        int y = data.localY(index);
+        int z = data.localZ(index);
+        setNeighborLight(data, 0, x + 1, y, z, index + data.offsetPosX);
+        setNeighborLight(data, 0, x - 1, y, z, index + data.offsetNegX);
+        setNeighborLight(data, 0, x, y, z + 1, index + data.offsetPosZ);
+        setNeighborLight(data, 0, x, y, z - 1, index + data.offsetNegZ);
+        setNeighborLight(data, 0, x, y + 1, z, index + data.offsetPosY);
+        setNeighborLight(data, 0, x, y - 1, z, index + data.offsetNegY);
+    }
+
+    private void lightImmediateNeighbors(RegionLightData data, int index, int light) {
+        int x = data.localX(index);
+        int y = data.localY(index);
+        int z = data.localZ(index);
+        trySetNeighborLight(data, light, x + 1, y, z, index + data.offsetPosX);
+        trySetNeighborLight(data, light, x - 1, y, z, index + data.offsetNegX);
+        trySetNeighborLight(data, light, x, y, z + 1, index + data.offsetPosZ);
+        trySetNeighborLight(data, light, x, y, z - 1, index + data.offsetNegZ);
+        trySetNeighborLight(data, light, x, y + 1, z, index + data.offsetPosY);
+        trySetNeighborLight(data, light, x, y - 1, z, index + data.offsetNegY);
+    }
+
+    private void trySetNeighborLight(RegionLightData data, int light, int nextX, int nextY, int nextZ, int nextIndex) {
+        if (nextX < 0 || nextX >= data.bounds.widthBlocks() || nextZ < 0 || nextZ >= data.bounds.depthBlocks()
+                || nextY < 0 || nextY >= data.bounds.heightBlocks()) {
+            return;
+        }
+        int candidate = light - propagationCost(data.opacity[nextIndex] & 0xF);
+        if (candidate > (data.blockLight[nextIndex] & 0xF)) {
+            setNeighborLight(data, candidate, nextX, nextY, nextZ, nextIndex);
+        }
+    }
+
+    private void setNeighborLight(RegionLightData data, int light, int nextX, int nextY, int nextZ, int nextIndex) {
+        if (nextX < 0 || nextX >= data.bounds.widthBlocks() || nextZ < 0 || nextZ >= data.bounds.depthBlocks()
+                || nextY < 0 || nextY >= data.bounds.heightBlocks()) {
+            return;
+        }
+        if ((data.blockLight[nextIndex] & 0xF) != light) {
+            data.blockLight[nextIndex] = (byte) light;
+            data.markDirtyBlockLocal(nextX, nextY, nextZ);
+        }
+    }
+
+    private void enqueueRemoval(IntRingQueue removals, int index, int lightLevel) {
+        if (lightLevel <= 0) {
+            return;
+        }
+        assert index >= 0 && index < (1 << (Integer.SIZE - REMOVAL_LEVEL_BITS));
+        assert lightLevel <= REMOVAL_LEVEL_MASK;
+        removals.enqueue((index << REMOVAL_LEVEL_BITS) | lightLevel);
+    }
+
+    private void processRemovals(RegionLightData data, IntBucketQueue queue, IntRingQueue removals) {
+        int packed;
+        while ((packed = removals.poll()) != Integer.MIN_VALUE) {
+            int index = packed >>> REMOVAL_LEVEL_BITS;
+            int removedLevel = packed & REMOVAL_LEVEL_MASK;
+            int x = data.localX(index);
+            int y = data.localY(index);
+            int z = data.localZ(index);
+
+            tryRemoveNeighbor(data, queue, removals, removedLevel, x + 1, y, z, index + data.offsetPosX);
+            tryRemoveNeighbor(data, queue, removals, removedLevel, x - 1, y, z, index + data.offsetNegX);
+            tryRemoveNeighbor(data, queue, removals, removedLevel, x, y, z + 1, index + data.offsetPosZ);
+            tryRemoveNeighbor(data, queue, removals, removedLevel, x, y, z - 1, index + data.offsetNegZ);
+            tryRemoveNeighbor(data, queue, removals, removedLevel, x, y + 1, z, index + data.offsetPosY);
+            tryRemoveNeighbor(data, queue, removals, removedLevel, x, y - 1, z, index + data.offsetNegY);
+
+            int emission = data.emission[index] & 0xF;
+            if (emission > 0) {
+                data.blockLight[index] = (byte) emission;
+                if (emission > 1) {
+                    queue.enqueue(emission, index);
+                }
+            }
+        }
+    }
+
+    private void tryRemoveNeighbor(RegionLightData data, IntBucketQueue queue, IntRingQueue removals,
+                                   int removedLevel, int nextX, int nextY, int nextZ, int nextIndex) {
+        RegionBounds bounds = data.bounds;
+        if (nextX < 0 || nextX >= bounds.widthBlocks() || nextZ < 0 || nextZ >= bounds.depthBlocks() || nextY < 0 || nextY >= bounds.heightBlocks()) {
+            return;
+        }
+
+        int neighborLight = data.blockLight[nextIndex] & 0xF;
+        if (neighborLight == 0) {
+            return;
+        }
+
+        if (neighborLight < removedLevel) {
+            data.blockLight[nextIndex] = 0;
+            data.markDirtyBlockIndex(nextIndex);
+            enqueueRemoval(removals, nextIndex, neighborLight);
+        } else {
+            if (neighborLight > 1) {
+                queue.enqueue(neighborLight, nextIndex);
+            }
+        }
+    }
+
+    private void processAdds(RegionLightData data, IntBucketQueue queue) {
+        RegionBounds bounds = data.bounds;
+        int area = bounds.area();
+        int width = bounds.widthBlocks();
+        int depth = bounds.depthBlocks();
+        int height = bounds.heightBlocks();
+        int index;
+        while ((index = queue.poll()) >= 0) {
+            int current = data.blockLight[index] & 0xF;
+            if (current <= 1) {
+                continue;
+            }
+
+            int y = index / area;
+            int rem = index - y * area;
+            int z = rem / width;
+            int x = rem - z * width;
+
+            if (x + 1 < width) spreadTo(data, queue, current, x + 1, y, z, index + data.offsetPosX);
+            if (x > 0) spreadTo(data, queue, current, x - 1, y, z, index + data.offsetNegX);
+            if (z + 1 < depth) spreadTo(data, queue, current, x, y, z + 1, index + data.offsetPosZ);
+            if (z > 0) spreadTo(data, queue, current, x, y, z - 1, index + data.offsetNegZ);
+            if (y + 1 < height) spreadTo(data, queue, current, x, y + 1, z, index + data.offsetPosY);
+            if (y > 0) spreadTo(data, queue, current, x, y - 1, z, index + data.offsetNegY);
+        }
+    }
+
+    private void enqueueNeighborAdds(RegionLightData data, IntBucketQueue queue, int index) {
+        int x = data.localX(index);
+        int y = data.localY(index);
+        int z = data.localZ(index);
+        enqueueIfLit(data, queue, x + 1, y, z, index + data.offsetPosX);
+        enqueueIfLit(data, queue, x - 1, y, z, index + data.offsetNegX);
+        enqueueIfLit(data, queue, x, y, z + 1, index + data.offsetPosZ);
+        enqueueIfLit(data, queue, x, y, z - 1, index + data.offsetNegZ);
+        enqueueIfLit(data, queue, x, y + 1, z, index + data.offsetPosY);
+        enqueueIfLit(data, queue, x, y - 1, z, index + data.offsetNegY);
+    }
+
+    private void enqueueIfLit(RegionLightData data, IntBucketQueue queue, int nextX, int nextY, int nextZ, int nextIndex) {
+        RegionBounds bounds = data.bounds;
+        if (nextX < 0 || nextX >= bounds.widthBlocks() || nextZ < 0 || nextZ >= bounds.depthBlocks() || nextY < 0 || nextY >= bounds.heightBlocks()) {
+            return;
+        }
+        int light = data.blockLight[nextIndex] & 0xF;
+        if (light > 1) {
+            queue.enqueue(light, nextIndex);
+        }
+    }
+
+    private void spreadTo(RegionLightData data, IntBucketQueue queue, int current, int nextX, int nextY, int nextZ, int nextIndex) {
+        int candidate = current - propagationCost(data.opacity[nextIndex] & 0xF);
+        if (candidate > (data.blockLight[nextIndex] & 0xF)) {
+            data.blockLight[nextIndex] = (byte) candidate;
+            data.markDirtyBlockLocal(nextX, nextY, nextZ);
+            if (candidate > 1) {
+                queue.enqueue(candidate, nextIndex);
+            }
+        }
+    }
+
+    private static int propagationCost(int opacity) {
+        return opacity <= 0 ? 1 : opacity;
+    }
+
+    /**
+     * Applies cross-region boundary deltas from a neighboring region's job: each delta
+     * carries a border cell of that region whose block light moved, and this region
+     * re-evaluates its own adjacent cells exactly as the vanilla unqueue/refill rules
+     * require. Runs the same decrease/increase machinery as a local update.
+     */
+    public void applyBoundaryDeltas(RegionLightData data, long[] deltas) {
+        if (deltas == null || deltas.length == 0) {
+            return;
+        }
+        Queues queues = this.queues.get();
+        IntBucketQueue queue = queues.lightQueue;
+        IntRingQueue removals = queues.removals;
+        queue.clear();
+        removals.clear();
+        boolean any = false;
+        for (int i = 0; i + 1 < deltas.length; i += 2) {
+            long pos = deltas[i];
+            long levels = deltas[i + 1];
+            if (RuntimeRegionBatch.deltaIsSky(levels)) {
+                continue;
+            }
+            int sourceX = RuntimeRegionBatch.deltaX(pos);
+            int sourceY = RuntimeRegionBatch.deltaY(pos);
+            int sourceZ = RuntimeRegionBatch.deltaZ(pos);
+            int oldLevel = RuntimeRegionBatch.deltaOldLevel(levels);
+            int newLevel = RuntimeRegionBatch.deltaNewLevel(levels);
+            any |= deltaNeighbor(data, queue, removals, sourceX + 1, sourceY, sourceZ, oldLevel, newLevel);
+            any |= deltaNeighbor(data, queue, removals, sourceX - 1, sourceY, sourceZ, oldLevel, newLevel);
+            any |= deltaNeighbor(data, queue, removals, sourceX, sourceY, sourceZ + 1, oldLevel, newLevel);
+            any |= deltaNeighbor(data, queue, removals, sourceX, sourceY, sourceZ - 1, oldLevel, newLevel);
+            any |= deltaNeighbor(data, queue, removals, sourceX, sourceY + 1, sourceZ, oldLevel, newLevel);
+            any |= deltaNeighbor(data, queue, removals, sourceX, sourceY - 1, sourceZ, oldLevel, newLevel);
+        }
+        if (any) {
+            processRemovals(data, queue, removals);
+            processAdds(data, queue);
+        }
+    }
+
+    private boolean deltaNeighbor(RegionLightData data, IntBucketQueue queue, IntRingQueue removals,
+                                  int worldX, int worldY, int worldZ, int oldLevel, int newLevel) {
+        if (!data.isInside(worldX, worldY, worldZ)) {
+            return false;
+        }
+        int index = data.index(worldX, worldY, worldZ);
+        int current = data.blockLight[index] & 0xF;
+        boolean changed = false;
+        if (current != 0 && current < oldLevel) {
+            data.blockLight[index] = 0;
+            data.markDirtyBlockIndex(index);
+            enqueueRemoval(removals, index, current);
+            changed = true;
+        } else if (current > 1) {
+            queue.enqueue(current, index);
+        }
+        int candidate = newLevel - propagationCost(data.opacity[index] & 0xF);
+        if (candidate > (data.blockLight[index] & 0xF)) {
+            data.blockLight[index] = (byte) candidate;
+            data.markDirtyBlockIndex(index);
+            if (candidate > 1) {
+                queue.enqueue(candidate, index);
+            }
+            changed = true;
+        }
+        return changed;
+    }
+
+    private static final class Queues {
+        private final IntBucketQueue lightQueue = new IntBucketQueue(16, 4096);
+        private final IntRingQueue removals = new IntRingQueue(4096);
+    }
+}
