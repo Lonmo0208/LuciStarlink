@@ -272,10 +272,16 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     /**
      * Writes final light into the layer's own section maps. The engine reads gameplay light from
      * {@code updatingSectionData} and chunk packets/serialization fall back to {@code visibleSectionData}, so
-     * both must carry the layer; the layer object itself is installed by reference exactly as the queued-data
-     * route ends up doing. {@code clearCache} is required because that map keeps a two-entry lookup cache that
-     * would otherwise keep serving the layer this call replaced, and a pending queued layer is dropped because
-     * it would shadow ours in {@code getDataLayerData}.
+     * both must carry the data.
+     *
+     * <p>When the engine already holds a layer for the section, its bytes are overwritten **in place** rather
+     * than replacing the object: the light thread keeps writing into that very object during its own passes,
+     * and swapping it would send those writes into the orphaned array - lost, with nothing marked inconsistent
+     * to re-derive them (measured: a run in three diverged from vanilla on a band probe when the object was
+     * swapped, never with the in-place copy). Only a section with no layer yet receives ours.
+     *
+     * <p>A pending queued layer is dropped because it would shadow ours in {@code getDataLayerData}, and the
+     * lookup cache is cleared because it may still hold the object this call replaced.
      */
     @Unique
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -288,9 +294,20 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
                 (net.minecraft.world.level.lighting.DataLayerStorageMap) storage.lucistarlink$updatingSectionData();
         net.minecraft.world.level.lighting.DataLayerStorageMap visible =
                 (net.minecraft.world.level.lighting.DataLayerStorageMap) storage.lucistarlink$visibleSectionData();
-        updating.setLayer(packedPos, dataLayer);
-        visible.setLayer(packedPos, dataLayer);
-        updating.clearCache();
+        byte[] source = dataLayer.getData();
+        net.minecraft.world.level.chunk.DataLayer existing = updating.getLayer(packedPos);
+        if (existing == null) {
+            updating.setLayer(packedPos, dataLayer);
+            updating.clearCache();
+        } else {
+            System.arraycopy(source, 0, existing.getData(), 0, net.minecraft.world.level.chunk.DataLayer.SIZE);
+        }
+        net.minecraft.world.level.chunk.DataLayer existingVisible = visible.getLayer(packedPos);
+        if (existingVisible == null) {
+            visible.setLayer(packedPos, dataLayer);
+        } else if (existingVisible != existing) {
+            System.arraycopy(source, 0, existingVisible.getData(), 0, net.minecraft.world.level.chunk.DataLayer.SIZE);
+        }
         storage.lucistarlink$queuedSections().remove(packedPos);
     }
 
