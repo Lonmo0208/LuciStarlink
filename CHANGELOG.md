@@ -40,9 +40,46 @@ server.
 * `verboseLogging` prints the same status line every 30 s; the boot log reports the cache budget and effective
   flags.
 
+### Performance (lazy materialisation, and what was rejected)
+* Halo light and halo materials are now materialised per section on demand: region init 435.3 → 0.87 ms,
+  material extraction 56.8 → 5.6–13.9 ms.
+* Measured against ScalableLux in same-session **interleaved** runs (round-by-round alternation, ≥5 reps each,
+  median of per-pass minima; `sky_hole` and `dense_chunk_patch` were then replicated in a second independent
+  interleaved group):
+
+  | workload | LuciStarlink | ScalableLux | verdict |
+  |---|---|---|---|
+  | `block_toggle_border` | **0.636** | 2.285 | win, p = 0.008 (all 5 runs faster) |
+  | `structure_cube` | **1.757** | 3.540 | win, p = 0.008 (all 5 runs faster) |
+  | `dense_chunk_patch` | 1.990 / 2.342 | 2.210 / 2.217 | **no difference**: the two groups disagree in direction, p = 0.095 and 0.841 |
+  | `sky_hole` | 0.767 / 0.666 | 0.572 / 0.535 | behind 25–35%, replicated (p = 0.056 each, Fisher ≈ 0.02) |
+
+  So two workloads win decisively, one is a tie, and `sky_hole` lags for a structural reason: ScalableLux does
+  not hand sections to the light engine at all, which is the V2 storage mode's territory, not a tuning knob.
+  `dense_chunk_patch`'s **wall** time is 2.5–3.1× worse in both groups (a rare ~30 ms pass) — recorded as the
+  open performance item.
+* Four reschedulings were measured and **rejected** (`promptRuntimePublish` +44%, 2 ms coalescing window,
+  `syncRuntimeDrain` neutral, worldgen core-only publish neutral), and `directSectionInstall`'s sequential
+  −31% did not reproduce interleaved (no workload significant, p = 0.22–0.84), so no publish-path switch is
+  enabled.
+
+### Verification
+* Client-sync case: a light source placed on a chunk border reaches a connected client within 2 s, on both
+  sides of the border, with no reconnect or chunk reload — verified on full-resolution in-game screenshots
+  (dark/lit/dark + difference image), evidence in `mc-smoketest/clientcase-evidence/`.
+* Measurement methodology fixed for good: absolute numbers drift up to ~40% between groups of one session, so
+  only same-run interleaved comparisons count, every benchmark row carries its label and switches in
+  `lucistarlink-light-benchmark.jsonl`, and no table is quoted without U/p.
+* Two earlier claims were withdrawn: the "7/6 divergent" block-light tally and "in-place overwrite fixed the
+  divergence". The divergence investigation closed clean (7 controlled runs, 0 divergence, cell-identical
+  plane diff); in-place overwrite is a hard requirement from the thread model, not a proven fix.
+
 ### Known limitations (documented in docs/roadmap-and-provenance.md)
 * Worldgen border ordering: a chunk generated at the edge of loaded terrain publishes only itself; the
   conservative `forceLightIncorrectOnSave=true` covers the residual case.
-* `sky_hole`-class workloads are at parity with vanilla (the repair volume is physically identical) and
-  heightmap-driven sky was evaluated and rejected as a non-lever.
+* `sky_hole`-class workloads lag ScalableLux by 25–35% for the structural reason above, and `dense_chunk_patch`
+  carries a rare ~30 ms pass that makes its wall time 2.5–3.1× slower; heightmap-driven sky was evaluated and
+  rejected as a non-lever.
 * Client-side lighting is not taken over (the mod is server-side; the integrated server runs the engine).
+* Interop with concurrent worldgen optimizers (C2ME, Generator Accelerator) has not been measured.
+* `experimentalBoundaryDeltas` / `BorderDeltaSupport` are dead code awaiting deletion.

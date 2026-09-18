@@ -128,11 +128,12 @@ public final class LuxConfig {
                     "instead of handing it over as queued section data. The hand-over route marks the engine",
                     "inconsistent, and its next light update pass then re-derives light from data that is already",
                     "final (plus a full section map copy per swap); the direct route leaves that pass nothing to do.",
-                    "Faster (measured: single-pass minimum 0.87 -> 0.60 ms on the small-edit workload), but it also",
-                    "stops the engine from re-checking the handed-over sections, so a computed image that is older",
-                    "than the engine's data for that section wins instead of being corrected - which is how it",
-                    "diverges from vanilla block light during world generation. Keep off unless you are measuring.",
-                    "See docs/ARCH-V2-GLOBAL-STORAGE.md.")
+                    "It also stops the engine from re-checking the handed-over sections, so a computed image that is",
+                    "older than the engine's data for that section wins instead of being corrected - which is how it",
+                    "diverges from vanilla block light during world generation. A sequential group measured",
+                    "-31% on sky_hole once, but that did NOT reproduce in interleaved A/B (sky_hole -13%,",
+                    "dense flat, block_toggle +4%, structure -3%; no workload significant), so the earlier gain was",
+                    "group drift. Keep off. See docs/ARCH-V2-GLOBAL-STORAGE.md and docs/SUPERVISOR-NEXT-ROUND.md 10.3.")
             .define("directSectionInstall", false);
 
     private static final ModConfigSpec.BooleanValue PIGGYBACK_PUBLISH = BUILDER

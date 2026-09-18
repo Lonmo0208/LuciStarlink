@@ -12,11 +12,25 @@ three strongest public designs in this space into one engine.
 It is **not** a scheduler over vanilla light tasks and **not** a Starlight fork: it owns the computation
 (material image + propagation) per region and publishes only dirty sections back into the vanilla engine.
 
-> Status: **M0 + M2 cross-region correctness (runtime path)**. The engine core is the hardened Lucis 2.0 design;
-> cross-chunk light is now correct by construction (halo images + halo publication + per-region refresh). The
-> performance work that can make LuciStarlink strictly better than either parent (heightmap sky columns for the
-> `sky_hole` class) is M1, save/load hardening is M2b. See
-> [docs/roadmap-and-provenance.md](docs/roadmap-and-provenance.md) for milestones and known limitations.
+> Status: **0.1.0 — server-side engine, correct across region borders, memory-bounded, saves safe.**
+> Measured against ScalableLux in same-session interleaved runs (our run and ScalableLux's alternate round by
+> round, ≥5 reps each; statistic = the median of per-pass minima; every comparison carries an exact two-sided
+> Mann-Whitney p):
+> * `block_toggle_border` **0.636** vs 2.285 and `structure_cube` **1.757** vs 3.540 — decisive wins
+>   (p = 0.008 each; in both, all five of our runs beat all five of ScalableLux's).
+> * `dense_chunk_patch` — **no difference** on per-pass minimum (1.990 vs 2.210, then 2.342 vs 2.217 in an
+>   independent replica; the two groups disagree in direction, so the earlier "ahead by 10%" is withdrawn).
+>   Its wall time is 2.5–3.1× slower in both groups because of a rare ~30 ms pass — the open performance item.
+> * `sky_hole` — behind by **25–35%**, reproduced in two independent interleaved groups (p = 0.056 each,
+>   Fisher combined ≈ 0.02). ScalableLux's edge there is structural: it never hands sections to the light
+>   engine at all, which is what the V2 storage mode ([docs/ARCH-V2-GLOBAL-STORAGE.md](docs/ARCH-V2-GLOBAL-STORAGE.md))
+>   exists for.
+> Absolute numbers drift up to ~40% between groups of one session, so **only same-run interleaved comparisons
+> count** — see [docs/SUPERVISOR-NEXT-ROUND.md](docs/SUPERVISOR-NEXT-ROUND.md) §10–11.
+> The client-sync case is verified: light placed on a chunk border reaches a connected client within 2 s,
+> including on the far side of the border, with no reconnect or chunk reload.
+> Client-side lighting is not taken over (the mod is server-side); the heightmap-sky lever was measured and
+> rejected.
 
 ## Compatibility
 
@@ -36,11 +50,25 @@ automation and the benchmark harness. Important knobs:
 | `regionChunks` | 1 | owned region size in chunks per axis |
 | `haloPublish` | **on** | publish the halo chunks' dirty sections so light computed across a border reaches the neighbouring chunk immediately |
 | `runtimeHaloChunks` | **1** | halo for runtime jobs. `1` gives vanilla-equivalent chunk borders (light travels 15 blocks); `0` is faster but truncates cross-chunk light propagation |
+| `worldgenHaloPublish` | **on** | the same for worldgen relights. `off` hands far fewer sections to the light engine, but a chunk generated beside an already-loaded neighbour then keeps its old border light until it is relit (can show as a seam) |
+| `forceLightIncorrectOnSave` | off | off = a chunk is written as light-not-correct only while its region still has queued or in-flight engine work; on = every chunk (what ScalableLux ships), which also covers a neighbour generated after the save, at the cost of relighting everything on load |
+| `enableWorldgen` / `enableRuntime` | on | run the engine on the generation path / on runtime edits. Both off idles the engine and leaves lighting to vanilla |
 | `maxCachedRegions` | 128 | upper bound on cached region images |
 | `maxCachedRegionMegabytes` | **256** | memory budget for those images - each one is megabytes, so an entry count alone is not a bound |
 | `maxBatchChunks` | 64 | region jobs submitted per tick |
 | `experimental*` | on | the validated redesign paths (section fast path, sky seed skip, dense incremental, inline runtime, runtime adoption) |
-| `experimentalBoundaryDeltas` | off | cross-region boundary continuation prototype; known to oscillate for roof-crossing batches |
+| `-Dlucistarlink.lazyHaloLight=` | true | system property only (no TOML key): materialise halo light and halo materials per section on demand instead of building the whole image up front (region init 435 → 0.9 ms, material extraction 56.8 → 5.6-13.9 ms) |
+| `-Dlucistarlink.enabled=` / `-Dlucistarlink.debug=` | true / false | idles the engine / enables verbose diagnostics; used by the benchmark harness |
+
+Experimental publish-path switches — **all default off, all measured, none promoted**:
+
+| Key | What it changes | Measured |
+|---|---|---|
+| `directSectionInstall` | install a computed section straight into the engine's storage instead of handing it over as queued data | its sequential-group gain (−31%) **did not reproduce** interleaved (−13% `sky_hole`, +4% `block_toggle_border`, flat `dense`/`structure`); it also skips the engine's re-check of handed-over sections, which is what keeps a stale image from winning — **do not enable** |
+| `piggybackPublish` | schedule on the light engine's own task list instead of a private queue | worse |
+| `promptRuntimePublish` | bypass the 250 µs publish coalescing for a small runtime edit | worse (+44%); the coalescing window is a benefit, not a cost |
+| `syncRuntimeDrain` | wait in-tick for the light thread to commit | neutral |
+| `experimentalBoundaryDeltas` | cross-region boundary continuation prototype | oscillates for roof-crossing batches; slated for deletion |
 
 With `verboseLogging=true` the mod logs a memory telemetry line every 30 s (region cache bytes/entries,
 coalescing entries, queued changes/regions, pending batches, commits, scheduled regions), so growth of those
@@ -48,7 +76,8 @@ structures is visible rather than guessed.
 
 ## Building
 
-Needs **JDK 21** — the project pins the Gradle 8.8 wrapper, which does not run on newer JDKs:
+Needs **JDK 21**, and `JAVA_HOME` must point at it (not just `PATH` — Gradle picks its own JDK and fails with
+`DefaultReportContainer: Type T not present` on a mismatched one). The wrapper pins Gradle 8.12.1 from a mirror:
 
 ```bash
 ./gradlew build          # jar lands in build/libs/

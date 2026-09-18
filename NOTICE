@@ -93,3 +93,48 @@ Save-side light safety (M2b)
   every chunk on load. The precise mode is the default because it costs nothing on unaffected chunks.
 * Counters: `lucistarlink.save.forcedLightIncorrect.pendingWork` / `.global` (surfaced in the telemetry line).
 
+Changes after M2b: lazy materialisation, publish-path switches, measurement
+-------------------------------------------------------------------------
+
+Lazy materialisation (performance, shipped)
+  * Halo light is materialised per section on demand (`-Dlucistarlink.lazyHaloLight=`, system property only,
+    default on) instead of building the whole region image up front: region init 435.3 -> 0.87 ms.
+  * Halo materials are likewise extracted per section on demand (`LuxRegionExtractor.populateSection`,
+    `materializeReach`): extraction 56.8 -> 5.6-13.9 ms.
+
+Publish-path switches (all default off, all measured, none promoted)
+  * `directSectionInstall` - install a computed section straight into the engine's storage. A sequential group
+    once measured -31% on `sky_hole`, which did **not** reproduce under same-session interleaved A/B
+    (`sky_hole` -13%, `dense` flat, `block_toggle_border` +4%, `structure_cube` -3%; no workload significant),
+    so that gain was group drift. Not enabled: it also skips the engine's re-check of handed-over sections,
+    which is what keeps a stale computed image from winning.
+  * `piggybackPublish` (worse), `promptRuntimePublish` (worse, +44% - the 250 us publish coalescing window is
+    a benefit, not a cost), `syncRuntimeDrain` (neutral), `worldgenHaloPublish` (default **on**; switching it
+    off trades a possible border seam for handing far fewer sections to the light engine).
+
+Measurement methodology (treated as part of the deliverable)
+  * Accepted statistic: **median of per-pass minima, >=5 reps, same-session interleaved run** (our run and the
+    compared engine's alternate round by round). The same configuration measured 0.651 / 0.767 / 1.069 in three
+    groups of one session, so absolute numbers are only comparable within a group; cross-group comparison is
+    what produced two disagreeing tables earlier.
+  * Each benchmark row records its label and effective switches in `lucistarlink-light-benchmark.jsonl`, so a
+    third party can regroup without trusting any conclusion written here.
+  * Tables should carry Mann-Whitney U/p: at n=5 with this spread, medians alone overstate narrow differences.
+  * Client-sync case verified: light placed on a chunk border appears on a connected dev client within 2 s,
+    on both sides of the border, with no reconnect or chunk reload - measured on full-resolution in-game
+    screenshots (dark / lit / dark frames plus a difference image), archived under mc-smoketest/clientcase-evidence.
+  * Withdrawn claims: the "7 pairs / 6 divergent" cross-region block-light tally and the statement that
+    in-place `DataLayer` overwrite fixed it were both retracted. The divergence investigation closed clean
+    (7 controlled runs, 0 divergence, cell-identical plane diff); in-place overwrite is a requirement derived
+    from the thread model (the light thread keeps writing into the object it holds), not a proven fix.
+    See docs/NOTE-TO-SUPERVISOR.md section 2.
+
+Not done / not pending
+  * Client-side lighting takeover and intra-job parallelism (M3) - not started.
+  * Interoperability measurement with worldgen optimizers (C2ME, Generator Accelerator) - never executed.
+  * `experimentalBoundaryDeltas` and its `BorderDeltaSupport` class are dead code slated for deletion.
+  * Worldgen border ordering: a chunk generated at the edge of loaded terrain publishes only itself; the
+    conservative `forceLightIncorrectOnSave=true` covers the residual case.
+  * Heightmap/column-driven sky propagation (M1) was evaluated and **rejected** as a non-lever; it is not
+    "pending" as the M0 section above lists it.
+

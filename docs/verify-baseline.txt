@@ -1,12 +1,17 @@
-3f45fb080352bfb222eb18c420a5894f *lucistarlink-1.21.1-0.1.0.jar
+2a5e23cb42aac24c9b8d3b188cb613f9 *lucistarlink-1.21.1-0.1.0.jar
 
 构建（发布件，不带任何 benchmark 开关）：
   ./gradlew build                      ← 正式发布用这个；互斥声明必须是 incompatible
     （注意：rig 版要额外带 -PbenchmarkAllowScalableLux=true -PbenchmarkAllowLucis=true，
       那会把声明改成 discouraged，只能用于 mc-smoketest 里的四路对照，绝不能进 dist/）
   JAVA_HOME 与 PATH 都必须指向 JDK 21；见 docs/HANDOVER.md 的构建铁律
-测试：21 pass / 0 fail / 1 inherited skip
+测试：21 tests / 0 failures / 0 errors / 1 inherited skip
 默认（全部为默认，未开启任何实验开关）：
   region 发布路线；directSectionInstall=off、worldgenHaloPublish=on、piggybackPublish=off、
   promptRuntimePublish=off、syncRuntimeDrain=off
-已验证（本 jar）：见 docs/HANDOVER.md「Measurement results added this session」
+本次重建原因：监工更正了 LuxConfig 里 directSectionInstall 的注释（它还在引用顺序组那个没复现的
+  0.87 -> 0.60 ms 数字），并补齐 README / NOTICE / CHANGELOG。行为零改动，注释进 jar 需重建。
+  已核对：新注释在类文件内、"0.87 -> 0.60" 已不在；互斥声明 starlight/scalablelux/lucis 全为 incompatible。
+已验证（本 jar）：见 docs/HANDOVER.md「Measurement results added this session」；
+  客户端同步用例证据见 mc-smoketest/clientcase-evidence/；
+  交错 A/B 两组数据与显著性见 docs/SUPERVISOR-NEXT-ROUND.md §10-11。
