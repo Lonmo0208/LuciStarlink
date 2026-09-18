@@ -1,4 +1,4 @@
-0de1596bddd56dae10602f3f251008c7 *lucistarlink-1.21.1-1.0.2.jar
+0d220c139c5f31dd2f2d24b597efd1bc *lucistarlink-1.21.1-1.0.3.jar
 
 构建（发布件，不带任何 benchmark 开关）：
   ./gradlew clean build                ← 正式发布用这个；互斥声明必须是 incompatible

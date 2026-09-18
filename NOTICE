@@ -1,14 +1,22 @@
 LuciStarlink - NOTICE and attribution
 =====================================
 
+LuciStarlink - Copyright (c) 2026 Lonmo. The mod and this notice may be redistributed under the GNU Lesser
+General Public License v3; that license's obligations apply to this and any further redistribution.
+
 LuciStarlink is a derived work. It is distributed under the GNU Lesser General Public License v3
 (see LICENSE). The obligations of that license apply to this and any further redistribution.
 
-Upstream works
---------------
+Upstream works and thanks
+-------------------------
 
-1. Lucis  (https://github.com/DenisMasterHerobrine/Lucis)  - LGPLv3
-   Copyright (c) DenisMasterHerobrine
+LuciStarlink exists because of these projects and the people behind them. Thank you.
+
+1. Lucis  - LGPLv3
+   - Team Argentum, the Lucis 2.0 line this fork is taken from:
+     https://github.com/Team-Argentum/Lucis  (branch dev/2.0/1.21.1)
+   - DenisMasterHerobrine, the original Lucis and its 1.x line:
+     https://github.com/DenisMasterHerobrine/Lucis
    LuciStarlink's engine core is derived from Lucis 2.0 (itself derived from Lucis 1.x). The region-owned
    light image, region coalescing and worker scheduling, homogeneity certificates, uniform-source sky seed
    skipping, adoption-backed region init, exact incremental skylight repair, change-class routing, the
@@ -16,8 +24,10 @@ Upstream works
    in-server benchmark harness (LuxServerBenchmark, benchmark-*.ps1) and the three design documents in docs/
    originate there.
 
-2. Starlight / ScalableLux  (https://github.com/PaperMC/Starlight, https://github.com/RelativityMC/ScalableLux)
-   - LGPLv3. Copyright (c) Spottedleaf, ishland and contributors.
+2. Starlight / ScalableLux  - LGPLv3
+   - Spottedleaf, ishland and RelativityMC, including the NeoForge 1.21.1 backport this work is measured
+     against: https://github.com/RelativityMC/ScalableLux  (branch backports/neoforge/1.21.1)
+   - Starlight: https://github.com/PaperMC/Starlight
    LuciStarlink takes design ideas (not code) from this lineage: byte-budgeted accounting of cached light
    data, heightmap/column-driven skylight propagation, and intra-job parallel propagation. Where those ideas
    are implemented here, they were re-expressed against LuciStarlink's region model.

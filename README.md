@@ -112,6 +112,12 @@ downloads fail with `PKIX path building failed`.
 
 ## License and attribution
 
-LGPLv3 (see [LICENSE](LICENSE)) — required, because LuciStarlink is a derived work of Lucis (LGPLv3) and takes
-ideas from ScalableLux/Starlight (LGPLv3). See [NOTICE](NOTICE) for full attribution and the change list
-relative to Lucis 2.0. Redistribution must keep these notices and the license.
+**LuciStarlink is by Lonmo** — Copyright (c) 2026 Lonmo.
+
+LGPLv3 (see [LICENSE](LICENSE)) — required, because LuciStarlink is a derived work of **Lucis** (the 2.0 line by
+[Team Argentum](https://github.com/Team-Argentum/Lucis), itself from Lucis 1.x by
+[DenisMasterHerobrine](https://github.com/DenisMasterHerobrine/Lucis)) and takes ideas from
+**Starlight / ScalableLux** ([Spottedleaf, ishland and RelativityMC](https://github.com/RelativityMC/ScalableLux),
+NeoForge 1.21.1 backport on branch `backports/neoforge/1.21.1`) — all LGPLv3. See [NOTICE](NOTICE) for the full
+attribution, the thanks list and the change list relative to Lucis 2.0. Redistribution must keep these notices and
+the license.

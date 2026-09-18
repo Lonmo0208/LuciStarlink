@@ -27,7 +27,7 @@ displayName = "${mod_name}" #mandatory
 # A file name (in the root of the mod JAR) containing a logo for display
 #logoFile="lucistarlink.png" #optional
 # A text field displayed in the mod UI
-#credits="" #optional
+credits = "LuciStarlink by Lonmo. Thanks to Team Argentum and DenisMasterHerobrine for Lucis (the 2.0 line this fork is derived from), and to Spottedleaf, ishland and RelativityMC for Starlight / ScalableLux (including the NeoForge 1.21.1 backport this work is measured against). All LGPLv3. See NOTICE for the full attribution and the change list."
 # A text field displayed in the mod UI
 authors = "${mod_authors}" #optional
 

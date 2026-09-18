@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.3 — authorship and thanks list
+
+The artifact credited nobody: `mod_authors` was a sentence about the lineage (and described Lucis's author wrongly),
+and the mods-UI `credits` field was empty. Changes, all metadata and no code:
+
+* **LuciStarlink is credited to Lonmo** — Copyright (c) 2026 Lonmo — in the jar metadata, the mods-UI credits line,
+  NOTICE and the README.
+* The upstream works are named with the repositories they actually come from:
+  **Lucis 2.0 by [Team Argentum](https://github.com/Team-Argentum/Lucis)** (branch `dev/2.0/1.21.1`), the line this
+  fork is derived from, and the original **Lucis 1.x by
+  [DenisMasterHerobrine](https://github.com/DenisMasterHerobrine/Lucis)**;
+  **Starlight / ScalableLux by [Spottedleaf, ishland and RelativityMC](https://github.com/RelativityMC/ScalableLux)**,
+  including the NeoForge 1.21.1 backport on branch `backports/neoforge/1.21.1` that this work is measured against,
+  and [Starlight](https://github.com/PaperMC/Starlight). NOTICE now opens with a thanks list.
+
 ## 1.0.2 — the light-dump commands no longer return a plausible-looking empty reading
 
 A dev-client session ran `/lucistarlink dumplight` twice with the arguments shifted by one (the label was a
