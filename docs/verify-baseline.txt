@@ -1,51 +1,5 @@
-2a02fabae42c6f45e7add301e7339081 *src/main/java/dev/lucistarlink/LuciStarlink.java
-07c172d39eddb3eba9847f3dca7fa470 *src/main/java/dev/lucistarlink/command/LuciStarlinkCommand.java
-ffb7553bce3fa63dea54f5cb8c4494e7 *src/main/java/dev/lucistarlink/compat/LuxCompat.java
-9bf59eb112009a81648a0c0e0e399206 *src/main/java/dev/lucistarlink/compat/sable/SableCompat.java
-16a3f9fab6bf01595a86672cfe375d60 *src/main/java/dev/lucistarlink/config/LuxConfig.java
-0cd64e987b4ceb4041751c66b71523b0 *src/main/java/dev/lucistarlink/light/LightMaterial.java
-1301edfb5c038fd3661534e82f0442b0 *src/main/java/dev/lucistarlink/light/LightMaterialCache.java
-ae46b3415010ca2d978d04b8b16156e4 *src/main/java/dev/lucistarlink/light/LuxConstants.java
-a90bd537627d6817e4d30f1323ee393a *src/main/java/dev/lucistarlink/light/LuxFlags.java
-8cc4ecb94233b6bb2ae970e4561bb17f *src/main/java/dev/lucistarlink/light/engine/BorderDeltaSupport.java
-aac8aa25deb37ac54163256f85f1d078 *src/main/java/dev/lucistarlink/light/engine/LuxBlockLightEngine.java
-f5db4b266174dec254d0941f23cec860 *src/main/java/dev/lucistarlink/light/engine/LuxEngineController.java
-975804493cb02155f2152c789481bae7 *src/main/java/dev/lucistarlink/light/engine/LuxPublishEngine.java
-6782cd6d2d867128297e2b43ad4ccbcf *src/main/java/dev/lucistarlink/light/engine/LuxRegionExtractor.java
-83d3ec115ed1781bac5f0e9493147ed8 *src/main/java/dev/lucistarlink/light/engine/LuxRelighter.java
-1af9b61408d785f002b25e6ea12571ea *src/main/java/dev/lucistarlink/light/engine/LuxServices.java
-3c853b0dfcbe53adebdf7cca6eb2c314 *src/main/java/dev/lucistarlink/light/engine/LuxSkyLightEngine.java
-d7692800a62dc518157afd05b1581d98 *src/main/java/dev/lucistarlink/light/region/OwnedRegionCache.java
-194a905202aa320b1f92efd86b44b981 *src/main/java/dev/lucistarlink/light/region/RegionBounds.java
-b7aa0c62dd70984556f9daf0c41a171f *src/main/java/dev/lucistarlink/light/region/RegionLightData.java
-53206e35cab9fc07ae4afa0a81d004d8 *src/main/java/dev/lucistarlink/light/region/RegionOwnerTable.java
-c252dbe592ff437e53f6e942f5b3f4f9 *src/main/java/dev/lucistarlink/light/region/RuntimeRegionState.java
-b0b900225cb4327407502ba8e9142cc5 *src/main/java/dev/lucistarlink/light/runtime/BlockChangeRecord.java
-9f5fa6f96ba8d6b1e42f1e0565aef5e6 *src/main/java/dev/lucistarlink/light/runtime/LuxChunkSnapshot.java
-e5ccb70c262a945617368ba13dcc3df4 *src/main/java/dev/lucistarlink/light/runtime/LuxJob.java
-4264512ffc6744caf7bf4e7e5eaaa9c4 *src/main/java/dev/lucistarlink/light/runtime/LuxLightPublisher.java
-093aec48c8a2d20c32a2464e7160c2a2 *src/main/java/dev/lucistarlink/light/runtime/LuxRelightResult.java
-94872c4a04430019c3263f0e3e06c9f0 *src/main/java/dev/lucistarlink/light/runtime/LuxRuntimeManager.java
-3a35d5c2641cbaa1fa31e04cfd996e39 *src/main/java/dev/lucistarlink/light/runtime/LuxScheduler.java
-5dedb90a2c32984da7e98b63c6cd492f *src/main/java/dev/lucistarlink/light/runtime/LuxSectionData.java
-ada1eef056056657d10675e141a32aa9 *src/main/java/dev/lucistarlink/light/runtime/RuntimeLightChangeBuffer.java
-ac0fc12bc7ec7e12e99da08895c07998 *src/main/java/dev/lucistarlink/light/runtime/RuntimeRegionBatch.java
-162c28ceb172b38c9d944511d4086128 *src/main/java/dev/lucistarlink/light/runtime/RuntimeRelightOutcome.java
-3c0b5c22b41241d7f4bb1ef58b5e5ac9 *src/main/java/dev/lucistarlink/light/runtime/RuntimeUpdateQueue.java
-c2eed31b45497121c5ddfc7d2e825dc8 *src/main/java/dev/lucistarlink/light/util/IntBucketQueue.java
-d010954f58777b26b6f4cf820756134d *src/main/java/dev/lucistarlink/light/util/IntRingQueue.java
-8b7e2a9782cdb80374c7fb0975305ba1 *src/main/java/dev/lucistarlink/light/util/NibblePacker.java
-12312287e52c53ae8ce81cdcc66d981f *src/main/java/dev/lucistarlink/light/util/NibbleSectionPacker.java
-0ad743821ff25f8736e64936ee152e63 *src/main/java/dev/lucistarlink/mixin/ChunkMapAccessor.java
-48d402f3cecf1c74172a27686c5f05d8 *src/main/java/dev/lucistarlink/mixin/ChunkSerializerMixin.java
-1ebe8a594761333e23631a13ac1e9beb *src/main/java/dev/lucistarlink/mixin/LevelChunkMixin.java
-3c37b16f3b86e1deba4af83ae9b29fd5 *src/main/java/dev/lucistarlink/mixin/LuxMixinPlugin.java
-c39d19c173eedb84c21dc25e2823b955 *src/main/java/dev/lucistarlink/mixin/ServerChunkCacheMixin.java
-faea784e2ebbe791985cde5a2628bdc1 *src/main/java/dev/lucistarlink/mixin/ServerLevelMixin.java
-5a2095926ecc0e9d42a7c3dfd2edae55 *src/main/java/dev/lucistarlink/mixin/ThreadedLevelLightEngineMixin.java
-3b1a5d0309ec1a4bb3945ed747644dc4 *src/main/java/dev/lucistarlink/mixin/WorldGenRegionMixin.java
-a55989b58d3abbcfeac72687c5669483 *src/main/java/dev/lucistarlink/mixin/compat/sable/SableServerLevelAccessor.java
-34c30f7bd45f8db7f130cc3308ac888b *src/main/java/dev/lucistarlink/test/LuxBenchmarkSupport.java
-c9aff266c44aae69c3f442c150387de4 *src/main/java/dev/lucistarlink/test/LuxClientLoadDiagnostics.java
-9d378347ef57bff02722aa2f63a4e1e1 *src/main/java/dev/lucistarlink/test/LuxServerBenchmark.java
-16dd3688920cb27a7c69fbc67dbef872 *build/libs/lucistarlink-1.21.1-0.1.0.jar
+f46b19cc2c2f50591c47dedc3d28b5f2 *lucistarlink-1.21.1-0.1.0.jar
+
+构建：./gradlew build -PbenchmarkAllowScalableLux=true -PbenchmarkAllowLucis=true
+测试：21 pass / 0 fail / 1 inherited skip
+用途：本次验证的成品 jar（区域模式默认，directSectionInstall=off, worldgenHaloPublish=on）
