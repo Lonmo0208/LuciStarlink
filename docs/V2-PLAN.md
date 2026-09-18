@@ -165,3 +165,23 @@ ARCH-V2 认为 storage 模式让客户端接管更容易；但客户端接管是
 - 工具：`mc-smoketest/ab-interleaved.sh`（我们↔SL/原版，支持 `EXTRA_JVM`）、`ab-prop.sh`（任意属性交错 A/B）、
   `ab-compare.ps1`（分组 + 中位 + 精确/近似 U 与 p）、`fourway-interleaved.sh`（四引擎逐轮轮转）、
   `ls-border-scenario.sh` + `ls-border-edit.sh`（探针）、`clientcase.sh`（客户端用例）。
+
+---
+
+## 9. 自检遗留项（1.1 清理清单，均已核实、均非现存 bug）
+
+1.0.0 发布前做了一轮全源码自检（512 文件 / 8484 行的范围内逐项核对）。**四个真 bug 已修进 1.0.0**；
+下面这些是**防御性或整洁性**问题，故意没有在发布前动它们（任何代码改动都会让刚发布的 1.0.0 指纹失效）：
+
+| 项 | 位置 | 为什么要清 | 风险 |
+|---|---|---|---|
+| 发布/通知队列无上限 | `ThreadedLevelLightEngineMixin` 的 `pendingLightTasks` / `pendingRuntimeTasks` / `pendingLightNotifications`(+keys) / `pendingPublishes` / `publishCompletions` | 上游是每 tick 的作业结果与最多 27 倍的扇出，而只有光照线程消费；光照线程长阻塞时它们只增不减（其它缓存都已有字节/条数上限） | 中（需先有"光照线程卡住"的复现路径） |
+| `RuntimeBulkScope.regionChangeCounts` 无上限 | `LuxEngineController` | 一次巨大 `/fill` 会为每个触及区域留一条；有 30 秒空闲回收兜底，但打开期间无约束 | 低 |
+| `currentLightSource` 是单个 volatile、被当作"每作业上下文" | `LuxPublishEngine` | 多维度并发作业会互相覆盖取源；后果只是"跳过相同段"的判断可能跨维度误判（少发布一段，不会算错光） | 低（设计味道） |
+| `LuxScheduler` 同一属性读两次且把 1~3 静默抬到 4 | `light/runtime/LuxScheduler.java` | 配置意图被无声改写 | 低 |
+| 孤儿 javadoc（注释挂到了下一个声明） | `LuxRelighter:73-83`、`RegionLightData:99-103`、`LuxRuntimeManager:165-169` | 读者会看错归属 | 极低 |
+| `haloChunks` / `runtimeHaloChunks` 命名易混 | `LuxConfig` | 前者是世界生成映像的光环，后者是运行期作业的光环；注释已写清，名字没跟上 | 极低 |
+| 被否决的 delta 原型 | `BorderDeltaSupport` + `experimentalBoundaryDeltas`（+ 测试与 5 处文档引用） | 唯一"任何配置都开启不了、但连着 sky/block 引擎"的死代码；阶段 3 一并删除 | 中（删它要动两个光照引擎） |
+| 四个被否决的实验开关 | `piggybackPublish` / `promptRuntimePublish` / `syncRuntimeDrain` / `directSectionInstall` | 都已被实测否定、默认全关；保留是为了能复现实验，应在文档里标明"实验用、勿开" | 低 |
+| 基准/诊断代码在主源集 | `test/LuxBenchmarkSupport`、`LuxClientLoadDiagnostics`、`LuxServerBenchmark` | dev 工具混进正式 mod（有 `lucistarlink.benchmark` + `debug` 双开关兜住，实际不会跑） | 极低 |
+
