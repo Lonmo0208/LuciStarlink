@@ -71,6 +71,19 @@ neoForge {
             programArgument '--nogui'
         }
 
+        clientMultiplayer {
+            client()
+            // Connects to a server that is already running, so the border-light case can be watched end to end: the
+            // rig server places glowstone exactly on a chunk border and this client must show the light on both
+            // sides immediately. Start the server first (see docs/HANDOVER.md, "Client case"), then:
+            //   ./gradlew clientMultiplayer -PclientServer=127.0.0.1:25565
+            gameDirectory = project.file('run')
+            systemProperty 'lucistarlink.debug', 'true'
+            programArgument '--quickPlayMultiplayer'
+            programArgument providers.gradleProperty('clientServer').getOrElse('127.0.0.1:25565')
+            jvmArgument '-Xmx3G'
+        }
+
         def configureBenchmarkRun = { runConfig, String runDir, String mode, boolean lucistarlinkEnabled, String expectedMod = '' ->
             runConfig.server()
             runConfig.gameDirectory = project.file(runDir)

@@ -221,3 +221,39 @@ Settled by this run:
   minimum) is unaffected, which is exactly why it is the agreed metric.
 * Sequential groups are not comparable: the same configuration measured 0.651-0.776 in one group and 0.767 in
   the interleaved group, and 9.5 vs 34.7 on dense's wall.
+
+## Client case (the entry point the supervisor asked for)
+
+The visual check - "a light source placed on a chunk border must show up on a connected client immediately" - is
+prepared as a two-command flow:
+
+1. **Server side** (the scenario places the glowstone itself and keeps running):
+   `cd mc-smoketest && KEEP_SERVER_RUNNING=1 ./ls-border-edit.sh clientcase`
+   It prints the connect address; `online-mode=false` is already set in the rig's `server.properties`.
+   For the negative control (the test must be able to fail): add `-Dlucistarlink.haloPublish=false` - the
+   neighbour must then stay dark until the chunk is reloaded.
+2. **Client side** (in this project): `./gradlew runClientMultiplayer -PclientServer=127.0.0.1:25565`
+   The `clientMultiplayer` run config adds `--quickPlayMultiplayer` with that address, so no menus are involved;
+   `./gradlew createClientMultiplayerLaunchScript` produces a script to launch it outside Gradle.
+
+Judgement: the light appears on both sides of the border immediately = pass; it needs a world reload = the client
+sync path was broken (the risk of any publish route that skips the engine's section data and its notifications).
+
+## Direct install ON vs OFF, interleaved (n=5 each, `ab-direct.sh`)
+
+| workload | OFF per-pass min | ON per-pass min | OFF wall | ON wall |
+|---|---|---|---|---|
+| `sky_hole` | 1.069 | **0.929** | 4.89 | 5.08 |
+| `dense_chunk_patch` | 2.096 | 2.101 | 26.25 | **14.57** |
+| `block_toggle_border` | **0.914** | 0.948 | **5.03** | 6.19 |
+| `structure_cube` | 1.877 | **1.819** | **8.91** | 9.26 |
+
+Reading: ON is better only on `sky_hole` (-13%) and marginally on `structure_cube` (-3%), equal on `dense`, and
++4% worse on `block_toggle_border` - all within the drift this session's groups show. The earlier sequential
+measurement of the same switch (-31% on `sky_hole`) does **not** survive interleaving, and ON's wall is worse on
+two workloads. Conclusion: **do not promote `directSectionInstall`** - the gain does not justify skipping the
+engine's re-check on the sections we hand over. It stays an experimental switch.
+
+Also note for anyone reading absolute numbers: the *same* configuration measured per-pass minima of 0.651, 0.767
+and 1.069 in three different groups of this session. Only comparisons **within** one interleaved run are usable,
+so the ScalableLux comparison has to come from the interleaved ours-vs-SL run (0.767 vs 0.572 on `sky_hole`).
