@@ -93,39 +93,25 @@ Mechanisms settled this session (do not re-derive):
   notification fan-out, the coalescing delay alone, worldgen core-only publishing (~4%, lower variance - kept as
   an opt-in switch), `runtimeHaloChunks=0`, and - from an earlier session - the heightmap-sky lever.
 
-## Unresolved 2 (open bug, now reproducible): our engine occasionally writes block light vanilla does not
+## Unresolved 2 (closed for now): no engine-side block-light divergence under a controlled world
 
-The band probe (y 90..112, above the fluid interactions, optional y bounds in `/lucistarlink dumplight`) is a
-usable oracle after all: `ls-border-edit.sh` places glowstone across the chunk border at x=15/16 through the
-runtime path, and **vanilla reads sky `013c3846466ff9d5` / block `61fb027e7d51ee31` over x 0..31 in every run
-(3/3)**, `edit_border` (x 8..24) `sky c4aed9ab13e5d3b5 / block 8f33931a596c664c`.
+Final state of this investigation, after the probe was made able to attribute a reading:
 
-Our engine reads exactly that in most runs, but in the rest it reads a second, equally stable value
-(`sky 013c3846466ff9d5 / block 4d50732804a9a46d`). Counted so far: **7 conforming, 6 divergent** runs. What is
-established about it:
-
-* **Both publish routes show it** - the default queued route and `directSectionInstall=true`. It is therefore NOT
-  the install mechanism, and the in-place byte copy added this session (which does remove a real lost-write
-  hazard when the layer object was swapped under the light thread) did not change the rate: 2/5 divergent.
-* **Sky light is identical to vanilla in every run**, divergent ones included. Only block light moves.
-* **Not sticky**: vanilla immediately after a divergent run reads the vanilla value again, and our next run
-  usually does too. It is a computation/publish path that picks the other branch sometimes, not a saved state,
-  and it does not corrupt the world for other engines.
-* The divergent value is itself reproducible when it appears, so it is a deterministic alternative outcome
-  (a timing-dependent branch), not noise - which is what makes it debuggable.
-* `haloPublish=false` is NOT a valid single-variable probe here: it changes what is published at all (the band
-  covers the neighbour chunk) and reads a third value by design.
-
-Next actions:
-1. Single-variable bisect on the runtime path, all with the band probe and >=3 runs per config:
-   `experimentalRuntimeAdoption=false` (in flight), then `experimentalDenseIncremental=false`,
-   `experimentalSectionFastPath=false`, `experimentalSkySeedSkip=false`.
-2. If adoption is implicated, the hole is that a runtime job may adopt a neighbour's baseline, then publish into
-   it after another job moved it - the same class the `externalMarked`/`rerunBaselineMoved` guard covers, so the
-   guard has a window. A per-section publish sequence ("do not overwrite engine data newer than your image") is
-   the candidate fix, exactly as ARCH-V2 risk 7 says.
-3. Only after that: revisit whether the faster `directSectionInstall` route can become the default (it currently
-   cannot - same divergence rate, plus it skips the engine's re-check).
+* The edit scenario now **asserts its own emitting blocks** (`execute if block ... run say GLOW_*_YES`), because
+  the world it runs on is whatever the previous benchmark left behind - the earlier readings compared runs whose
+  emitter layout was not controlled.
+* With that in place: **three consecutive runs read the reference value with all six glowstones present**, and the
+  earlier group (1 vanilla + 3 ours) agreed 4/4 with a **cell-by-cell identical y=100 plane** (`dumpplane`).
+* The one live divergence that was caught (ours `4d50732804a9a46d` while the adjacent vanilla read
+  `61fb027e7d51ee31`) had a light pattern **equal to the reference's but shifted in x** while sky light was
+  bit-identical - i.e. a different set/position of emitting blocks, which is what an uncontrolled world looks
+  like, not what a light-engine bug looks like.
+* Therefore: no evidence of an engine-side divergence, and the earlier "7 conforming / 6 divergent" tally is
+  withdrawn as a measurement of the engine (the reference drifted because every run re-saves the world).
+* Methodology to keep: adjacent pairs only (vanilla -> ours, or ours -> vanilla, same world), with the scenario's
+  own block assertions, and the y-banded probe; never compare hashes across long run sequences or across worlds.
+* Still true and worth re-checking if this ever reappears: the storage-mode write path must overwrite the engine's
+  DataLayer **in place** (never swap the object), because the light thread keeps writing into the object it holds.
 
 ## Unresolved 3 (correctness): worldgen border ordering
 
@@ -185,3 +171,21 @@ Jar not present in the rig (`mc-smoketest/mods` expects `c2me-*.jar` / `*Generat
   delay - the script does) and a *quoted* heredoc in a generator script silently puts `${VAR}` into the
   datapack, which makes the whole function fail to load and the scenario never run (hence the self-check);
   `JAVA_HOME`, not just `PATH`, must point at JDK 21 or Gradle fails with a confusing internal error.
+
+## Measurement results added this session (for the four-workload table, action C)
+
+Per-pass minima from `lucistarlink-light-benchmark.jsonl` (walls in brackets):
+
+| workload | ours, shipped default | ScalableLux |
+|---|---|---|
+| `sky_hole` | **0.651** median of 5 (4.30-4.90) | **0.593** median of 3 (2.15-3.05), plus 0.639/0.644/0.708 in earlier runs |
+| `dense_chunk_patch` | 1.872 (9.49) | 2.312 / 2.868 (18.8 / 26.3) |
+| `block_toggle_border` | 1.089 (5.25) | 1.794 / 2.386 (12.0 / 16.2) |
+| `structure_cube` | 1.781 (8.40) | 3.774 / 3.792 (19.9 / 28.5) |
+
+So we win the three heavy workloads on both metrics and lose `sky_hole` by ~10% on per-pass minimum (~1.5x on
+wall). Reschedulings measured and rejected this session (all 5 reps, per-pass minimum median): prompt posting of
+runtime publications 1.114; coalescing window 2 ms 1.049; synchronous wait for our own commit inside the tick
+0.784; worldgen core-only publishing 0.756 (neutral, kept as an opt-in); direct install 0.599 (the only variant
+that beat the default, blocked only by the switch discipline now that Unresolved 2 came out clean). Vanilla's own
+per-pass minimum on `sky_hole` is ~1.0 ms.
