@@ -150,9 +150,11 @@ cp build/libs/lucistarlink-1.21.1-0.1.0.jar dist/lucistarlink-region-0.1.0.jar  
   - **先纠正两个被实测推翻的假设**：
     1. "私有投递多一次 mailbox 唤醒"——不成立。`ChunkMap` 里 `ThreadedLevelLightEngine` 的 `taskMailbox` 是 `processormailbox`（"light" 线程），而它的 `sorterMailbox` 是 `queueSorter.getProcessor(processormailbox, false)`，**回调同样跑在光照线程上**；多一条任务只是一次队列跳，不是线程唤醒。
     2. "同包 mixin 可以拿到 `TaskType`"——**做不到**。把类放进 `net.minecraft.server.level` 会让 `lucistarlink` 模块与 `minecraft` 模块争抢同一个包，NeoForge 在模块路径上直接 `ResolutionException: Module minecraft contains package net.minecraft.server.level, module lucistarlink exports package net.minecraft.server.level to minecraft`，服务器起不来（实测踩到，jar 一换就崩）。任何"同包 mixin json"的方案都作废。
-  - **可用做法（已实现、默认关）**：`@Inject(method = "runUpdate", at = @At("HEAD"))` 在光照线程上、在引擎自己的 `runLightUpdates()` 与 POST_UPDATE（barrier 等的就是它）之前提交，完全不需要包私有类型；触发用一条普通引擎任务（`updateSectionStatus`，对已初始化的 section 是幂等空操作）让 `lightTasks` 非空。
-  - **实测结论（负面）**：这版本反而更慢——单 pass 最小值 0.48 → 1.24 ms，还出现一次 14.6 ms 的停顿。原因是触发依赖原版 `tryScheduleUpdate()`（要等下一次 `pollTask`），而现在的私有 drain 用 250 µs 定时器反而**更及时**。触发时机比省下的那一跳重要得多。
-  - 因此阶段 2 的调度要重新论证：要么找到"确定性及时触发 + 同轮提交"的办法（例如在光照线程的下一次 `pollTask` 里挂提交，而不是等 `tryScheduleUpdate`），要么**放弃用调度优化去追这 0.9 ms**，改走"小编辑在服务端线程内联完成（含提交）"这条路——ScalableLux 正是因为它同步做完，才有 0.69–0.80 ms 的 per-pass 最小值。两条路都要按 §6 的测量口径验收。
+  - **提交调度的最终结论（按监工动作 A/D 重写）**：
+    1. **写入只能发生在光照线程**（存储单写者），这条不变。
+    2. **"在同一轮提交"不是收益点，及时性才是**：piggyback（`runUpdate` HEAD 提交 + 一条原版任务触发）实测 **per-pass min 0.48 → 1.24 ms，外加一次 14.6 ms 卡顿**，因为它等 `tryScheduleUpdate`；私有 drain 的 250 µs 定时器反而更及时。
+    3. **真正要砍的是定时器这一跳**：`CompletableFuture.delayedExecutor` 即使延迟为 0 也要经过定时器线程——这就是早先 `publishCoalesceNanos=0` 测不出变化的原因。实现：运行时（小编辑）发布**直接投递** `taskMailbox.tell`，世界生成保留合并（吞吐优先）；开关 `promptRuntimePublish`。
+    4. 若仍不够，才评估"服务端线程内联算+装"的完整形态；它必须先证明 **≥3 次偏差探针 0 偏差**（服务端线程写与光照线程写在同一层竞争，有层内撕裂风险），否则不予考虑。
 - 新增配置 `lightEngineMode = region | storage`（默认 `region`），以及命令行/JVM 开关 `-Dlucistarlink.lightEngineMode=storage`。
 - 验收（storage 模式，全部满足才允许继续）：
   1. 差分套件全绿；
@@ -199,18 +201,17 @@ cp build/libs/lucistarlink-1.21.1-0.1.0.jar dist/lucistarlink-region-0.1.0.jar  
 6. **存储层的两个隐蔽细节（2026-09-18 实测踩到）**：
    - `LayerLightSectionStorage.updatingSectionData` 带 2 项查找缓存（`DataLayerStorageMap.lastSectionKeys/lastSections`）。**直接 `setLayer` 之后必须 `clearCache()`**，否则后续 `getStoredLevel`/`getDataLayer(pos, true)` 仍会返回被替换掉的旧层，表现为"写入没生效"。
    - `queuedSections` 里的待处理层会**遮蔽**直接写入的层（`getDataLayerData` 先查 `queuedSections`）。直装时必须同时 `queuedSections.remove(sectionPos)`，否则客户端包与序列化会读到旧数据。
-   - **不要替换 DataLayer 对象，要原地写字节**：`DataLayer.getData()` 返回内部数组，光照线程会继续往它持有的那个对象里写；`setLayer` 换掉对象后那些写会落进被遗弃的数组（丢失），且没有标不一致就没人重算。改用 `System.arraycopy` 写进引擎已有的层（没有层时才 `setLayer`）——已实现（commit 69b817e）。
-7. **偶发 block 光分歧（已复现，未修）**：加了 y 范围的气层探针（y 90..112，避开流体交互）之后**判据可用了**：`ls-border-edit.sh` 在区块边界 x=15/16 放荧石，**vanilla 每次都读 `sky 013c3846466ff9d5 / block 61fb027e7d51ee31`（3/3）**；我们的引擎多数运行读同一个值，但另一些运行读**第二个同样稳定的值** `block 4d50732804a9a46d`（当前计数 **7 对 / 6 偏**）。已确立的约束：
-   - **两条发布路线都出现**（默认排队与 `directSectionInstall=true`）→ 不是安装机制的问题；本轮加的"原位拷贝"没有改变比例（5 跑 2 偏）。
-   - **sky 光每一次都与 vanilla 逐位相同**（含所有偏差运行）→ 只有 block 光会走另一条分支。
-   - **不粘滞**：偏差运行之后 vanilla 立刻读回 vanilla 值，我们下一次通常也是 → 是"偶尔走另一分支"，不是被写坏的世界状态。
-   - 偏差值出现时自身可复现 → **确定性的另一分支**（时序相关），可调试，不是噪声。
-   - `haloPublish=false` 在此**不是**有效单变量探针（气层覆盖邻居区块，关掉 halo 改变了该写什么，会读出第三个值）。
-   - 下一步：气层探针上的单变量二分（`experimentalRuntimeAdoption=false` 首轮因全量重算变慢、静默门未满足而未出数，需加长等待），再依次 `experimentalDenseIncremental` / `experimentalSectionFastPath` / `experimentalSkySeedSkip`；若指向采纳，则"运行时作业采纳了邻居基线、之后又发布进已被别人改动的区块"就是漏洞点（即 `externalMarked`/`rerunBaselineMoved` 那道闸的窗口），修法就是下面的候选实现。
+   - **不要替换 DataLayer 对象，要原地写字节**：`DataLayer.getData()` 返回内部数组，光照线程会继续往它持有的那个对象里写；`setLayer` 换掉对象后那些写会落进被遗弃的数组（丢失），且没有标不一致就没人重算。改用 `System.arraycopy` 写进引擎已有的层（没有层时才 `setLayer`）——已实现（commit 69b817e）。**注意措辞**：这条是"由推理与线程模型得出的硬要求"，实测上换对象版 5 跑 3 偏、原地版 5 跑 2 偏，**并没有证明原地拷贝修好了那个偏差**；偏差的根因仍未定位（见下条）。
+7. **偶发 block 光分歧（仍开放，但判据已换成"相邻成对比较"）**：气层探针（y 90..112，避开流体）让判据可用——`ls-border-edit.sh` 在区块边界 x=15/16 放荧石后：
+   - **当前世界状态下 vanilla 与我们 4/4 完全一致**（1 次 vanilla + 3 次我们），`edit` 均为 `sky 013c3846466ff9d5 / block af3a8fcaba55adfd`；并且 y=100 整层的逐格 diff **零差异**（`/lucistarlink dumpplane`，本轮新增）。
+   - 更早的**相邻运行对**里确实见过分歧（我们读到第二个稳定值 `4d50732804a9a46d`，而相邻 vanilla 读 vanilla 值）——**但此前"7 对 / 6 偏"的比例统计被污染，不能当偏差率用**：每次运行都会重新保存世界，而 `haloPublish=false` / `adoption=false` 这类诊断跑会把世界改成**另一种光照状态**，参考值本身在漂移。
+   - 正确的判定法（此后一律照此执行）：**相邻成对**（vanilla 跑一次 → 我们跑一次，比较两者读数）或"我们存 → vanilla 读"的往返；不要跨长序列比哈希。
+   - 已确立的约束：两条发布路线都出现过；sky 光每一次都与 vanilla 逐位相同（含偏差运行）；不粘滞；偏差值出现时自身可复现；`haloPublish=false` 不是有效单变量探针（气层覆盖邻居区块，关掉 halo 改变了该写什么）。
+   - 下一步：用**相邻成对**法在气层探针上做单变量二分（`experimentalRuntimeAdoption=false` 需加长静默等待；再 `experimentalDenseIncremental` / `experimentalSectionFastPath` / `experimentalSkySeedSkip`）。若指向采纳，则"运行时作业采纳了邻居基线、之后又发布进已被别人改动的区块"是漏洞点（`externalMarked`/`rerunBaselineMoved` 那道闸的窗口），修法即下面的候选实现。
    - 候选实现（修法）：不允许用比引擎现值更旧的镜像覆盖 —— 每 section 记录"镜像年龄"（发布序号），被更新的发布者写过的 section 直接跳过；映射要有界（照抄 coalescing map 的清扫预算）。
-   - **对 storage 模式的要求**：修好之前 `directSectionInstall` **不能**作默认——同样的分歧率，而且它跳过引擎复查（没有兜底）。
-   - 验收补充：**确定性**只能在"无流体气层"上判定；全列 block 指纹不构成判据（见 §6）。
-9. **提交是"调度 + 时机"问题，不是"数据搬运"问题**：原版存储是**单写者**（只有光照线程能写，`ThreadedLevelLightEngine` 把每个写入都包成 `addTask`），所以"回写成本几乎为零"只对"换数组"成立，对"提交落地"不成立。而且实测表明：**触发时机比省下的一跳更重要**——用 250 µs 定时器主动 drain（单 pass 最小值 0.48–0.87 ms）优于依赖原版 `tryScheduleUpdate()` 被动触发（1.24 ms，且有 14.6 ms 停顿）。详见 §3 阶段 2。
+   - **对 storage 模式的要求**：修好之前 `directSectionInstall` **不能**作默认——同样的分歧率（与原地/换对象实现无关），而且它跳过引擎复查（没有兜底）。
+   - **新增门槛（监工动作 D4）**：任何触碰安装/发布路径的改动，必须附 **≥3 次相邻成对偏差探针 0 偏差**，否则不予合并。
+8. **提交是"调度 + 时机"问题，不是"数据搬运"问题**：原版存储是**单写者**（只有光照线程能写，`ThreadedLevelLightEngine` 把每个写入都包成 `addTask`），所以"回写成本几乎为零"只对"换数组"成立，对"提交落地"不成立。而且实测表明：**触发时机比省下的一跳更重要**——用 250 µs 定时器主动 drain（单 pass 最小值 0.48–0.87 ms）优于依赖原版 `tryScheduleUpdate()` 被动触发（1.24 ms，且有 14.6 ms 停顿）。详见 §3 阶段 2。
 
 ---
 
@@ -224,7 +225,7 @@ cp build/libs/lucistarlink-1.21.1-0.1.0.jar dist/lucistarlink-region-0.1.0.jar  
 | 边界正确性 | 区块边界放荧石 → 隔壁亮度 | 隔壁立刻正确（附证据计数） |
 | 生成边界 | 已加载地带边缘再生成一块 | 邻居被正确标记/重算（附计数） |
 | 存档安全 | 放灯后立刻 `save-all flush` → 重启 | 光还在；无报错 |
-| **确定性 + 值级一致** | `mc-smoketest/ls-border-edit.sh`（加载存档 → 区块边界放荧石 → 对 x 0..31 与 x 8..24 的 y 90..112 气层指纹），同配置连跑 2 次，并与 vanilla 对照 | 指纹逐位相同，且与 vanilla 逐位相同（两层都算）。**只允许在无流体气层上判定**：全列 block 指纹连 vanilla 都不可复现，见 §5 第 7 条 |
+| **确定性 + 值级一致**（只允许相邻成对比较） | `mc-smoketest/ls-border-edit.sh`（加载存档 → 区块边界放荧石 → 对 x 0..31 与 x 8..24 的 y 90..112 气层指纹），同配置连跑 2 次，并与 vanilla 对照 | 指纹逐位相同，且与 vanilla 逐位相同（两层都算）。**只允许在无流体气层上判定**：全列 block 指纹连 vanilla 都不可复现，见 §5 第 7 条 |
 | 内存 | 长跑 30 分钟 + 遥测 | 缓存与队列有界，无持续增长 |
 | 兼容 | 与 Sable / C2ME 等同装 | 无光照发散、无崩溃 |
 
