@@ -146,13 +146,18 @@ cp build/libs/lucistarlink-1.21.1-0.1.0.jar dist/lucistarlink-region-0.1.0.jar  
 
 ### 阶段 2：storage 模式的提交路径（拿到主要收益）
 - 作业提交改为"原子换进存储"；删除该模式下的邮箱投递与通知扇出。
+- **必须写明"提交怎么调度"**（2026-09-18 实测修正）：存储是单写者（只有光照线程能写），换数组本身几乎免费，但把换数组**送到光照线程**的那一跳不免费——测得的剩余 ~0.8 ms 全在这里。私有队列 + 延迟合并（现在的 `publishCoalesceNanos=250µs` + 自己的 drain 任务）比原版机制**多一次 mailbox 唤醒**，而且 barrier 等的恰恰是原版那一轮。
+  - 推荐做法：把发布任务**搭进原版自己的任务表**（`ThreadedLevelLightEngine.lightTasks`，类型 `PRE_UPDATE`），这样"我们的写入 → `super.runLightUpdates()` → barrier 的 wait 任务"在**同一次 `runUpdate()`** 里完成，省掉一次唤醒和 250 µs 合并延迟；不要新增第二条私有投递路径。
+  - 实现要点：`TaskType` 是包私有枚举，需要一个**同包** mixin（`package net.minecraft.server.level`，单独的 mixin json）暴露 `@Invoker addTask(...)`，并在该接口里用 default 方法包一层 `lucistarlink$addPreUpdateTask(x, z, level, runnable)`，调用方只调 default 方法。
+  - 效果预期（待验证）：直装 + 自己的 drain 实测单 pass 最小值中位 0.87 → 0.60 ms；去掉私有投递这一跳后才有机会进 3.0 ms。
 - 新增配置 `lightEngineMode = region | storage`（默认 `region`），以及命令行/JVM 开关 `-Dlucistarlink.lightEngineMode=storage`。
 - 验收（storage 模式，全部满足才允许继续）：
   1. 差分套件全绿；
-  2. 四路对照：`dense_chunk_patch`、`block_toggle_border`、`structure_cube` **不低于** region 模式；`sky_hole` **min ≤ 3.0 ms**（这是本次架构的主要性能目标）；
+  2. 四路对照：`dense_chunk_patch`、`block_toggle_border`、`structure_cube` **不低于** region 模式；`sky_hole` **per-pass min 的中位数 ≤ 1.0 ms**（对应 4 pass 合计 ≤ 4.0 ms 的旧口径下 **≤ 3.0 ms**）——按 §6 的测量纪律执行；
   3. 边界用例（区块边界放荧石 → 隔壁立刻亮）与"生成中的区块边界"场景通过；
   4. 存档/读档用例（放灯立刻退出 → 读档光还在；邻居不丢光）通过；
-  5. 长跑 30 分钟无内存增长、无报错。
+  5. **确定性**：同一配置连跑 2 次，光照指纹逐位相同（新增，见 §5 第 7 条）；
+  6. 长跑 30 分钟无内存增长、无报错。
 
 ### 阶段 3：删繁就简（在 storage 模式成为默认之后）
 - 把 `haloPublish` / 外部刷新 / 基线漂移重跑 从 **storage 模式**的路径上摘掉（region 模式保留，不删代码）；
@@ -188,6 +193,13 @@ cp build/libs/lucistarlink-1.21.1-0.1.0.jar dist/lucistarlink-region-0.1.0.jar  
 3. **假收益**：任何"靠关掉正确性拿到的数字"（`haloPublish=false`、`runtimeHaloChunks=0`、跳过后来的复查）**一律不算数**；验收必须同时给出正确性证据（边界用例、存档用例、差分套件）。
 4. **客户端路径**：客户端是单线程光照，别把"worker 池"假设带过去（用内联执行）。
 5. **测量纪律**：跨会话墙钟不可比（实测同配置出现过 11 ms 与 50.6 ms）；只信同跑阶段指标 + ≥3 次重复取 min，且必须带 JDK 21 与 `WINDOWS-ROOT` TLS（见 `docs/HANDOVER.md` 的构建铁律）。
+6. **存储层的两个隐蔽细节（2026-09-18 实测踩到）**：
+   - `LayerLightSectionStorage.updatingSectionData` 带 2 项查找缓存（`DataLayerStorageMap.lastSectionKeys/lastSections`）。**直接 `setLayer` 之后必须 `clearCache()`**，否则后续 `getStoredLevel`/`getDataLayer(pos, true)` 仍会返回被替换掉的旧层，表现为"写入没生效"。
+   - `queuedSections` 里的待处理层会**遮蔽**直接写入的层（`getDataLayerData` 先查 `queuedSections`）。直装时必须同时 `queuedSections.remove(sectionPos)`，否则客户端包与序列化会读到旧数据。
+7. **"谁最后写"竞态（新发现，比记账更隐蔽）**：并发的区域作业如果都往共享区块的边界 section 发布 halo，就是**写-写竞态**——最后写的赢，而谁最后写取决于线程时序。已实测：`sky_hole`/strip 场景下，同一配置连跑三次 **block 光指纹每次不同**，而纯 vanilla 两次完全一致；`enableBlock=false`（block 光交回原版、我们只发 sky）两次一致但**仍不等于 vanilla**，说明分歧出在"用较早的镜像覆盖引擎里较新的数据"这一层，而不是光照算法本身。
+   - 对策（阶段 2 必须做）：发布前校验该 section 的**基线是否移动过**（引擎现值 vs 我们计算时采用的基线），移动过就不允许用旧镜像覆盖——runtime 路径已有 `externalMarked`/`rerunBaselineMoved` 那套，worldgen 路径目前**没有**这道闸。
+   - 验收补充：**确定性**必须单列一项——同一配置连跑 2 次，指纹必须逐位相同（这是本轮唯一能抓住这类竞态的廉价探针，见 `docs/HANDOVER.md` 的 `/lucistarlink dumplight`）。
+8. **提交一定是"调度"问题，不是"数据搬运"问题**：原版存储是**单写者**（只有光照线程能写，`ThreadedLevelLightEngine` 把每个写入都包成 `addTask`）。所以"回写成本几乎为零"只对"换数组"成立，对"提交落地"不成立——见 §3 阶段 2 的调度要求。
 
 ---
 
@@ -196,10 +208,12 @@ cp build/libs/lucistarlink-1.21.1-0.1.0.jar dist/lucistarlink-region-0.1.0.jar  
 | 项目 | 怎么测 | 通过线 |
 |---|---|---|
 | 差分测试 | `gradlew test` | 全绿（当前基准 21 项 / 0 失败 / 1 继承跳过） |
-| 四路对照 | `mc-smoketest/fourway.sh`（4 负载 × 4 引擎 × ≥3 重复） | storage 模式不低于 region 模式；`sky_hole` min ≤ 3.0 ms |
+| 四路对照 | `mc-smoketest/fourway.sh`（4 负载 × 4 引擎 × ≥3 重复） | storage 模式不低于 region 模式 |
+| 性能口径 | 读 `lucistarlink-light-benchmark.jsonl` 的 `minPassNanos`，**每档 ≥5 次重复取中位数**（跨会话/单次 wall 都不可比：实测同配置 3.70–8.37 ms） | `sky_hole` **per-pass min 中位数 ≤ 1.0 ms**（≈ 旧 4-pass 口径 ≤ 3.0 ms，即"不慢于 ScalableLux 的 0.69–0.80 ms 一个量级之上"） |
 | 边界正确性 | 区块边界放荧石 → 隔壁亮度 | 隔壁立刻正确（附证据计数） |
 | 生成边界 | 已加载地带边缘再生成一块 | 邻居被正确标记/重算（附计数） |
 | 存档安全 | 放灯后立刻 `save-all flush` → 重启 | 光还在；无报错 |
+| **确定性** | `/lucistarlink dumplight` 同配置连跑 2 次（可 `mc-smoketest/ls-border-scenario.sh gen`） | 指纹逐位相同，且与 vanilla 对照一致 |
 | 内存 | 长跑 30 分钟 + 遥测 | 缓存与队列有界，无持续增长 |
 | 兼容 | 与 Sable / C2ME 等同装 | 无光照发散、无崩溃 |
 

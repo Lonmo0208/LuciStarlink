@@ -58,10 +58,24 @@ public final class LuciStarlinkCommand {
     }
 
     /**
+     * Ceiling on how long {@code dumplight} waits for the engine to go quiet before it reads anyway. Worldgen
+     * streams for a while after a chunk is forceloaded, and reading the section maps while the light thread is
+     * writing them yields hashes that differ between identical runs - which is a property of the probe, not of
+     * the engine, and it cost an afternoon: the first version of this command reported non-deterministic block
+     * light for every configuration, including ones where the engine never computed block light at all.
+     */
+    private static final int DUMP_QUIESCE_TICKS = 20;
+    private static final int DUMP_MAX_WAIT_TICKS = 1200;
+
+    /**
      * Fingerprints the engine's stored light over a block region into two 64-bit FNV-1a hashes, one per layer.
      * Two runs of the same scenario must produce the same pair; a difference is exactly the "a chunk kept stale
      * light" failure, which is otherwise invisible from the server logs. The line is stable so a test rig can
      * diff it between engine configurations.
+     *
+     * <p>The engine's section maps are single-writer (the light thread), so the read is deferred until the
+     * engine has had {@link #DUMP_QUIESCE_TICKS} consecutive quiet ticks: light engine work queues empty and no
+     * pending runtime or worldgen work. Otherwise the probe races the light thread and reports noise.
      */
     private static int dumpLight(com.mojang.brigadier.context.CommandContext<CommandSourceStack> context) {
         String label = com.mojang.brigadier.arguments.StringArgumentType.getString(context, "label");
@@ -69,7 +83,30 @@ public final class LuciStarlinkCommand {
         int z1 = com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "z1");
         int x2 = com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "x2");
         int z2 = com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "z2");
+        net.minecraft.server.MinecraftServer server = context.getSource().getServer();
         net.minecraft.server.level.ServerLevel level = context.getSource().getLevel();
+        long[] waited = {0L};
+        int[] quietTicks = {0};
+        server.tell(new net.minecraft.server.TickTask(server.getTickCount() + 1, new Runnable() {
+            @Override
+            public void run() {
+                waited[0]++;
+                boolean quiet = !level.getLightEngine().hasLightWork()
+                        && !LuxServices.controller().hasPendingRuntimeWork()
+                        && !LuxServices.controller().hasPendingWorldgenWork();
+                quietTicks[0] = quiet ? quietTicks[0] + 1 : 0;
+                if (quietTicks[0] < DUMP_QUIESCE_TICKS && waited[0] < DUMP_MAX_WAIT_TICKS) {
+                    server.tell(new net.minecraft.server.TickTask(server.getTickCount() + 1, this));
+                    return;
+                }
+                logFingerprint(label, level, x1, z1, x2, z2, waited[0]);
+            }
+        }));
+        return 1;
+    }
+
+    private static void logFingerprint(String label, net.minecraft.server.level.ServerLevel level,
+                                       int x1, int z1, int x2, int z2, long waitedTicks) {
         net.minecraft.world.level.lighting.LevelLightEngine lightEngine = level.getLightEngine();
         net.minecraft.world.level.lighting.LayerLightEventListener sky =
                 lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.SKY);
@@ -91,11 +128,8 @@ public final class LuciStarlinkCommand {
                 }
             }
         }
-        String line = String.format(java.util.Locale.ROOT,
-                "LUCIS_LIGHT_FINGERPRINT label=%s sky=%016x block=%016x samples=%d",
-                label, skyHash, blockHash, samples);
-        LuciStarlink.LOGGER.info("{}", line);
-        context.getSource().sendSuccess(() -> Component.literal(line), false);
-        return 1;
+        LuciStarlink.LOGGER.info(String.format(java.util.Locale.ROOT,
+                "LUCIS_LIGHT_FINGERPRINT label=%s sky=%016x block=%016x samples=%d quiesceTicks=%d",
+                label, skyHash, blockHash, samples, waitedTicks));
     }
 }
