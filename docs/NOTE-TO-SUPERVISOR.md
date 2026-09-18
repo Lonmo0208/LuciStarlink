@@ -172,3 +172,45 @@ drain 轮次），直接投递会把它们打散成一轮一次。
 - 门槛 4（存档往返）：直装写 `visibleSectionData`，序列化读它——按你的要求单独实测。
 - 门槛 5（客户端）：我会先加 `--quickPlayMultiplayer` 的无人值守入口。
 - 门槛 6（单个提交翻默认 + 发布件重建）：到最后一步一起做。
+
+---
+
+# 第三轮：交错的第二张表出来了，**我自己撤回"直装升默认"的提案**
+
+## A. 直装 ON/OFF 交错对照（`ab-direct.sh`，四档 × 逐轮交替 × 各 5 轮，无其它负载）
+
+| 负载 | OFF per-pass min | ON per-pass min | OFF wall | ON wall |
+|---|---|---|---|---|
+| `sky_hole` | 1.069 | **0.929**（−13%） | 4.89 | 5.08 |
+| `dense_chunk_patch` | 2.096 | 2.101（持平） | 26.25 | **14.57** |
+| `block_toggle_border` | **0.914** | 0.948（+4%） | **5.03** | 6.19 |
+| `structure_cube` | 1.877 | **1.819**（−3%） | **8.91** | 9.26 |
+
+**结论（与我在 `NOTE` §3① 的提案相反）**：直装只有在 `sky_hole` 上有 −13%、`structure` 上 −3%，
+`dense` 持平，`block_toggle` 反而 +4%；wall 上两档更差。**顺序组里那个 −31% 没有在交错下复现** —— 它大概率
+是组间漂移造成的假象。因此：**不要翻默认**。收益不足以换取"跳过引擎复查"这个正确性代价，
+`directSectionInstall` 保持实验开关。
+
+## B. 一个必须先解决的口径问题：**绝对数字在组间漂移最多 60%**
+
+同一配置（默认、region 路线）在本次会话的三个不同组里，per-pass min 中位分别是 **0.651 / 0.767 / 1.069**。
+所以：
+- **只有同一次交错运行内的对比可用**（我们的 `sky_hole` 落后 34% 就是从同一次 ours↔SL 交错里来的）；
+- "≤1.0 ms" 这种**绝对线**在这种漂移下不可靠 —— 建议把验收改成**相对口径**：
+  "在同一次交错运行里，四档 per-pass min 中位不低于同场 SL"，必要时辅以"不低于同场 vanilla"；
+- 我这边会继续用 `label` + 开关字段记录每组，方便你复核。
+
+## C. 新增待办：`dense_chunk_patch` 的 wall 尾巴
+
+我们的 dense wall 输（26.3 / 14.6 vs SL 11.1）不是因为整体慢，而是**四分之一到一半的 pass 偶发 ~30 ms**
+（其余 ~2 ms）。单独跑我们三次复现（34.3 / 10.0 / 36.3，慢的那次单发 29–46 ms 的 pass），**与交错无关**。
+per-pass min 口径不受影响。嫌疑：大批量提交撞上并发世界生成的发布流。已记为独立待办。
+
+## D. 门槛与客户端
+
+- 门槛 1（差分套件）：全绿 ✓；门槛 3（交错 A/B）：ours↔SL 与 ON↔OFF 两张表都已出 ✓；
+- **门槛 2/4/6 现在失去对象**（既然不翻默认）：发布件保持正式构建 `incompatible`（md5 `3f45fb08…`）✓；
+- 门槛 5（客户端）**入口已备好**：`./gradlew runClientMultiplayer -PclientServer=127.0.0.1:25565`
+  （run 配置已加 `--quickPlayMultiplayer`；也可用 `createClientMultiplayerLaunchScript` 不经过 Gradle 启动）；
+  服务端侧：`cd mc-smoketest && KEEP_SERVER_RUNNING=1 ./ls-border-edit.sh clientcase`（自动在边界放荧石并保持运行），
+  反向对照加 `-Dlucistarlink.haloPublish=false`。用例 B 的说明我已同步进 `verify-extra.sh`。
