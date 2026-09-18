@@ -21,10 +21,13 @@ It is **not** a scheduler over vanilla light tasks and **not** a Starlight fork:
 > * `dense_chunk_patch` — **no difference** on per-pass minimum (1.990 vs 2.210, then 2.342 vs 2.217 in an
 >   independent replica; the two groups disagree in direction, so the earlier "ahead by 10%" is withdrawn).
 >   Its wall time is 2.5–3.1× slower in both groups because of a rare ~30 ms pass — the open performance item.
-> * `sky_hole` — behind by **25–35%**, reproduced in two independent interleaved groups (p = 0.056 each,
->   Fisher combined ≈ 0.02). ScalableLux's edge there is structural: it never hands sections to the light
->   engine at all, which is what the V2 storage mode ([docs/ARCH-V2-GLOBAL-STORAGE.md](docs/ARCH-V2-GLOBAL-STORAGE.md))
->   exists for.
+> * `sky_hole` — behind by **~2.0×** once the benchmark no longer lets world-generation light work land
+>   inside the measured window (0.708 vs 0.355 ms median, 10+10 interleaved runs, perfect separation
+>   p < 0.0001). The earlier "25–35%" figure was measured with the old protocol, which inflated both engines
+>   and inflated ScalableLux more, so it understated this gap. ScalableLux's edge is structural: it never hands
+>   sections to the light engine at all, which is what the V2 storage mode
+>   ([docs/ARCH-V2-GLOBAL-STORAGE.md](docs/ARCH-V2-GLOBAL-STORAGE.md)) exists for. See
+>   [docs/TASK-PERF-SKY.md](docs/TASK-PERF-SKY.md) §7.8–7.9 for the protocol defect and the corrected numbers.
 > Absolute numbers drift up to ~40% between groups of one session, so **only same-run interleaved comparisons
 > count** — see [docs/SUPERVISOR-NEXT-ROUND.md](docs/SUPERVISOR-NEXT-ROUND.md) §10–11.
 > The client-sync case is verified: light placed on a chunk border reaches a connected client within 2 s,

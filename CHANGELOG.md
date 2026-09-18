@@ -52,7 +52,18 @@ server.
   | `block_toggle_border` | **0.636** | 2.285 | win, p = 0.008 (all 5 runs faster) |
   | `structure_cube` | **1.757** | 3.540 | win, p = 0.008 (all 5 runs faster) |
   | `dense_chunk_patch` | 1.990 / 2.342 | 2.210 / 2.217 | **no difference**: the two groups disagree in direction, p = 0.095 and 0.841 |
-  | `sky_hole` | 0.767 / 0.666 | 0.572 / 0.535 | behind 25–35%, replicated (p = 0.056 each, Fisher ≈ 0.02) |
+  | `sky_hole` | 0.767 / 0.666 | 0.572 / 0.535 | behind, but see below |
+
+  **Corrected after the protocol defect was found**: the runs above let world-generation light work land inside
+  the measured window (generating a chunk that borders a measured chunk queues light work *for that measured
+  chunk*), which inflated both engines and ScalableLux more. With `prepareRing=3` and a 1 s quiesce settle
+  window, a 10+10 interleaved group gives **0.708 vs 0.355 ms (p < 0.0001, perfect separation)** — i.e. behind
+  by ~2.0×, not 25–35%. The measured cost structure behind that: our pipeline spends ~0.25 ms in the publish
+  coalescing window plus ~0.4 ms in the drain (publish, engine re-absorption, client notifications), while
+  ScalableLux applies its light update synchronously in ~0.3 ms and never queues anything.
+  `directSectionInstall` (which skips the engine's re-absorption) shows −37% under the clean protocol at n=6,
+  p=0.18 — promising but not established, and it carries the correctness caveat described above.
+  See docs/TASK-PERF-SKY.md §7.8–7.9.
 
   So two workloads win decisively, one is a tie, and `sky_hole` lags for a structural reason: ScalableLux does
   not hand sections to the light engine at all, which is the V2 storage mode's territory, not a tuning knob.

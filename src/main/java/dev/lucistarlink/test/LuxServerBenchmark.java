@@ -33,6 +33,30 @@ import java.util.concurrent.CompletableFuture;
 
 @EventBusSubscriber(modid = LuciStarlink.MODID, bus = EventBusSubscriber.Bus.GAME)
 public final class LuxServerBenchmark {
+    /**
+     * How long the pre-measure quiesce must stay clean before the measured passes may start.
+     *
+     * <p>The quiesce is a snapshot: it proceeds on the first poll with nothing pending. A chunk in the prepare
+     * ring that is still being generated can finish a moment later and queue its light work, which then lands
+     * inside the measured passes - the measured passes have measured 1.1-1.6 ms each with zero publish work of
+     * their own in about a quarter of the runs, against 0.44-0.6 ms in the rest, while the world-generation work
+     * total is the same in both. Requiring a clean window instead of a clean instant is how that race is removed.
+     * 0 keeps the historical behaviour.
+     */
+    private static final long QUIESCE_SETTLE_NANOS =
+            Math.max(0L, Long.getLong("lucistarlink.benchmark.quiesceSettleMs", 0L)) * 1_000_000L;
+
+    /**
+     * How many chunks beyond the workload box are force-loaded and prepared.
+     *
+     * <p>The measured passes wait on the engine's per-chunk pending tasks, and generating a chunk that borders a
+     * measured chunk queues light work *for that measured chunk* (light crosses the border). A ring of one chunk
+     * is therefore not enough: chunks at the ring's edge are still being generated while the passes run, and the
+     * cascade keeps handing work to the measured chunks. Default 1 keeps the historical behaviour.
+     */
+    private static final int PREPARE_RING_CHUNKS = Math.max(0,
+            Integer.getInteger("lucistarlink.benchmark.prepareRing", 1));
+
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int FLAGS = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE;
     private static final int FULL_CHUNK_TICKET_RADIUS = 1;
@@ -461,6 +485,10 @@ public final class LuxServerBenchmark {
         private int runtimePendingAfterApply;
         /** Snapshot taken just before a pass applies its changes, so the pass line can report what that pass cost. */
         private LuxBenchmarkSupport.Snapshot passStartSnapshot = LuxBenchmarkSupport.snapshot();
+        /** Which other work was in flight when the pass began waiting (1=runtime, 2=worldgen, 4=engine queue). */
+        private int passWaitPendingBits;
+        /** Start of the current clean streak during the pre-measure settle window; 0 while not settling. */
+        private long quiesceSettleStartNanos;
 
         private BenchmarkRun(MinecraftServer server, BenchmarkConfig config) {
             this.server = server;
@@ -482,7 +510,8 @@ public final class LuxServerBenchmark {
             this.maxChunkX = maxX >> 4;
             this.minChunkZ = minZ >> 4;
             this.maxChunkZ = maxZ >> 4;
-            this.prepareChunks = createChunkGrid(this.minChunkX - 1, this.maxChunkX + 1, this.minChunkZ - 1, this.maxChunkZ + 1, 1);
+            this.prepareChunks = createChunkGrid(this.minChunkX - PREPARE_RING_CHUNKS, this.maxChunkX + PREPARE_RING_CHUNKS,
+                    this.minChunkZ - PREPARE_RING_CHUNKS, this.maxChunkZ + PREPARE_RING_CHUNKS, 1);
             int runtimeRegionChunks = runtimeRegionChunks();
             int waitMinChunkX = this.config.trackRegionAnchorsOnly()
                     ? Math.floorDiv(this.minChunkX, runtimeRegionChunks) * runtimeRegionChunks
@@ -626,6 +655,7 @@ public final class LuxServerBenchmark {
             }
             this.waitMode = mode;
             this.activeWaitChunks = chunks;
+            this.passWaitPendingBits = pendingFlagBits();
             this.level.getChunkSource().getLightEngine().tryScheduleUpdate();
             for (int index = 0; index < chunks.length; index++) {
                 ChunkPos chunkPos = chunks[index];
@@ -667,6 +697,17 @@ public final class LuxServerBenchmark {
                 LuxBenchmarkSupport.count("bench.barrier.enginePending");
             }
             if (!futurePending && !runtimePending && !worldgenPending && !enginePending) {
+                if (prepare && QUIESCE_SETTLE_NANOS > 0L) {
+                    if (this.quiesceSettleStartNanos == 0L) {
+                        this.quiesceSettleStartNanos = System.nanoTime();
+                    } else if (System.nanoTime() - this.quiesceSettleStartNanos >= QUIESCE_SETTLE_NANOS) {
+                        this.quiesceSettleStartNanos = 0L;
+                        return true;
+                    }
+                    this.level.getChunkSource().getLightEngine().tryScheduleUpdate();
+                    this.waitTicks++;
+                    return false;
+                }
                 return true;
             }
             this.level.getChunkSource().getLightEngine().tryScheduleUpdate();
@@ -856,13 +897,32 @@ public final class LuxServerBenchmark {
          * with different fixes, and the pass-to-pass spread is larger than the gap we are chasing, so it has to
          * be attributable before anything is optimised.
          */
+        /** Which of the three queues had work when a pass began waiting; the bits are printed on the pass line. */
+        private int pendingFlagBits() {
+            int bits = 0;
+            if (this.waitMode.waitRuntime && LuxServices.controller().hasPendingRuntimeWork()) {
+                bits |= 1;
+            }
+            if (this.shouldWaitWorldgen() && LuxServices.controller().hasPendingWorldgenWork()) {
+                bits |= 2;
+            }
+            if (this.level.getChunkSource().getLightEngine().hasLightWork()) {
+                bits |= 4;
+            }
+            return bits;
+        }
+
         private String passDeltaLine(long elapsedNanos, long applyNanos, long waitNanos) {
             LuxBenchmarkSupport.Snapshot end = LuxBenchmarkSupport.snapshot();
             LuxBenchmarkSupport.Snapshot start = this.passStartSnapshot;
             StringBuilder line = new StringBuilder(200);
             line.append("elapsedUs=").append(elapsedNanos / 1000L)
                     .append(" applyUs=").append(applyNanos / 1000L)
-                    .append(" waitUs=").append(waitNanos / 1000L);
+                    .append(" waitUs=").append(waitNanos / 1000L)
+                    .append(" pend=")
+                    .append((this.passWaitPendingBits & 1) != 0 ? 'r' : '-')
+                    .append((this.passWaitPendingBits & 2) != 0 ? 'w' : '-')
+                    .append((this.passWaitPendingBits & 4) != 0 ? 'e' : '-');
             String[][] metrics = {
                     {"drainUs", "lucistarlink.publish_batch.drain"},
                     {"queueLatUs", "lucistarlink.publish_batch.queueLatency"},
@@ -870,6 +930,12 @@ public final class LuxServerBenchmark {
                     {"runUpdUs", "lucistarlink.publish_batch.runLightUpdates"},
                     {"publishUs", "lucistarlink.publish_direct"},
                     {"notifyPostUs", "lucistarlink.publish.notify.post"},
+                    // the concurrent background activity: a slow pass has to be attributable to one of these
+                    {"wgLightUs", "lucistarlink.light_chunk"},
+                    {"wgComputeUs", "lucistarlink.light_chunk.worker_compute"},
+                    {"wgPubWaitUs", "lucistarlink.light_chunk.publish_wait"},
+                    {"rtTickUs", "lucistarlink.runtime_tick"},
+                    {"rtJobUs", "lucistarlink.stage.runtime.job.runtime"},
             };
             for (String[] entry : metrics) {
                 LuxBenchmarkSupport.Metric before = start.metrics().get(entry[1]);
@@ -884,6 +950,8 @@ public final class LuxServerBenchmark {
                     {"sections", "lucistarlink.publish_direct.sections"},
                     {"notifies", "lucistarlink.publish.notify.posted"},
                     {"identical", "lucistarlink.publish.skippedIdentical.sections"},
+                    {"qDuringDrain", "lucistarlink.publish_batch.queuedDuringDrain"},
+                    {"wgChunks", "lucistarlink.light_chunk"},
             };
             for (String[] entry : counters) {
                 long before = start.counters().getOrDefault(entry[1], 0L);

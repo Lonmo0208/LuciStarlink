@@ -101,6 +101,9 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     private final HashSet<LuxLightNotification> lucistarlink$pendingLightNotificationKeys = new HashSet<>(1000);
     @Unique
     private final AtomicBoolean lucistarlink$publishScheduled = new AtomicBoolean();
+    /** True while a drain round is executing on the light thread; used to attribute queue latency to it. */
+    @Unique
+    private final AtomicBoolean lucistarlink$drainRunning = new AtomicBoolean();
     @Unique
     private final java.util.concurrent.atomic.AtomicInteger lucistarlink$publishesInFlight =
             new java.util.concurrent.atomic.AtomicInteger();
@@ -111,8 +114,7 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     private final java.util.concurrent.ConcurrentLinkedQueue<CompletableFuture<Void>> lucistarlink$publishCompletions =
             new java.util.concurrent.ConcurrentLinkedQueue<>();
     @Unique
-    private volatile long lucistarlink$batchFirstQueuedNanos;
-    @Unique
+    private volatile long lucistarlink$batchFirstQueuedNanos;    @Unique
     private volatile boolean lucistarlink$batchPrompt;
     @Unique
     private final ThreadLocal<Long> lucistarlink$checkBlockStartedAt = new ThreadLocal<>();
@@ -452,6 +454,11 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
                 LuxBenchmarkSupport.count("lucistarlink.publish_batch.queued");
                 LuxBenchmarkSupport.count(runtime ? "lucistarlink.publish_batch.lane.runtime"
                         : "lucistarlink.publish_batch.lane.bulk");
+                if (this.lucistarlink$drainRunning.get()) {
+                    // the queued task cannot start until the round in flight finishes: this is the part of queue
+                    // latency that is not the coalescing window, and it is what the lane split was meant to bound
+                    LuxBenchmarkSupport.count("lucistarlink.publish_batch.queuedDuringDrain");
+                }
             }
             lucistarlink$schedulePublishDrain(this.lucistarlink$batchPrompt ? 0L : LUCIS_PUBLISH_COALESCE_NANOS);
         }, ChunkPos.asLong(chunkX, chunkZ), queueLevel));
@@ -502,6 +509,7 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
         if (firstQueuedNanos != 0L) {
             LuxBenchmarkSupport.record("lucistarlink.publish_batch.queueLatency", startedAt - firstQueuedNanos);
         }
+        this.lucistarlink$drainRunning.set(true);
 
         try {
             for (LuxQueuedLightTask task : batch) {
@@ -530,6 +538,7 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
             }
             throw throwable;
         } finally {
+            this.lucistarlink$drainRunning.set(false);
             batch.clear();
             this.lucistarlink$pendingLightNotifications.clear();
             this.lucistarlink$pendingLightNotificationKeys.clear();
