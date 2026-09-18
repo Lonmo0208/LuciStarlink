@@ -62,6 +62,12 @@ public final class LuxEngineController {
     private final ThreadLocal<Integer> worldgenWriteDepth = ThreadLocal.withInitial(() -> 0);
     private final ThreadLocal<RuntimeBulkScope> runtimeBulkScope = new ThreadLocal<>();
     private final AtomicLong runtimeBackpressureUntilNanos = new AtomicLong();
+    /** Set while a prompt dispatch is queued, so a burst of changes costs at most one per tick. */
+    private final java.util.concurrent.atomic.AtomicBoolean promptDispatchScheduled =
+            new java.util.concurrent.atomic.AtomicBoolean();
+    /** The last light engine and chunk getter seen by {@link #tickRuntime}, reused by the prompt dispatch. */
+    private volatile ThreadedLevelLightEngine lastLightEngine;
+    private volatile LightChunkGetter lastGetter;
     private volatile boolean closed;
 
     public boolean enabled() {
@@ -236,7 +242,95 @@ public final class LuxEngineController {
             return false;
         }
         LuxBenchmarkSupport.recordSince("lucistarlink.enqueue_block_change", startedAt);
+        schedulePromptDispatch(level);
         return true;
+    }
+
+    /**
+     * Wakes the runtime pipeline inside the tick that produced the change.
+     *
+     * <p>Dispatch otherwise waits for the next {@code tickRuntime}, which is driven from {@code ServerChunkCache.tick}
+     * and therefore lands a full tick (50 ms) after a change made later in the tick - measured: a pass whose own
+     * publish was tracked landed 55 ms after it applied, against ScalableLux's synchronous ~0.35 ms. Nothing about
+     * the work changes here, only when it starts: the batch content, the compute and the publish path are the same,
+     * and the dispatch still runs on the server thread. Guarded so a burst of changes costs at most one extra
+     * dispatch per tick, and switchable via {@code -Dlucistarlink.promptDispatch=}.
+     */
+    private void schedulePromptDispatch(Level level) {
+        if (!LuxFlags.promptDispatch) {
+            return;
+        }
+        ThreadedLevelLightEngine lightEngine = this.lastLightEngine;
+        LightChunkGetter getter = this.lastGetter;
+        if (lightEngine == null || getter == null || this.closed) {
+            return;
+        }
+        net.minecraft.server.MinecraftServer server = level.getServer();
+        if (server == null) {
+            return;
+        }
+        if (!this.promptDispatchScheduled.compareAndSet(false, true)) {
+            return;
+        }
+        LuxBenchmarkSupport.count("lucistarlink.runtime.promptDispatch.scheduled");
+        // The wake-up must not run inline: MinecraftServer.execute() runs the task immediately when it is already
+        // on the server thread, which turned one dispatch per *change* (193 per run) instead of one per burst and
+        // measurably helped nothing. A short delay off the server thread coalesces a burst, and the server task
+        // queue then runs the dispatch later in the same tick instead of at the next tickRuntime.
+        long delayNanos = Math.max(0L, Long.getLong("lucistarlink.promptDispatchNanos", 250_000L));
+        Runnable wake = () -> server.execute(() -> {
+            this.promptDispatchScheduled.set(false);
+            LuxBenchmarkSupport.count("lucistarlink.runtime.promptDispatch.run");
+            if (this.closed) {
+                return;
+            }
+            try {
+                tickRuntime(lightEngine, getter);
+            } catch (Throwable throwable) {
+                LuciStarlink.LOGGER.warn("LuciStarlink prompt dispatch failed", throwable);
+            }
+        });
+        if (delayNanos <= 0L) {
+            wake.run();
+            return;
+        }
+        java.util.concurrent.CompletableFuture.delayedExecutor(delayNanos, java.util.concurrent.TimeUnit.NANOSECONDS)
+                .execute(wake);
+    }
+
+    /** Benchmark hook: completes when every publication queued before the call has been handed to the engine. */
+    public java.util.concurrent.CompletableFuture<Void> flushMarker(int chunkX, int chunkZ) {
+        ThreadedLevelLightEngine lightEngine = this.lastLightEngine;
+        if (!enabled() || lightEngine == null) {
+            // an engine that never publishes (ScalableLux, or the mod disabled) has nothing to wait for
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        }
+        return ((dev.lucistarlink.light.runtime.LuxLightPublisher) lightEngine).lucistarlink$flushMarker(chunkX, chunkZ);
+    }
+
+    /**
+     * Benchmark hook: dispatch whatever runtime work is queued right now, then return a future that completes when
+     * that work has actually been handed to the engine.
+     *
+     * <p>Queuing the marker alone is not enough: a block change is still sitting in the runtime manager's change
+     * buffer at that point and has not become a publish task yet, so the marker would complete before the pass's own
+     * light was published (measured: 10-20 µs after the engine's own timestamp, i.e. it saw nothing). Dispatching
+     * first puts the pass's publication into the queue ahead of the marker, which is what makes the pass's reported
+     * time include the work this engine actually did for it. Called on the server thread, so the inline dispatch
+     * here is the same call the tick would make.
+     */
+    public java.util.concurrent.CompletableFuture<Void> flushRuntimeAndMarker(int chunkX, int chunkZ) {
+        ThreadedLevelLightEngine lightEngine = this.lastLightEngine;
+        LightChunkGetter getter = this.lastGetter;
+        if (!enabled() || lightEngine == null || getter == null) {
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        }
+        try {
+            tickRuntime(lightEngine, getter);
+        } catch (Throwable throwable) {
+            LuciStarlink.LOGGER.warn("LuciStarlink benchmark flush dispatch failed", throwable);
+        }
+        return ((dev.lucistarlink.light.runtime.LuxLightPublisher) lightEngine).lucistarlink$flushMarker(chunkX, chunkZ);
     }
 
     public void beginRuntimeBulkWrite() {
@@ -332,6 +426,8 @@ public final class LuxEngineController {
     }
 
     public void tickRuntime(ThreadedLevelLightEngine lightEngine, LightChunkGetter getter) {
+        this.lastLightEngine = lightEngine;
+        this.lastGetter = getter;
         if (!enabled() || !LuxConfig.enableRuntime) {
             runtimeManager.flushPendingCommits(lightEngine);
             return;

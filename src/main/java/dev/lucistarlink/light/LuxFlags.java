@@ -64,6 +64,15 @@ public final class LuxFlags {
             Boolean.parseBoolean(System.getProperty("lucistarlink.directSectionInstall", "false"));
 
     /**
+     * Wake the runtime pipeline inside the tick that produced a block change instead of at the next
+     * {@code tickRuntime}. Dispatch otherwise waits for {@code ServerChunkCache.tick}, which lands a full tick
+     * (50 ms) after a change made later in the tick (measured: the pass's own publish 55 ms after it applied,
+     * against ScalableLux's synchronous ~0.35 ms). The work itself is unchanged, only when it starts.
+     */
+    public static volatile boolean promptDispatch =
+            Boolean.parseBoolean(System.getProperty("lucistarlink.promptDispatch", "false"));
+
+    /**
      * Schedule publications on the light engine's own task list (with the engine's {@code runUpdate} doing the
      * write, its own light update pass and any wait task in one go) instead of through our private queue with
      * its coalescing delay. See {@code net.minecraft.server.level.LuciStarlinkLightEngineTaskAccess}.

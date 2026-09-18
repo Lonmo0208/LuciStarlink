@@ -104,6 +104,9 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     /** True while a drain round is executing on the light thread; used to attribute queue latency to it. */
     @Unique
     private final AtomicBoolean lucistarlink$drainRunning = new AtomicBoolean();
+    /** Set by a publish inside the current drain, so only drains that published complete a benchmark pass. */
+    @Unique
+    private boolean lucistarlink$drainPublished;
     @Unique
     private final java.util.concurrent.atomic.AtomicInteger lucistarlink$publishesInFlight =
             new java.util.concurrent.atomic.AtomicInteger();
@@ -223,6 +226,13 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
         LuxBenchmarkSupport.recordSince("lucistarlink.runtime.syncDrain", startedAt);
     }
 
+    @Override
+    public CompletableFuture<Void> lucistarlink$flushMarker(int chunkX, int chunkZ) {
+        return lucistarlink$addPostTask(chunkX, chunkZ, () -> {
+            // no-op: its only job is to complete after everything queued before it has been published
+        });
+    }
+
     @Unique
     private CompletableFuture<Void> lucistarlink$publishAsync(LuxRelightResult result, int chunkX, int chunkZ) {
         if (LuxFlags.piggybackPublish) {
@@ -317,6 +327,10 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
         }
         long startedAt = LuxBenchmarkSupport.start();
         long queueStartedAt = LuxBenchmarkSupport.start();
+        if (!result.sections().isEmpty()) {
+            // this drain actually hands light to the engine, so it is the drain that "completes" a pass's work
+            this.lucistarlink$drainPublished = true;
+        }
         for (LuxSectionData section : result.sections()) {
             if (LuxFlags.directSectionInstall) {
                 // section state first: for a section the engine does not know yet this is what creates its
@@ -539,6 +553,12 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
             throw throwable;
         } finally {
             this.lucistarlink$drainRunning.set(false);
+            if (this.lucistarlink$drainPublished) {
+                // only a drain that handed sections over completes a pass; an empty round (or one that only
+                // processed other work) must not move the benchmark's end timestamp by a tick
+                LuxBenchmarkSupport.markDrainEnd();
+                this.lucistarlink$drainPublished = false;
+            }
             batch.clear();
             this.lucistarlink$pendingLightNotifications.clear();
             this.lucistarlink$pendingLightNotificationKeys.clear();

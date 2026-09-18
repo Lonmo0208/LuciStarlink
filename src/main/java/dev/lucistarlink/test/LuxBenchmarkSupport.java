@@ -46,6 +46,27 @@ public final class LuxBenchmarkSupport {
         return RESET_EPOCH.get();
     }
 
+    /**
+     * When the light thread last finished a publish drain round, or 0 if none has run.
+     *
+     * <p>Needed to make the benchmark's per-pass number mean the same thing for both engines. The pass ends
+     * when {@code LevelLightEngine.waitForPendingTasks(chunk)} completes - which for ScalableLux is the moment
+     * its synchronous light update is done, but for us only says "the vanilla engine's own queue for that chunk
+     * is empty", because our light work runs on our scheduler and reaches the engine later. Measured: passes
+     * that published nothing in their window took 0.77-1.32 ms while a pass that published 7 sections took
+     * 0.91 ms, i.e. the reported time did not respond to our own publish volume at all. A pass therefore ends at
+     * the later of the engine's timestamp and the last drain that ran after it applied its changes.
+     */
+    private static volatile long LAST_DRAIN_END_NANOS;
+
+    public static void markDrainEnd() {
+        LAST_DRAIN_END_NANOS = System.nanoTime();
+    }
+
+    public static long lastDrainEndNanos() {
+        return LAST_DRAIN_END_NANOS;
+    }
+
     public static Snapshot snapshot() {
         if (!enabled()) {
             return new Snapshot(Map.of(), Map.of());

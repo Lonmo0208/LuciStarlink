@@ -489,6 +489,12 @@ public final class LuxServerBenchmark {
         private int passWaitPendingBits;
         /** Start of the current clean streak during the pre-measure settle window; 0 while not settling. */
         private long quiesceSettleStartNanos;
+        /** The two candidate pass ends, so the pass line shows which one governed (µs from the pass start). */
+        private long passEndFutureUs;
+        private long passEndDrainUs;
+        /** Our publish-side completion for the current pass; 0 until it completes. */
+        private java.util.concurrent.CompletableFuture<Void> passFlushMarker;
+        private volatile long passFlushMarkerNanos;
 
         private BenchmarkRun(MinecraftServer server, BenchmarkConfig config) {
             this.server = server;
@@ -828,10 +834,13 @@ public final class LuxServerBenchmark {
             }
             BlockState state = stateForPass(this.config, this.pass);
             this.passStartSnapshot = LuxBenchmarkSupport.snapshot();
-            this.currentStartNanos = System.nanoTime();
-            this.currentChanges = applyPattern(this.level, this.config, state);
+            this.currentStartNanos = System.nanoTime();            this.currentChanges = applyPattern(this.level, this.config, state);
             this.currentApplyNanos = System.nanoTime() - this.currentStartNanos;
             LuxBenchmarkSupport.record("bench.apply_pattern", this.currentApplyNanos);
+            // our own publish-side completion for this pass, so the number measures this engine's work too
+            this.passFlushMarkerNanos = 0L;
+            this.passFlushMarker = LuxServices.controller().flushRuntimeAndMarker(this.minChunkX, this.minChunkZ);
+            this.passFlushMarker.whenComplete((ignored, throwable) -> this.passFlushMarkerNanos = System.nanoTime());
             LOGGER.info("Lux light benchmark pass start {}/{} state={} changes={}",
                     this.pass + 1, this.totalPasses, state.getBlock().builtInRegistryHolder().key().location(), this.currentChanges);
             if (this.pass >= this.config.warmupPasses()) {
@@ -858,6 +867,15 @@ public final class LuxServerBenchmark {
             }
             long completedNanos = this.waitCompleteNanos;
             long endNanos = completedNanos == 0L ? System.nanoTime() : completedNanos;
+            this.passEndFutureUs = (endNanos - this.currentStartNanos) / 1000L;
+            // A pass is only complete when BOTH sides are done: the engine's own waitForPendingTasks timestamp
+            // (which for a synchronous engine like ScalableLux is the whole story) and our publish-side marker
+            // (which is the only thing that sees our light work at all - see LuxLightPublisher#lucistarlink$flushMarker).
+            long markerNanos = this.passFlushMarkerNanos;
+            if (markerNanos > endNanos) {
+                endNanos = markerNanos;
+            }
+            this.passEndDrainUs = (endNanos - this.currentStartNanos) / 1000L;
             long elapsed = endNanos - this.currentStartNanos;
             long waitNanos = Math.max(0L, endNanos - this.waitStartNanos);
             LuxBenchmarkSupport.record("bench.wait_after_apply", waitNanos);
@@ -874,10 +892,11 @@ public final class LuxServerBenchmark {
                 this.minPassNanos = Math.min(this.minPassNanos, elapsed);
                 this.maxPassNanos = Math.max(this.maxPassNanos, elapsed);
             }
-            LOGGER.info("Lux light benchmark pass {}/{} state={} changes={} {} waitTicks={}",
+            LOGGER.info("Lux light benchmark pass {}/{} state={} changes={} endFutureUs={} endDrainUs={} {} waitTicks={}",
                     this.pass + 1, this.totalPasses,
                     stateForPass(this.config, this.pass).getBlock().builtInRegistryHolder().key().location(),
-                    this.currentChanges, passDeltaLine(elapsed, this.currentApplyNanos, waitNanos), this.waitTicks);
+                    this.currentChanges, this.passEndFutureUs, this.passEndDrainUs,
+                    passDeltaLine(elapsed, this.currentApplyNanos, waitNanos), this.waitTicks);
             this.pass++;
             if (this.pass == this.config.warmupPasses()) {
                 LuxBenchmarkSupport.reset();
