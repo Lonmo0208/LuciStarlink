@@ -40,6 +40,22 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     private static final long LUCIS_PUBLISH_COALESCE_NANOS =
             Math.max(0L, Long.getLong("lucistarlink.publishCoalesceNanos", 250_000L));
 
+    /**
+     * Whether a published section also notifies its 26 neighbours (3x3x3), or only itself.
+     *
+     * <p>ScalableLux notifies exactly the sections whose visible copy changed ({@code nibble.updateVisible()} in
+     * {@code StarLightEngine.updateVisible}) and nothing else, so the fan-out is not what makes bordered light
+     * render correctly: the client's renderer dirties the neighbouring render sections itself when a light packet
+     * arrives. The fan-out costs ~6.6 posted notifications per published section here (10208 posts for 1541
+     * sections in one sky_hole run), which is the same order as the whole gap to ScalableLux on that workload.
+     *
+     * <p>Default stays "true" (the shipped behaviour) until the interleaved A/B and the client-sync case both
+     * pass with it off - a narrower notification set is only correct if the client still shows border light.
+     */
+    @Unique
+    private static final boolean LUCIS_NOTIFY_NEIGHBOURS =
+            Boolean.parseBoolean(System.getProperty("lucistarlink.notifyNeighbourSections", "true"));
+
     @Unique
     private LightChunkGetter lucistarlink$chunkSource;
     @Unique
@@ -352,6 +368,10 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
 
     @Unique
     private void lucistarlink$queueAffectedLightNotifications(LightLayer layer, SectionPos sectionPos) {
+        if (!LUCIS_NOTIFY_NEIGHBOURS) {
+            lucistarlink$queueLightNotification(layer, sectionPos);
+            return;
+        }
         for (int offsetX = -1; offsetX <= 1; offsetX++) {
             for (int offsetY = -1; offsetY <= 1; offsetY++) {
                 for (int offsetZ = -1; offsetZ <= 1; offsetZ++) {

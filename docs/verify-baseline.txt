@@ -1,4 +1,4 @@
-2a5e23cb42aac24c9b8d3b188cb613f9 *lucistarlink-1.21.1-0.1.0.jar
+39452cdb44c8b9137899ca7a2a1ff06f *lucistarlink-1.21.1-0.1.0.jar
 
 构建（发布件，不带任何 benchmark 开关）：
   ./gradlew build                      ← 正式发布用这个；互斥声明必须是 incompatible
@@ -12,6 +12,10 @@
 本次重建原因：监工更正了 LuxConfig 里 directSectionInstall 的注释（它还在引用顺序组那个没复现的
   0.87 -> 0.60 ms 数字），并补齐 README / NOTICE / CHANGELOG。行为零改动，注释进 jar 需重建。
   已核对：新注释在类文件内、"0.87 -> 0.60" 已不在；互斥声明 starlight/scalablelux/lucis 全为 incompatible。
+本次重建原因：为 `sky_hole` 提速任务（docs/TASK-PERF-SKY.md）加了两个东西 —— 基准的**每轮增量埋点**（pass 行现在打印
+  elapsedUs/applyUs/waitUs + drain/queueLat/notify/runUpd/publish 增量，此前只有整毫秒与阶段总量），以及
+  `-Dlucistarlink.notifyNeighbourSections=`（L2 开关，**默认 true = 与上一版行为完全一致**）。默认行为零改动；
+  实测结果与下一步见 TASK-PERF-SKY.md §7-§8。
 已验证（本 jar）：见 docs/HANDOVER.md「Measurement results added this session」；
   客户端同步用例证据见 mc-smoketest/clientcase-evidence/；
   交错 A/B 两组数据与显著性见 docs/SUPERVISOR-NEXT-ROUND.md §10-11。

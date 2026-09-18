@@ -459,6 +459,8 @@ public final class LuxServerBenchmark {
         private int runtimePendingBeforeMeasuredPass;
         private int worldgenPendingAfterApply;
         private int runtimePendingAfterApply;
+        /** Snapshot taken just before a pass applies its changes, so the pass line can report what that pass cost. */
+        private LuxBenchmarkSupport.Snapshot passStartSnapshot = LuxBenchmarkSupport.snapshot();
 
         private BenchmarkRun(MinecraftServer server, BenchmarkConfig config) {
             this.server = server;
@@ -784,6 +786,7 @@ public final class LuxServerBenchmark {
                 }
             }
             BlockState state = stateForPass(this.config, this.pass);
+            this.passStartSnapshot = LuxBenchmarkSupport.snapshot();
             this.currentStartNanos = System.nanoTime();
             this.currentChanges = applyPattern(this.level, this.config, state);
             this.currentApplyNanos = System.nanoTime() - this.currentStartNanos;
@@ -830,10 +833,10 @@ public final class LuxServerBenchmark {
                 this.minPassNanos = Math.min(this.minPassNanos, elapsed);
                 this.maxPassNanos = Math.max(this.maxPassNanos, elapsed);
             }
-            LOGGER.info("Lux light benchmark pass {}/{} state={} changes={} elapsedMs={} waitTicks={}",
+            LOGGER.info("Lux light benchmark pass {}/{} state={} changes={} {} waitTicks={}",
                     this.pass + 1, this.totalPasses,
                     stateForPass(this.config, this.pass).getBlock().builtInRegistryHolder().key().location(),
-                    this.currentChanges, elapsed / 1_000_000L, this.waitTicks);
+                    this.currentChanges, passDeltaLine(elapsed, this.currentApplyNanos, waitNanos), this.waitTicks);
             this.pass++;
             if (this.pass == this.config.warmupPasses()) {
                 LuxBenchmarkSupport.reset();
@@ -843,6 +846,51 @@ public final class LuxServerBenchmark {
                 }
             }
             this.phase = Phase.START_PASS;
+        }
+
+        /**
+         * Per-pass delta of the publish pipeline, in microseconds plus call/entry counts.
+         *
+         * <p>The phase totals cannot say why one pass costs twice what the next one does - whether it published
+         * more, waited longer for the drain, or simply paid an extra drain round. Those are different problems
+         * with different fixes, and the pass-to-pass spread is larger than the gap we are chasing, so it has to
+         * be attributable before anything is optimised.
+         */
+        private String passDeltaLine(long elapsedNanos, long applyNanos, long waitNanos) {
+            LuxBenchmarkSupport.Snapshot end = LuxBenchmarkSupport.snapshot();
+            LuxBenchmarkSupport.Snapshot start = this.passStartSnapshot;
+            StringBuilder line = new StringBuilder(200);
+            line.append("elapsedUs=").append(elapsedNanos / 1000L)
+                    .append(" applyUs=").append(applyNanos / 1000L)
+                    .append(" waitUs=").append(waitNanos / 1000L);
+            String[][] metrics = {
+                    {"drainUs", "lucistarlink.publish_batch.drain"},
+                    {"queueLatUs", "lucistarlink.publish_batch.queueLatency"},
+                    {"notifyUs", "lucistarlink.publish_batch.notify"},
+                    {"runUpdUs", "lucistarlink.publish_batch.runLightUpdates"},
+                    {"publishUs", "lucistarlink.publish_direct"},
+                    {"notifyPostUs", "lucistarlink.publish.notify.post"},
+            };
+            for (String[] entry : metrics) {
+                LuxBenchmarkSupport.Metric before = start.metrics().get(entry[1]);
+                LuxBenchmarkSupport.Metric after = end.metrics().get(entry[1]);
+                long nanos = (after == null ? 0L : after.nanos()) - (before == null ? 0L : before.nanos());
+                long calls = (after == null ? 0L : after.calls()) - (before == null ? 0L : before.calls());
+                line.append(' ').append(entry[0]).append('=').append(nanos / 1000L).append('/').append(calls);
+            }
+            String[][] counters = {
+                    {"drains", "lucistarlink.publish_batch.queued"},
+                    {"tasks", "lucistarlink.publish_batch.tasks"},
+                    {"sections", "lucistarlink.publish_direct.sections"},
+                    {"notifies", "lucistarlink.publish.notify.posted"},
+                    {"identical", "lucistarlink.publish.skippedIdentical.sections"},
+            };
+            for (String[] entry : counters) {
+                long before = start.counters().getOrDefault(entry[1], 0L);
+                long after = end.counters().getOrDefault(entry[1], 0L);
+                line.append(' ').append(entry[0]).append('=').append(after - before);
+            }
+            return line.toString();
         }
 
         private BenchmarkStats stats(String status, long changes, long nanos) {
