@@ -3,6 +3,7 @@ package dev.lucistarlink.test;
 import com.mojang.logging.LogUtils;
 import dev.lucistarlink.LuciStarlink;
 import dev.lucistarlink.config.LuxConfig;
+import dev.lucistarlink.light.LuxFlags;
 import dev.lucistarlink.light.engine.LuxServices;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
@@ -318,8 +319,16 @@ public final class LuxServerBenchmark {
             Files.createDirectories(parent);
         }
         String json = "{"
+                + "\"label\":\"" + escape(config.label()) + "\","
                 + "\"mode\":\"" + escape(config.mode()) + "\","
                 + "\"workload\":\"" + escape(config.workload()) + "\","
+                // the publish-path switches all change what is measured, so an independent reader of this file
+                // must be able to tell them apart without trusting anyone's summary
+                + "\"directSectionInstall\":" + LuxFlags.directSectionInstall + ","
+                + "\"worldgenHaloPublish\":" + LuxFlags.worldgenHaloPublish + ","
+                + "\"piggybackPublish\":" + LuxFlags.piggybackPublish + ","
+                + "\"promptRuntimePublish\":" + LuxFlags.promptRuntimePublish + ","
+                + "\"syncRuntimeDrain\":" + LuxFlags.syncRuntimeDrain + ","
                 + "\"lucistarlinkEnabled\":" + LuxConfig.enabled + ","
                 + "\"enableWorldgen\":" + LuxConfig.enableWorldgen + ","
                 + "\"enableRuntime\":" + LuxConfig.enableRuntime + ","
@@ -890,7 +899,7 @@ public final class LuxServerBenchmark {
         }
     }
 
-    private record BenchmarkConfig(String mode, String workload, String expectedMod, String output, int radiusChunks, int chunkSpan,
+    private record BenchmarkConfig(String label, String mode, String workload, String expectedMod, String output, int radiusChunks, int chunkSpan,
                                    int structureSize, int structureWidth, int structureHeight, int structureDepth,
                                    long maxApplyBlocks, boolean skipPreparation, boolean lightOnly,
                                    boolean trackRegionAnchorsOnly, int prepareMaxTicks,
@@ -899,6 +908,7 @@ public final class LuxServerBenchmark {
         private static BenchmarkConfig fromProperties() {
             int structureSize = intProperty("lucistarlink.benchmark.structureSize", 16);
             return new BenchmarkConfig(
+                    stringProperty("lucistarlink.benchmark.label", ""),
                     stringProperty("lucistarlink.benchmark.mode", "lucistarlink"),
                     stringProperty("lucistarlink.benchmark.workload", "block_toggle_dense"),
                     stringProperty("lucistarlink.benchmark.expectedMod", ""),
@@ -926,7 +936,7 @@ public final class LuxServerBenchmark {
         }
 
         private BenchmarkConfig withOrigin(int originX, int originZ) {
-            return new BenchmarkConfig(mode, workload, expectedMod, output, radiusChunks, chunkSpan,
+            return new BenchmarkConfig(label, mode, workload, expectedMod, output, radiusChunks, chunkSpan,
                     structureSize, structureWidth, structureHeight, structureDepth,
                     maxApplyBlocks, skipPreparation, lightOnly, trackRegionAnchorsOnly, prepareMaxTicks,
                     strictDrainBeforeMeasure, waitWorldgenDuringMeasured,

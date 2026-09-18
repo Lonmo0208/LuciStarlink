@@ -23,13 +23,21 @@ Test rig: `E:\LuciStarlin\mc-smoketest` (`fourway.sh`, `ls-run.sh`, `ls-border-s
    -PbenchmarkAllowLucis=true` and copy the result to `mc-smoketest/rig-jar.jar`. Verify with
    `unzip -p rig-jar.jar META-INF/neoforge.mods.toml | grep -A1 'modId = "lucis"'` -> must say
    `type = "discouraged"` (a plain `gradlew build` overwrites it back to `incompatible`).
-4. **Lucis 2.0 cannot coexist with LuciStarlink** (both `@Redirect` the same `setBlock` in
+   **Never copy a rig build into `dist/`**: the published artifact must say `incompatible`, otherwise a user who
+   also installs ScalableLux gets only a warning and then a crash at boot (both replace the light engine). The
+   release build is the plain `./gradlew build` with **no** `-PbenchmarkAllow*` switches; verify the two metadata
+   lines before recording the md5.
+4. **Interleaved measurement only for cross-engine claims**: run the two engines alternately, rep by rep
+   (`mc-smoketest/ab-interleaved.sh <reps> [workloads...]`), because sequential groups are not comparable and
+   the jsonl accumulates runs of many different configurations. Every run records `label` plus the publish-path
+   switches, so a third party can regroup without trusting a summary.
+5. **Lucis 2.0 cannot coexist with LuciStarlink** (both `@Redirect` the same `setBlock` in
    `LevelChunk.postProcessGeneration`), so Lucis is measured alone with its own harness (`-Dlucis.*` properties,
    `-Dlucistarlink.enabled=false` is not enough).
-5. Cross-session wall times are NOT comparable (same config measured 11 ms and 50.6 ms in different sessions).
+6. Cross-session wall times are NOT comparable (same config measured 11 ms and 50.6 ms in different sessions).
    Trust within-run stage metrics, and compare **per-pass minima** (`minPassNanos` in
    `lucistarlink-light-benchmark.jsonl`), median over >=5 repeats, for all engines alike.
-6. **Kill stray servers before a rig run**: a leftover `java @user_jvm_args.txt` process holds `logs/` and the
+7. **Kill stray servers before a rig run**: a leftover `java @user_jvm_args.txt` process holds `logs/` and the
    world directory, so the next run fails with `rm: cannot remove 'logs/latest.log': Device or resource busy` or
    crashes at boot. Find them with
    `powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | Where-Object { $_.CommandLine -like '*user_jvm_args*' }"`.

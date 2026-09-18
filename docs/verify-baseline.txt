@@ -1,12 +1,12 @@
-bcd8de8cf3b417a6931ca67f8bbf4a39 *lucistarlink-1.21.1-0.1.0.jar
+3f45fb080352bfb222eb18c420a5894f *lucistarlink-1.21.1-0.1.0.jar
 
-构建：./gradlew build -PbenchmarkAllowScalableLux=true -PbenchmarkAllowLucis=true
-      （JAVA_HOME 与 PATH 都必须指向 JDK 21；见 docs/HANDOVER.md 的构建铁律）
+构建（发布件，不带任何 benchmark 开关）：
+  ./gradlew build                      ← 正式发布用这个；互斥声明必须是 incompatible
+    （注意：rig 版要额外带 -PbenchmarkAllowScalableLux=true -PbenchmarkAllowLucis=true，
+      那会把声明改成 discouraged，只能用于 mc-smoketest 里的四路对照，绝不能进 dist/）
+  JAVA_HOME 与 PATH 都必须指向 JDK 21；见 docs/HANDOVER.md 的构建铁律
 测试：21 pass / 0 fail / 1 inherited skip
 默认（全部为默认，未开启任何实验开关）：
   region 发布路线；directSectionInstall=off、worldgenHaloPublish=on、piggybackPublish=off、
   promptRuntimePublish=off、syncRuntimeDrain=off
-已验证（本 jar）：
-  sky_hole per-pass min 中位 0.651 ms（5 轮）；dense 9.49 / block_toggle 5.25 / structure 8.40（wall）
-  运行时边界值级与 vanilla 逐位一致（含 y=100 平面逐格 diff 为零）；连续 7 次运行 0 偏差（含方块自检）
-  天空光与存档往返逐位一致；② 邻居标脏计数 59；③ runtime 边界计数全部非零、无报错
+已验证（本 jar）：见 docs/HANDOVER.md「Measurement results added this session」
