@@ -152,8 +152,8 @@ cp build/libs/lucistarlink-1.21.1-0.1.0.jar dist/lucistarlink-region-0.1.0.jar  
     2. "同包 mixin 可以拿到 `TaskType`"——**做不到**。把类放进 `net.minecraft.server.level` 会让 `lucistarlink` 模块与 `minecraft` 模块争抢同一个包，NeoForge 在模块路径上直接 `ResolutionException: Module minecraft contains package net.minecraft.server.level, module lucistarlink exports package net.minecraft.server.level to minecraft`，服务器起不来（实测踩到，jar 一换就崩）。任何"同包 mixin json"的方案都作废。
   - **提交调度的最终结论（按监工动作 A/D 重写）**：
     1. **写入只能发生在光照线程**（存储单写者），这条不变。
-    2. **"在同一轮提交"不是收益点，及时性才是**：piggyback（`runUpdate` HEAD 提交 + 一条原版任务触发）实测 **per-pass min 0.48 → 1.24 ms，外加一次 14.6 ms 卡顿**，因为它等 `tryScheduleUpdate`；私有 drain 的 250 µs 定时器反而更及时。
-    3. **真正要砍的是定时器这一跳**：`CompletableFuture.delayedExecutor` 即使延迟为 0 也要经过定时器线程——这就是早先 `publishCoalesceNanos=0` 测不出变化的原因。实现：运行时（小编辑）发布**直接投递** `taskMailbox.tell`，世界生成保留合并（吞吐优先）；开关 `promptRuntimePublish`。
+    2. **"在同一轮提交"不是收益点**：piggyback（`runUpdate` HEAD 提交 + 一条原版任务触发）实测 **per-pass min 0.48 → 1.24 ms，外加一次 14.6 ms 卡顿**，因为它要等 `tryScheduleUpdate` 才有一轮。
+    3. **"及时"本身也被实测否决**（监工动作 A 的结论修正）：把运行时发布**直接投递**到光照邮箱（绕过 `CompletableFuture.delayedExecutor`，开关 `promptRuntimePublish=true`）实测 **per-pass min 中位 0.776 → 1.114 ms（+44%）**。原因：250 µs 合并**不是成本而是收益**——它把同一波发布合并成**更少的 drain 轮次**；直接投递让每次发布各起一轮 drain，`runLightUpdates` 与通知刷新的轮数随之变多，barrier 反而排在更多任务后面。真正的杠杆是**更少的轮次 / 更少的工作**（加长合并窗口、减少发布的 section 数，或跳过引擎吸收），不是更早投递。
     4. 若仍不够，才评估"服务端线程内联算+装"的完整形态；它必须先证明 **≥3 次偏差探针 0 偏差**（服务端线程写与光照线程写在同一层竞争，有层内撕裂风险），否则不予考虑。
 - 新增配置 `lightEngineMode = region | storage`（默认 `region`），以及命令行/JVM 开关 `-Dlucistarlink.lightEngineMode=storage`。
 - 验收（storage 模式，全部满足才允许继续）：
