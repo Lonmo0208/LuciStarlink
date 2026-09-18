@@ -90,34 +90,39 @@ light thread itself (both handles are backed by the same processor mailbox), so 
 hop and not a thread wakeup; and a mixin class cannot live in `net.minecraft.server.level` under NeoForge - the
 module system rejects the split package at boot (`ResolutionException: Module minecraft contains package ...`).
 
-## Unresolved 2 (correctness, found this session): block light diverges from vanilla and is not reproducible
+## Unresolved 2 (correctness, found this session): block light is not reproducible in worldgen
 
-Symptom: in the strip scenario (`ls-border-scenario.sh gen`, chunks 0..3 then chunk 4), sky-light fingerprints are
-**bit-identical to vanilla and across runs** (including after a save/reload), while block-light fingerprints
-differ from vanilla and between runs. Vanilla itself is bit-stable across runs, including block light.
+Symptom, measured with the quiescence-gated `/lucistarlink dumplight` (20 consecutive quiet ticks, field
+`quiesceTicks=20` in the fingerprint line, `ls-border-scenario.sh gen` = strip of chunks 0..3, then chunk 4):
 
-Direction established: `enableBlock=false` (our engine computes sky only) makes the block fingerprint stable but
-*still* different from vanilla, and `enableWorldgen=false` is different again - so the divergence comes from
-**what gets published**, not from our block-light computation. Two candidate mechanisms, both about "an older
-image overwrites newer engine data":
-* halo publication from concurrent jobs is a write-write race on shared border sections (last writer wins,
-  and which one is last depends on thread timing);
-* the worldgen path publishes an image computed *before* the engine applied later changes
-  (`LevelChunk.postProcessGeneration` re-sets blocks with `updateFromNeighbourShapes` at ticking status, after
-  our relight; those changes are handled by vanilla because our runtime handler is suppressed during worldgen
-  writes), and nothing checks that the section's baseline has not moved - the runtime path has
-  `externalMarked`/`rerunBaselineMoved` for this, the worldgen path has nothing.
+| label | vanilla run A | vanilla run B | our engine (4 runs, 4 configs) | sky |
+|---|---|---|---|---|
+| `strip` (x 0..63) | `6360d66772317286` | `6360d66772317286` | 4 different values | identical in every run, and identical to vanilla |
+| `beyond` (x 48..79) | `c8017e3b2d918dc9` | `6613d2fb190f7711` | 4 different values | identical |
+| `strip_plus_beyond` | `6805a91d1b4636f4` | `1bd80f8410ff8214` | 4 different values | identical |
 
-**Caveat on the evidence**: the first version of `/lucistarlink dumplight` read the section maps directly on the
-server thread while the light thread was writing them, and reported non-deterministic block light for *every*
-configuration. The command now defers the read until the engine has had 20 consecutive quiet ticks
-(`hasLightWork()==false`, no pending runtime/worldgen work - fields `quiesceTicks=<n>` in the fingerprint line).
-All numbers above are from the quiescence-gated probe. Re-run the controls before drawing final conclusions.
+What this supports, and what it does not:
+* **Supported**: in the sub-area where vanilla is reproducible (`strip`), every one of our configurations differs
+  from vanilla *and* from itself run to run (`directSectionInstall` on and off, `worldgenHaloPublish` on and off -
+  so no single switch of ours explains it). Order-dependent block light in the worldgen path is real.
+* **Not supported** (retracted): "the direct install breaks block light". The queued route is equally unstable,
+  and the `directSectionInstall` default was already returned to off for the switch discipline, not for this.
+* **Probe limit**: `beyond` is unstable even for vanilla, so that area cannot be used as an oracle at all - some
+  of the world is still changing at read time (generation streaming, fluid/shape interactions) even though the
+  engine reports no light work. Sky light is stable everywhere, and it survives save/reload bit-exactly.
 
-Next action: 1) re-run the control matrix with the gated probe (default / `directSectionInstall=true` /
-`worldgenHaloPublish=false` / vanilla, 2 runs each) and see which of the two mechanisms survives; 2) add the
-"baseline moved" guard to the worldgen publish (skip a section whose engine value changed since extraction, or
-re-run the job); 3) only then re-check the performance numbers.
+Next action, in order:
+1. Make the scenario deterministic by construction before chasing the divergence: a flat/void world without
+   fluids and without random ticks, or read the fingerprint after chunk ticking is stopped, so that both vanilla
+   and we produce a stable oracle. Without that every conclusion drawn from these fingerprints is worthless.
+2. Then bisect the block-light divergence in the now-stable area: `enableBlock=false` (block light delegated to
+   vanilla, we publish sky only) came out *stable* in an earlier ungated run and is the right first single-variable
+   step; `enableWorldgen=false` next.
+3. Then, and only then, add the ordering guard the code is missing: a publication must not overwrite engine data
+   that is newer than the image it came from. The runtime path has `externalMarked`/`rerunBaselineMoved` for this;
+   the worldgen path publishes whatever its worker computed, in whatever order the workers finish, including into
+   halo chunks that another job may have written more recently. Candidate implementation: per-section publish
+   sequence (image age) with "skip sections a newer publisher already wrote", bounded like the coalescing map.
 
 ## Unresolved 3 (correctness): worldgen border ordering
 

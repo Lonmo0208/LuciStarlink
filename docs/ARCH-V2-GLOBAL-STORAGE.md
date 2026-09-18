@@ -199,9 +199,13 @@ cp build/libs/lucistarlink-1.21.1-0.1.0.jar dist/lucistarlink-region-0.1.0.jar  
 6. **存储层的两个隐蔽细节（2026-09-18 实测踩到）**：
    - `LayerLightSectionStorage.updatingSectionData` 带 2 项查找缓存（`DataLayerStorageMap.lastSectionKeys/lastSections`）。**直接 `setLayer` 之后必须 `clearCache()`**，否则后续 `getStoredLevel`/`getDataLayer(pos, true)` 仍会返回被替换掉的旧层，表现为"写入没生效"。
    - `queuedSections` 里的待处理层会**遮蔽**直接写入的层（`getDataLayerData` 先查 `queuedSections`）。直装时必须同时 `queuedSections.remove(sectionPos)`，否则客户端包与序列化会读到旧数据。
-7. **"谁最后写"竞态（新发现，比记账更隐蔽）**：并发的区域作业如果都往共享区块的边界 section 发布 halo，就是**写-写竞态**——最后写的赢，而谁最后写取决于线程时序。已实测：`sky_hole`/strip 场景下，同一配置连跑三次 **block 光指纹每次不同**，而纯 vanilla 两次完全一致；`enableBlock=false`（block 光交回原版、我们只发 sky）两次一致但**仍不等于 vanilla**，说明分歧出在"用较早的镜像覆盖引擎里较新的数据"这一层，而不是光照算法本身。
-   - 对策（阶段 2 必须做）：发布前校验该 section 的**基线是否移动过**（引擎现值 vs 我们计算时采用的基线），移动过就不允许用旧镜像覆盖——runtime 路径已有 `externalMarked`/`rerunBaselineMoved` 那套，worldgen 路径目前**没有**这道闸。
-   - 验收补充：**确定性**必须单列一项——同一配置连跑 2 次，指纹必须逐位相同（这是本轮唯一能抓住这类竞态的廉价探针，见 `docs/HANDOVER.md` 的 `/lucistarlink dumplight`）。
+7. **"谁最后写"竞态（新发现，比记账更隐蔽）**：并发的区域作业如果都往共享区块的边界 section 发布 halo，就是**写-写竞态**——最后写的赢，而谁最后写取决于线程时序。已实测（静默门探针）：strip 场景里 **vanilla 在 x 0..63 稳定复现**（两次逐位相同），而我们的引擎在**同一子区域 4 次运行 4 个不同值**，且与 `directSectionInstall`、`worldgenHaloPublish` 开关无关（两者都试过）——所以这是**世界生成发布顺序**的问题，不是某一刀造成的。
+   - ⚠️ 同时必须承认探针的边界：同一场景里 x 48..79 区域**连 vanilla 都不稳定**（两次不同），说明该区域在读指纹时仍在变化；凡是这类区域的指纹**不能当判定依据**。sky 光在所有运行中逐位一致、且能通过存档往返。
+   - 对策（阶段 2 必须做）：
+     1. 先让场景**天然确定**（平坦/虚空世界、无流体与随机 tick，或停 tick 后再读），否则任何结论都不可信；
+     2. 再逐项二分（`enableBlock=false` → `enableWorldgen=false`）；
+     3. 然后加**发布顺序闸**：不允许用比引擎现值更旧的镜像覆盖 —— runtime 路径已有 `externalMarked`/`rerunBaselineMoved`，worldgen 路径**完全没有**。候选实现：每 section 记录"镜像年龄"（发布序号），被更新的发布者写过的 section 直接跳过；映射要有界（照抄 coalescing map 的清扫预算）。
+   - 验收补充：**确定性**必须单列一项——同一配置连跑 2 次，指纹必须逐位相同，且只在"稳定区域"上比较（这是本轮唯一能抓住这类竞态的廉价探针，见 `docs/HANDOVER.md` 的 `/lucistarlink dumplight`）。
 8. **提交是"调度 + 时机"问题，不是"数据搬运"问题**：原版存储是**单写者**（只有光照线程能写，`ThreadedLevelLightEngine` 把每个写入都包成 `addTask`），所以"回写成本几乎为零"只对"换数组"成立，对"提交落地"不成立。而且实测表明：**触发时机比省下的一跳更重要**——用 250 µs 定时器主动 drain（单 pass 最小值 0.48–0.87 ms）优于依赖原版 `tryScheduleUpdate()` 被动触发（1.24 ms，且有 14.6 ms 停顿）。详见 §3 阶段 2。
 
 ---
