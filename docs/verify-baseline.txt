@@ -1,11 +1,14 @@
-9ff12d90979b01b807263710bde20dff *lucistarlink-1.21.1-1.1.0.jar
+4644f4aaaa1fb3af0a65415a75e0a3c2 *lucistarlink-1.21.1-1.1.0.jar
 
 构建（发布件，不带任何 benchmark 开关）：
   ./gradlew clean build                ← 正式发布用这个；互斥声明必须是 incompatible
     （注意：rig 版要额外带 -PbenchmarkAllowScalableLux=true -PbenchmarkAllowLucis=true，
       那会把声明改成 discouraged，只能用于 mc-smoketest 里的对照，绝不能进 dist/）
   JAVA_HOME 与 PATH 都必须指向 JDK 21；见 docs/HANDOVER.md 的构建铁律
-测试：29 tests / 0 failures / 0 errors / 1 inherited skip
+构建源：`master`（= 1.0.3 + 1.1 改动，**不含** V2 分支的存储接缝）。1.1 的改动先在 `v2-storage` 上提交
+（`3c43446`）再 cherry-pick 到 `master`，cherry-pick 干净无冲突；两个分支的测试数分别是 26 与 29
+（V2 分支另有 3 个存储接缝测试）。
+测试：26 tests / 0 failures / 0 errors / 1 inherited skip
 默认（全部为默认，未开启任何实验开关）：
   region 发布路线；regionChunks=1、haloChunks=1、runtimeHaloChunks=1、haloPublish=on、
   worldgenHaloPublish=on；experimentalBoundaryDeltas=off、directSectionInstall=off、
@@ -19,15 +22,16 @@
   * 正确性：发布引擎"这个 section 是否没变"的光源原本是单个 volatile 字段 —— 多作业/多维度并发时会读到别的
     世界的光源，一旦字节相同就会**跳过本来必须的发布（丢光）**。改为按线程，并在采集结束后 `remove()`，
     同时不再让工作线程钉住已卸载维度的光照引擎；
-  * 新增 `WorldgenWriteScopeTest` 5 条（29 = 原 24 + 新 5），专盯"把 volatile 快路径写成朴素布尔"会犯的错。
+  * 新增 `WorldgenWriteScopeTest` 5 条（26 = 原 21 + 新 5），专盯"把 volatile 快路径写成朴素布尔"会犯的错。
 
-性能（同场交错、5 轮、每轮最小值取中位、精确双侧 p；`ab-compare.ps1` 输出，详见 docs/TASK-PERF-SKY.md §10.12）：
-  block_toggle_border  1.308 vs 2.323 ms → 快 1.78×，p=0.0079   ✓ 显著
-  structure_cube       2.753 vs 3.749 ms → 快 1.36×，p=0.6905   （我方 2/5 轮被环境突发污染成 9.9 / 7.3 ms）
-  dense_chunk_patch    2.595 vs 2.069 ms → 慢 1.25×，p=0.0317   （修复前同会话是 1.83×；历史"dense 我们赢"未复现）
-  sky_hole             0.912 vs 0.576 ms → 慢 1.58×，p=0.0079   （与监督者那组 0.924/0.530 一致；
-                                                                 实施者 0.651/0.593 不成立于交错测量，作废）
+性能（同场交错、每轮最小值取中位、精确双侧 p；`ab-compare.ps1` 输出，详见 docs/TASK-PERF-SKY.md §10.12）：
+  block_toggle_border  1.308 vs 2.323 ms → 快 1.78×，p=0.0079   ✓ 显著（5 轮）
+  structure_cube       2.753 vs 3.749 ms → 快 1.36×，p=0.6905   （5 轮；我方 2/5 轮被环境突发污染成 9.9 / 7.3 ms）
+  dense_chunk_patch    2.595 vs 2.069 ms → 慢 1.25×，p=0.0317   （5 轮；修复前同会话是 1.83×）
+  sky_hole             0.912 vs 0.576 ms → 慢 1.58×，p=0.0079   （5 轮；与监督者那组 0.924/0.530 一致）
   → 对外表述：**两个负载赢、两个输**，不是"三项领先"。
+  来源说明：上面这组 5 轮是在**带 V2 读接缝**的构建上测的（`lightEngineMode=region` 默认，功能等价于 1.0.3
+  行为 + 1.1 修复），随后在 `master`（无接缝）上跑了一组 3 轮确认，结论方向一致，见 §10.12 末尾。
 
 互操作（详见 docs/HANDOVER.md 未解决项 4）：
   C2ME `c2me-neoforge-mc1.21.1-0.4.0-alpha.0.122.jar`：同一 `gen` 场景同 seed 跑两次（无/有 C2ME），
@@ -35,7 +39,7 @@
   Generator Accelerator 仍未测（无 jar）。
 
 发布前验证：
-  * 29 项差分/单元测试全绿（0 失败 0 错误 1 继承跳过）；
+  * 26 项差分/单元测试全绿（0 失败 0 错误 1 继承跳过）；
   * `verify.sh` 验收门：构建 + 测试通过、rig 元数据正确、halo / externalRefresh 正确性证据在、我方日志 0 错误；
   * 相邻成对探针（同一世界快照、同一次运行时边界编辑）：无流体气层带（y 90~112）与原版逐位一致
     （edit / edit_border 两个标签）；全列 block 指纹两侧都不同，且原版自己跨会话也不同 → 不是判据；
