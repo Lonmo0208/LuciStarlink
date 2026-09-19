@@ -11,10 +11,23 @@ public final class LuxScheduler implements AutoCloseable {
      * Region jobs retain their change records and the chunks they were captured
      * against, so the queue is bounded and callers requeue when a submit is refused.
      */
-    private static final int MAX_QUEUED_JOBS = Math.max(4,
-            Integer.getInteger("lucistarlink.runtime.maxQueuedJobs", 0) > 0
-                    ? Integer.getInteger("lucistarlink.runtime.maxQueuedJobs")
-                    : 32);
+    private static final int MIN_QUEUED_JOBS = 4;
+
+    /**
+     * 队列上限。**系统属性只读一次**（原来读了两次：一次判断、一次取值），而且配置值低于下限时**打一行警告**再抬到下限
+     * —— 原来的写法是静默钳制，运维改了 {@code -Dlucistarlink.runtime.maxQueuedJobs=1} 却完全看不到它被忽略。
+     */
+    private static final int MAX_QUEUED_JOBS;
+
+    static {
+        int configured = Integer.getInteger("lucistarlink.runtime.maxQueuedJobs", 0);
+        if (configured > 0 && configured < MIN_QUEUED_JOBS) {
+            dev.lucistarlink.LuciStarlink.LOGGER.warn(
+                    "LuciStarlink: maxQueuedJobs={} is below the minimum of {}, using {} instead",
+                    configured, MIN_QUEUED_JOBS, MIN_QUEUED_JOBS);
+        }
+        MAX_QUEUED_JOBS = configured > 0 ? Math.max(MIN_QUEUED_JOBS, configured) : 32;
+    }
 
     private final LinkedBlockingQueue<LuxJob> queue = new LinkedBlockingQueue<>(MAX_QUEUED_JOBS);
     private final ExecutorService workers;
