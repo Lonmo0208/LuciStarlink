@@ -106,7 +106,9 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     private final AtomicBoolean lucistarlink$drainRunning = new AtomicBoolean();
     /** Set by a publish inside the current drain, so only drains that published complete a benchmark pass. */
     @Unique
-    private boolean lucistarlink$drainPublished;
+    /** 基准用：本轮 drain 是否真的交给了引擎。跨线程写（服务器线程的内联 drain / 光照线程的批次 drain）
+     *  + 服务器线程读，因此必须是 volatile —— 与 1.0.0 给 publishedThisTick 的修法一致。 */
+    private volatile boolean lucistarlink$drainPublished;
     @Unique
     private final java.util.concurrent.atomic.AtomicInteger lucistarlink$publishesInFlight =
             new java.util.concurrent.atomic.AtomicInteger();
@@ -363,7 +365,7 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
                 // V3 M3：在「小改动同步路径」里，对引擎**已经认识**的 section 不再登记状态 —— 登记会让引擎在
                 // 自己的 pass 里处理该 section，于是它的任务队列在负载下空不了，pass 就要多等一个 tick（实测）。
                 // 只同步路径跳过；其余路径一字不动。
-                if (!this.lucistarlink$syncSmallEditDrain
+                if (!this.lucistarlink$syncSmallEditDrain.get()
                         || lucistarlink$currentLayerBytes(section.layer(), section.sectionPos()) == null) {
                     super.updateSectionStatus(section.sectionPos(), false);
                 }
@@ -653,7 +655,8 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     /** V3 M3：为真表示正处在「小改动同步路径」里 —— 该路径下对引擎已认识的 section 跳过 updateSectionStatus，
      *  让引擎自己的任务队列保持空闲（实测那是 pass 在有负载的机器上仍要多等一个 tick 的最后一笔）。 */
     @Unique
-    private boolean lucistarlink$syncSmallEditDrain;
+    private final ThreadLocal<Boolean> lucistarlink$syncSmallEditDrain =
+            ThreadLocal.withInitial(() -> Boolean.FALSE);
 
     /**
      * 服务器线程直提：与 {@link #lucistarlink$drainQueuedLightTasks()} 同样的搬运，但在**调用线程**上做，
@@ -672,7 +675,7 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     @Override
     public void lucistarlink$drainInlineForced() {
         long startedAt = LuxBenchmarkSupport.start();
-        this.lucistarlink$syncSmallEditDrain = true;
+        this.lucistarlink$syncSmallEditDrain.set(Boolean.TRUE);
         ArrayDeque<LuxQueuedLightTask> batch = this.lucistarlink$publishBatch;
         batch.clear();
         synchronized (this.lucistarlink$publishLock) {
@@ -701,7 +704,7 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
             LuxBenchmarkSupport.recordSince("lucistarlink.publish_batch.inlineDrain", startedAt);
         } finally {
             this.lucistarlink$drainRunning.set(false);
-            this.lucistarlink$syncSmallEditDrain = false;
+            this.lucistarlink$syncSmallEditDrain.remove();
         }
     }
 
