@@ -40,9 +40,6 @@ It is **not** a scheduler over vanilla light tasks and **not** a Starlight fork:
 > Wall time (the whole run rather than the best pass) tells the same story: 1.5–4.9× faster than vanilla and
 > parity on `sky_hole`; 1.3–2.5× faster than ScalableLux on the two workloads that matter most, and behind on
 > `dense_chunk_patch` and `sky_hole` — where we sit at vanilla level.
-> that one workload is structural: it never hands sections to the light engine at all, which is what the V2
-> storage mode ([docs/ARCH-V2-GLOBAL-STORAGE.md](docs/ARCH-V2-GLOBAL-STORAGE.md), plan in
-> [docs/V2-PLAN.md](docs/V2-PLAN.md)) exists for.
 > Absolute numbers drift up to ~40% between groups of one session (and the ratios by roughly as much), so **only
 > same-run interleaved comparisons count** — see [docs/SUPERVISOR-NEXT-ROUND.md](docs/SUPERVISOR-NEXT-ROUND.md) §10–11.
 > The 1.0.0 correctness fixes were verified performance-neutral by a same-session interleaved A/B of the two jars
