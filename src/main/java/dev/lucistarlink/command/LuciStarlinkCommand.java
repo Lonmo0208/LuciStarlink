@@ -19,6 +19,9 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
  */
 @EventBusSubscriber(modid = LuciStarlink.MODID)
 public final class LuciStarlinkCommand {
+    /** 一次刷新命令最多扫到多远（方块坐标的区块半径）；更大的范围请用 forceLightIncorrectOnSave。 */
+    private static final int MAX_RELIGHT_RADIUS_CHUNKS = 256;
+
     private LuciStarlinkCommand() {
     }
 
@@ -44,8 +47,65 @@ public final class LuciStarlinkCommand {
                             LuxFlags.denseIncremental, LuxFlags.inlineRuntime)), false);
                     return 1;
                 }))
+                .then(relightCommand())
                 .then(dumpLightCommand())
                 .then(dumpPlaneCommand());
+    }
+
+    /**
+     * 全局刷新本维度已加载区块的光照：/{@code lucistarlink relight [radiusChunks]}
+     *
+     * <p>存在的理由是一次真实的换模组事故：世界上一次是由另一个光照引擎（ScalableLux）保存的，切到我们之后
+     * 光源只亮自己那一格 —— 因为那段光照是**带着未完成传播**被写盘的，而它同时被标成"光照已计算"，于是没有任何
+     * 东西会在加载时重算它（重挖重放能修，正是因为那会弄脏 section 触发运行期重算）。这个方法把区块标成"光照未
+     * 计算"并交给引擎重算：走的就是区块生成时用的同一条路（{@code ThreadedLevelLightEngine#lightChunk}，我们
+     * 注入的入口），因此跨区光环、外部刷新这些保护全部照旧生效。标记本身会写进存档，所以即便某个作业失败，下次
+     * 加载仍然会重算，不会留下永久黑块。
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> relightCommand() {
+        return Commands.literal("relight")
+                .executes(context -> relight(context, -1))
+                .then(Commands.argument("radiusChunks", com.mojang.brigadier.arguments.IntegerArgumentType.integer(0))
+                        .executes(context -> relight(context,
+                                com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "radiusChunks"))));
+    }
+
+    private static int relight(com.mojang.brigadier.context.CommandContext<CommandSourceStack> context, int radiusChunks) {
+        CommandSourceStack source = context.getSource();
+        net.minecraft.server.level.ServerLevel level = source.getLevel();
+        net.minecraft.server.level.ServerChunkCache chunkSource = level.getChunkSource();
+        net.minecraft.server.level.ThreadedLevelLightEngine lightEngine = chunkSource.getLightEngine();
+        net.minecraft.core.BlockPos origin = net.minecraft.core.BlockPos.containing(source.getPosition());
+        int originChunkX = origin.getX() >> 4;
+        int originChunkZ = origin.getZ() >> 4;
+        // 已加载区块只能按坐标问：1.21.1 的 ServerChunkCache 没有枚举已加载区块的公开 API，而 getChunkNow 是
+        // 现成的、我们自己在 onBlockStateChange 里也在用的查询方式。半径因此是必须的上限，未加载的区块由
+        // forceLightIncorrectOnSave 那条路覆盖（它作用于写盘，重启后连未加载的区块一起重算）。
+        int radius = Math.min(Math.max(radiusChunks, 0), MAX_RELIGHT_RADIUS_CHUNKS);
+
+        int queued = 0;
+        for (int chunkX = originChunkX - radius; chunkX <= originChunkX + radius; chunkX++) {
+            for (int chunkZ = originChunkZ - radius; chunkZ <= originChunkZ + radius; chunkZ++) {
+                net.minecraft.world.level.chunk.LevelChunk chunk = chunkSource.getChunkNow(chunkX, chunkZ);
+                if (chunk == null) {
+                    continue;
+                }
+                chunk.setLightCorrect(false);
+                lightEngine.lightChunk(chunk, true);
+                queued++;
+            }
+        }
+
+        final int total = queued;
+        final int usedRadius = radius;
+        source.sendSuccess(() -> Component.literal(String.format(java.util.Locale.ROOT,
+                "LuciStarlink: queued a full light recompute for %d loaded chunk(s) in %s within %d chunk(s) "
+                        + "(max %d). Each job publishes when it finishes, so a big radius takes a while; the chunks "
+                        + "stay marked as needing light, so even a failed job is retried on the next load. For the "
+                        + "whole world including unloaded chunks use forceLightIncorrectOnSave + save-all flush + "
+                        + "restart.",
+                total, level.dimension().location(), usedRadius, MAX_RELIGHT_RADIUS_CHUNKS)), true);
+        return total;
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> dumpPlaneCommand() {

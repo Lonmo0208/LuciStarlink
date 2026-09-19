@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.1 — `/lucistarlink relight`: after switching engines, light that nothing would ever recompute
+
+A server that had been running ScalableLux and then switched to this mod came up with light sources lighting only
+their own block: the saved light had been written **with propagation still pending** while being marked as
+complete, and nothing relights a chunk that loads as light-complete, so the missing spread stayed missing until the
+block was broken and replaced (which dirties the section and wakes the runtime path). The save-side safety added in
+1.0.0 covers chunks with *our* pending work, but it cannot see a foreign engine's pending work. Two halves:
+
+* **`/lucistarlink relight [radiusChunks]`** (permission level 2): marks the loaded chunks of the current dimension
+  within the radius as light-incorrect and hands each one to the engine's own `lightChunk` path — the same path
+  chunk generation uses, so cross-region halo publication and the external-section refresh apply unchanged. The scan
+  uses `getChunkNow` because 1.21.1 has no public way to enumerate loaded chunks, hence a radius (capped at 256).
+  Because the marking is written into the save, a job that fails is retried on the next load instead of leaving a
+  permanent black patch. Verified in a dev server: `relight 2` queued 25 chunks, no exceptions.
+* For the whole world **including chunks that are not loaded**: set `forceLightIncorrectOnSave=true` (config, or
+  `-Dlucistarlink.forceLightIncorrectOnSave=true`), run `/save-all flush`, then restart **without** the switch —
+  every saved chunk comes back marked as needing light and is recomputed on load. Leaving it on relights everything
+  on every boot, so use it as a one-shot.
+
 ## 1.1.0 — the per-change guard stops paying for the benchmark, and the publish source stops being global
 
 ### Performance: the block-change path (which is where `dense_chunk_patch` was losing)

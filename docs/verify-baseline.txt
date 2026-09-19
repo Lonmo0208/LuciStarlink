@@ -1,4 +1,4 @@
-4644f4aaaa1fb3af0a65415a75e0a3c2 *lucistarlink-1.21.1-1.1.0.jar
+fdc38a7b63c84b2c8ee183cc5ed8af22 *lucistarlink-1.21.1-1.1.1.jar
 
 构建（发布件，不带任何 benchmark 开关）：
   ./gradlew clean build                ← 正式发布用这个；互斥声明必须是 incompatible
@@ -14,6 +14,11 @@
   worldgenHaloPublish=on；experimentalBoundaryDeltas=off、directSectionInstall=off、
   piggybackPublish=off、promptRuntimePublish=off、syncRuntimeDrain=off、
   -Dlucistarlink.notifyNeighbourSections 默认 true、-Dlucistarlink.promptDispatch 默认 false
+
+1.1.1 追加（用户服务器上的真实事故，换模组后光只亮一格）：`/lucistarlink relight [半径]` 已加入并在开发服冒烟
+  通过（半径 2 → 25 个已加载区块入队、无异常）；`forceLightIncorrectOnSave` 那条路覆盖未加载区块。README 加了
+  中文排障小节。原因见 CHANGELOG 1.1.1：换引擎时那批光照是「带未完成传播」被写盘却标成已完成的，而没有任何引擎
+  会重算一个自称光照已完成的区块。
 
 1.1.0 的内容（详见 CHANGELOG.md / docs/RELEASE-1.1.md / docs/TASK-PERF-DENSE.md）：
   * 改方块路径的守卫开销：`checkBlock` 三段注入合并为一段（一次改动只问守卫一次）、背压不再无条件读时钟

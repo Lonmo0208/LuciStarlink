@@ -110,6 +110,25 @@ On a machine whose TLS chain only lives in the OS certificate store, set
 `JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStoreType=WINDOWS-ROOT` before building, otherwise dependency
 downloads fail with `PKIX path building failed`.
 
+## 换光照模组之后「方块只亮自己那一格」
+
+**原因**：世界上一次是由另一个光照引擎（例如 ScalableLux / Starlight）保存的，那段光照是**带着未完成的传播**
+被写盘的，但存档把它标成了「光照已计算」。任何引擎都不会去重算一个加载时自称光照已完成的区块，所以缺掉的那圈
+光就永久缺着 —— 重挖重放能修好，正是因为那会让区块变脏、触发重算。
+
+**两种修法**（1.1.1 起都可用）：
+
+1. **就地刷新某片区域**：`/lucistarlink relight [半径区块数]`（需要权限等级 2）。它把该维度半径内**已加载**的
+   区块标成「光照未计算」，并交给引擎自己的 `lightChunk` 路径重算 —— 就是区块生成时走的同一条路，跨区光环与
+   外部刷新照旧生效。半径默认 256、上限 256（1.21.1 没有枚举已加载区块的公开接口，只能按坐标扫）。标记会写进
+   存档，所以某个作业失败也会在下次加载时重试，不会留下永久黑块。
+2. **整个存档连未加载的区块一起修**：把 `forceLightIncorrectOnSave` 设为 `true`（配置文件里改，或启动参数
+   `-Dlucistarlink.forceLightIncorrectOnSave=true`），进服后执行 `/save-all flush`，然后**去掉这个开关重启** ——
+   每个被保存过的区块下次加载都会重算光照。开着不关会让每次开服都全量重算，所以只当一次性开关用。
+
+**以后换模组**：先用旧模组正常关服，换上新模组后按第 2 条做一次（开开关 → `save-all flush` → 关开关重启），
+就不会再碰到这个现象。
+
 ## License and attribution
 
 **LuciStarlink is by Lonmo** — Copyright (c) 2026 Lonmo.
