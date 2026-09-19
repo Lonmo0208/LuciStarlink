@@ -1,5 +1,8 @@
-f08b4ba59431b25165fc5fac8c780375 *lucistarlink-1.21.1-1.2.0.jar
-（1.2.0 = 1.1.5 的重启丢光修复 + 客户端光照探针/接管（**默认关闭**，实测收益不成立，见
+1e243acb5e85277cb0d79dd8a4c9a112 *lucistarlink-1.21.1-1.2.1.jar
+（1.2.1 = 1.2.0 + 一个真 bug 的修复：`lucistarlink$installSection` 在**没有光照引擎的层**（无方块光的维度，
+ listener 是 DummyLightLayerEventListener）会抛 ClassCastException；只有开启 directSectionInstall 才走到，
+ 是**探针闸**在翻默认之前抓到的（见 docs/TASK-PERF-SKY.md §10.14）。修复后探针 3/3 逐位一致、异常归零。
+ 1.2.0 = 1.1.5 的重启丢光修复 + 客户端光照探针/接管（**默认关闭**，实测收益不成立，见
  docs/ARCH-V2-CLIENT-LIGHTING.md §0）；1.1.5 那条修复的验收见 docs/BUG-SAVE-LIGHT-TRUNCATION.md）
 
 构建（发布件，不带任何 benchmark 开关）：

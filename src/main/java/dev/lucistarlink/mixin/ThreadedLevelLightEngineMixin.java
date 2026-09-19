@@ -389,8 +389,14 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void lucistarlink$installSection(LightLayer layer, SectionPos sectionPos, net.minecraft.world.level.chunk.DataLayer dataLayer) {
         Object listener = super.getLayerListener(layer);
+        // 没有光照引擎的层（例如无方块光的维度）拿到的是 DummyLightLayerEventListener，它没有 storage 可写。
+        // 实测：在 directSectionInstall 路径上会抛 ClassCastException（Worker 线程，被 Util 捕获后只留一行日志），
+        // 所以这里必须先认类型 —— 没有引擎就没什么可装的，直接返回就是正确行为。
+        if (!(listener instanceof LightEngineAccessor engineAccessor)) {
+            return;
+        }
         LayerLightSectionStorageAccessor storage =
-                (LayerLightSectionStorageAccessor) (Object) ((LightEngineAccessor) listener).lucistarlink$storage();
+                (LayerLightSectionStorageAccessor) (Object) engineAccessor.lucistarlink$storage();
         long packedPos = sectionPos.asLong();
         net.minecraft.world.level.lighting.DataLayerStorageMap updating =
                 (net.minecraft.world.level.lighting.DataLayerStorageMap) storage.lucistarlink$updatingSectionData();
