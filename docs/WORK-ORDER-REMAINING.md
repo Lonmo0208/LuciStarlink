@@ -67,15 +67,23 @@ pass 时间零变化）。它真正的用武之地有两个：
 **待做（下一轮，按此清单执行）**：
 
 1. **删除 `BorderDeltaSupport` + `experimentalBoundaryDeltas`**（默认关的死原型，被否决且已知会振荡）。
-   **引用图（已摸清，直接照做）**：
-   - `light/engine/BorderDeltaSupport.java`（162 行，整个删）；
-   - `config/LuxConfig.java`：5 处（`define`、字段、`sync()`、`applyOverrides`、校验）+ `light/LuxFlags.java` 1 处；
-   - `light/engine/LuxRelighter.java`：`BoundaryDeltaSink` 接口、`sinkWrapper`，以及**4 个调用点**（成对出现
-     `snapshotBorder` / `emitBoundaryDeltas`，且都已被标志位包住）——注意 `computeRuntimeRegion(...)` 的
-     `deltaSink` 参数要一并摘掉，会牵动该方法的签名与调用方；
-   - `test/.../CrossRegionDifferentialTest.java` 直接用了 `BorderDeltaSupport.snapshotBorder/emitBoundaryDeltas`
-     —— 删除后该测试的这部分要一并去掉；
-   - **验收**：26 项测试全绿 + 四项工作负载同场交错零回归（删除本身应当零行为变化，因为默认关闭）。
+   **完整引用图（本轮摸全，比早先那份深一层 —— 照此执行）**：
+   - `light/engine/BorderDeltaSupport.java`（162 行，整个删；内含 `BoundaryDeltaSink` 接口、`snapshotBorder`、
+     `emitBoundaryDeltas`）；
+   - `config/LuxConfig.java`：5 处（第 106/108 行的 key、188 行字段、234 行 `sync()`、258 行 `applyOverrides`、
+     275 行把 `LuxFlags.boundaryDeltas` 镜像过去）；`light/LuxFlags.java`：2 处（28–29 行）+ 16 行的注释说明；
+   - `light/engine/LuxRelighter.java`：`borderScratch`（34）、`BoundaryDeltaSink` 接口（41）、`sinkWrapper`（168）、
+     两个方法签名里的参数字段（390、429）、透传调用（411）、4 组「快照 + 守卫块里的 emit」（450/467、479/498、
+     514/527、569）；
+   - **深一层（这才是要独立一轮的原因）**：`RuntimeRegionBatch` 带 `boundaryDeltas` 字段（构造参数 + `isEmptyDeltaSet`）、
+     `RuntimeUpdateQueue.mergeDeltas`（145）、`LuxRuntimeManager` 的 incoming 合并（547–548）、
+     `LuxRelighter.applyIncomingBoundaryDeltas`（577–584）会调
+     `skyLightEngine.applyBoundaryDeltas(...)` / `blockLightEngine.applyBoundaryDeltas(...)`
+     —— 原型一直穿到**光照引擎计算类**里，那两处也要一并摘掉；
+   - `test/.../CrossRegionDifferentialTest.java`：5 处（29 行注释、53 行把 `LuxFlags.boundaryDeltas` 置 true、
+     275/291/310/313 行直接调 `BorderDeltaSupport.snapshotBorder/emitBoundaryDeltas`）。
+   ⇒ 这是跨「发布层 + 运行时批/队列 + 光照引擎」的删除，**必须独立一轮、改完立即跑 26 测试 + 四项交错**
+   （预期零行为变化，因为默认关闭；但管线是这个项目出过两次真 bug 的地方，不许赶工）。
 2. **`haloChunks` 与 `runtimeHaloChunks` 的命名歧义**：改善两处配置注释（世界生成 vs 运行期），
    **不要改键名**（改键会让已有配置失效）。
 3. **发布光源改成显式参数**（让 worldgen 路径也能跳过未变 section）—— **不是清理**：它改变已测行为，必须单独做 A/B。
