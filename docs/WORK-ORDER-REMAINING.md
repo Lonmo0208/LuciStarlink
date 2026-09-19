@@ -101,6 +101,29 @@ pass 时间零变化）。它真正的用武之地有两个：
 （Starlight 能共存是因为 Sodium 为它写了专门兼容路径 —— 那份成本由 Sodium 承担）。
 先量内存水位与包字节数，不显著就不付这份成本。
 
+## 7. 删除 `BorderDeltaSupport`（就绪，照抄执行；**必须用文件工具，勿用 sed/perl 拼多行**）
+
+**教训**：本会话用 sed/perl 改多行 Java **失败两次**（M3 括号未配平 ✗），改用文件工具一次成功 ✓。
+建议**两个绿色检查点**：先让 `LuxRelighter` 不再引用该类（类变成孤儿 ✓ 构建绿 ✓），再删类与配置 ✓ 构建绿 ✓。
+
+1. **`LuxRelighter`（先做，多行处用 Edit 工具）**：
+   - 删 `public interface BoundaryDeltaSink extends BorderDeltaSupport.BoundaryDeltaSink {}`（约 41 行）；
+   - 删 `sinkWrapper(...)`（约 168 行）；
+   - 删 4 组「`byte[] borderBefore = deltaSink != null && LuxFlags.boundaryDeltas ? BorderDeltaSupport.snapshotBorder(...) : null;`
+     + 紧随其后的 `if (borderBefore != null) { BorderDeltaSupport.emitBoundaryDeltas(...); }`」（约 450/466-468、479/497-499、514/526-528、568-570 行）；
+   - 两个方法签名里的 `BoundaryDeltaSink deltaSink` 参数（约 390、429 行）与透传调用（约 411 行）；
+   - `applyIncomingBoundaryDeltas(...)`（约 577-584 行）里对
+     `skyLightEngine.applyBoundaryDeltas(...)` / `blockLightEngine.applyBoundaryDeltas(...)` 的调用；
+   - **构建** → 26 测试全绿 ✓（此时类已无引用 ✓）。
+2. **删本体**：`git rm src/main/java/dev/lucistarlink/light/engine/BorderDeltaSupport.java`（162 行）；
+3. **`LuxFlags`**：删 `boundaryDeltas` 字段（约 28-29 行）与第 16 行的说明；
+4. **`LuxConfig`**：5 处（`BOUNDARY_DELTAS` 定义约 106-108 行 / 字段约 188 行 / `sync()` 约 234 行 /
+   `applyOverrides` 约 258 行 / 把 `LuxFlags.boundaryDeltas` 镜像过去的约 275 行）；
+5. **`CrossRegionDifferentialTest`**：5 处（29 行注释 / 53 行 `LuxFlags.boundaryDeltas = true` /
+   275、291、310、313 行直接调 `BorderDeltaSupport.snapshotBorder/emitBoundaryDeltas`）；
+6. **光照引擎层**（`LuxBlockLightEngine` / `LuxSkyLightEngine`）：删 `applyBoundaryDeltas(...)` 方法（若无调用者 ✓）；
+7. **验收**：`./gradlew build`（26 测试 ✓）+ 四项工作负载同场交错**零回归** ✓（默认关的死代码 ⇒ 预期零行为变化 ✓）。
+
 ## 4. 其它仍未做（低优先，记着就行）
 
 **已做（1.2.3 之后的清理轮）**：`LuxRuntimeManager` 里那处孤立 javadoc（峰值字段上方留着一块属于旧遥测视图的
