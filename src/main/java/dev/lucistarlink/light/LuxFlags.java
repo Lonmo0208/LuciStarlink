@@ -26,6 +26,8 @@ public final class LuxFlags {
     public static volatile boolean inlineRuntime =
             Boolean.parseBoolean(System.getProperty("lucistarlink.experimentalInlineRuntime", "true"));
     /** V3 M1：小批量改动走「同线程算完并写库、不等待」的新路径（默认关，先只计量不改变行为）。 */
+    /** 「世界生成写入进行中」的全局镜像：同步小改动路径必须避开世界生成（两个写者会卡死，实测过）。 */
+    public static volatile boolean worldgenWriting = false;
     public static volatile boolean syncSmallEdits =
             Boolean.parseBoolean(System.getProperty("lucistarlink.syncSmallEdits", "false"));
     public static volatile boolean boundaryDeltas =

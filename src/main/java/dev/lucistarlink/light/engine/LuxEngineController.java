@@ -527,11 +527,17 @@ public final class LuxEngineController {
 
     public void beginWorldgenWrite() {
         worldgenWriteScope.begin();
+        dev.lucistarlink.light.LuxFlags.worldgenWriting = worldgenWriteScope.anyOpen();
     }
+
+
+
 
     public void endWorldgenWrite() {
         worldgenWriteScope.end();
+        dev.lucistarlink.light.LuxFlags.worldgenWriting = worldgenWriteScope.anyOpen();
     }
+
 
     private boolean isWorldgenWriteActive() {
         return worldgenWriteScope.isActive();

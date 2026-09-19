@@ -271,7 +271,9 @@ public final class LuxRuntimeManager implements AutoCloseable {
         LuxBenchmarkSupport.count("lucistarlink.runtime.drain.records", drained);
         // V3 M1：只在这一 tick 的改动是「小批量」且 regionChunks==1 时走同步路径（实测单 tick 159~267 条记录，
         // 每个方块改动约生成 6 条）。大改动继续走下面的异步区域路径 —— 它在健康窗口里更快。
-        boolean syncSmallEditTick = LuxFlags.syncSmallEdits && drained > 0 && drained <= 512 && regionChunks == 1;
+        // 必须避开世界生成：实测两个写者（世界生成路径 + 同步路径）会让 prepare 阶段卡死。
+        boolean syncSmallEditTick = LuxFlags.syncSmallEdits && !LuxFlags.worldgenWriting
+                && drained > 0 && drained <= 512 && regionChunks == 1;
         if (syncSmallEditTick) {
             LuxBenchmarkSupport.count("lucistarlink.syncSmallEdits.routed");
         }

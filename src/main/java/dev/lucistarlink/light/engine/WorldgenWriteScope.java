@@ -46,6 +46,11 @@ final class WorldgenWriteScope {
         return depth.get() > 0;
     }
 
+    /** 是否有任何线程正处于作用域内（给「世界生成进行中」的全局镜像用）。 */
+    boolean anyOpen() {
+        return scopesInFlight;
+    }
+
     void reset() {
         depth.remove();
     }
