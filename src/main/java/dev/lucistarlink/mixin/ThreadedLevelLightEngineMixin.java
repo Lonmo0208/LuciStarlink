@@ -143,6 +143,15 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
             return;
         }
 
+        // 区块自称「光照已完成」= 盘上那份光照是权威的，不要重算它。这是必须有的一道闸：世界生成出来的区块
+        // 是「未完成」（false），照旧走下面的重算；而从盘上加载、带着自己光照的区块（true）一旦被我们重算，
+        // 我们算出来的就是「只有光源自己那一格」的坏场（加载时序里引擎还没有那份数据可作传播基线），再盖回去
+        // 就等于把好数据毁掉 —— 实测：加这道闸之前，同一份世界 gen→reload 方块光指纹三组全变；关掉本路径后
+        // 三组逐位相同；闸本身也让 gen→reload 三组逐位相同（对照：引擎关闭时本来就逐位相同）。
+        if (chunk.isLightCorrect()) {
+            return;
+        }
+
         long startedAt = LuxBenchmarkSupport.start();
         ChunkPos chunkPos = chunk.getPos();
         chunk.setLightCorrect(false);
@@ -344,6 +353,12 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
             } else {
                 super.queueSectionData(section.layer(), section.sectionPos(), section.dataLayer());
                 super.updateSectionStatus(section.sectionPos(), false);
+                // 写盘与发包读的是 visibleSectionData，而 queueSectionData 只填 updatingSectionData，靠引擎
+                // 自己的更新周期去提升。既然我们替换了引擎、那条提升路径并不保证为这些 section 跑过，写盘就会
+                // 拿到旧的（常常是全空的）那一份 —— 实测：加了这一步之前，同一份世界重启后方块光指纹三组全变，
+                // 关掉引擎的对照三组逐位不变。两份都写，游戏内与存盘才是同一份数据（installSection 就地覆盖，
+                // 不替换对象，遵守光照线程仍持有该对象的约束）。
+                lucistarlink$installSection(section.layer(), section.sectionPos(), section.dataLayer());
             }
         }
         LuxBenchmarkSupport.recordSince("lucistarlink.publish_direct.queueData", queueStartedAt);
