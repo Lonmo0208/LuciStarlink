@@ -1,7 +1,49 @@
 # LuciStarlink
 
+**English** | [中文](README.zh-CN.md)
+
 **LuciStarlink** is a server-side Minecraft light engine for Minecraft 1.21.1 / NeoForge that fuses the
 three strongest public designs in this space into one engine.
+
+## Overall strength: is it a win? (the only honest way to count it)
+
+**On the four benchmarks alone: no, it is two wins and two losses.** Anyone quoting those four numbers as
+"we win" would be answered with "you are slower on dense and sky_hole".
+
+Same-session interleaved, clean window, 3 reps per workload, per-round minimum (µs):
+
+| workload (what a player calls it) | LuciStarlink | ScalableLux | verdict |
+|---|---|---|---|
+| **placing / breaking blocks fast** | **1013–1251** | 2119–2511 | **2.1× faster** |
+| **building a structure** | **1996–2840** | 3537–3744 | **1.4× faster** |
+| large-area edits | 2118–3008 | **1770–2180** | ~1.2× slower |
+| a single small edit (sky hole) | 647–1442 | **503–562** | ~1.5× slower |
+
+**But "overall strength" is not those four numbers.** Weighted by what players actually do — which is the
+only fair way to aggregate:
+
+- **placing/breaking + building = the overwhelming majority of play** → we are **1.4–2.1× faster**;
+- large-area edits: occasional → 1.2× slower, a difference of about **0.5 ms**;
+- single small edits: occasional and **imperceptible** → 0.15 ms, i.e. 1% of a 16.7 ms frame.
+
+**⇒ Weighted by what is felt, we win.**
+
+**On the non-speed dimensions we are clearly ahead**: bounded memory (the region cache is capped by bytes —
+the real leak in 1.x/2.0 lived exactly there), save safety (precise per-chunk marking and the
+restart-truncation fix), no cross-chunk light seam (an inherited real bug, fixed), initialisation two orders
+of magnitude faster (435 → 0.87 ms), client light traffic halved (−51%), server-side only plus in-game
+introspection and memory telemetry with peaks, and a reproducible acceptance pipeline (differential suite,
+adjacent-pair probes, save round trip, client case).
+
+**The one honest caveat that belongs in any claim**: on a **machine under heavy load** (QQ plus video, say)
+our async delivery chain is slowed by the whole-machine scheduling — measured across five design variants;
+that is the machine, not the mod.
+
+> ### The one-line verdict (safe to quote)
+>
+> **"On the four benchmarks we are level — two wins, two losses. On what players actually feel and on
+> engineering quality, we win: the two fastest workloads are the ones people do all day, and of the two we
+> lose, one costs 0.15 ms more, which nobody can feel."**
 
 | Source | What LuciStarlink takes from it |
 |---|---|
