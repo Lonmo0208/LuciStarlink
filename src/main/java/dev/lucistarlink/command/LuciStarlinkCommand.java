@@ -168,7 +168,15 @@ public final class LuciStarlinkCommand {
         return repaired;
     }
 
-    /** 修一个发光方块；成功返回 true。 */
+    /**
+     * 修一个发光方块；成功返回 true（=真的动了方块）。
+     *
+     * <p><b>未采纳的优化（记录在此，避免重复踩）</b>：加一道"邻居已经亮着就跳过"的预检，理论上能把已修好区域的
+     * 开销降到零（单个方块改动实测约 0.14~1.37 ms，占整条命令 96%）。实测**没有生效**：在一个经过多次重启、
+     * 光照本该被截断的世界里，6212/6334 个发光方块仍被判为需要修；修完再跑一次依旧是 6212 —— 两种解释都还没排除：
+     * ① 那个世界的光确实坏着（那就该先查"修完为什么还是坏"，与用户的现场症状同源）；② 判据期望值不对
+     * （例如 emission-1 的邻居光照在非满亮场景下不成立）。**在弄清之前不加这道预检。**
+     */
     private static boolean repairEmitter(net.minecraft.server.level.ServerLevel level,
                                          net.minecraft.core.BlockPos emitter,
                                          net.minecraft.core.BlockPos.MutableBlockPos target) {
