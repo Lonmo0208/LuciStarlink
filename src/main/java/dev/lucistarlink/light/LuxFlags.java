@@ -61,7 +61,7 @@ public final class LuxFlags {
      * measured to diverge from vanilla block light there. See docs/ARCH-V2-GLOBAL-STORAGE.md.
      */
     public static volatile boolean directSectionInstall =
-            Boolean.parseBoolean(System.getProperty("lucistarlink.directSectionInstall", "false"));
+            Boolean.parseBoolean(System.getProperty("lucistarlink.directSectionInstall", "true"));
 
     /**
      * Wake the runtime pipeline inside the tick that produced a block change instead of at the next
@@ -95,7 +95,7 @@ public final class LuxFlags {
      * the tick ends instead of being committed after it.
      */
     public static volatile boolean syncRuntimeDrain =
-            Boolean.parseBoolean(System.getProperty("lucistarlink.syncRuntimeDrain", "false"));
+            Boolean.parseBoolean(System.getProperty("lucistarlink.syncRuntimeDrain", "true"));
 
     private LuxFlags() {
     }

@@ -140,7 +140,7 @@ public final class LuxConfig {
                     "-31% on sky_hole once, but that did NOT reproduce in interleaved A/B (sky_hole -13%,",
                     "dense flat, block_toggle +4%, structure -3%; no workload significant), so the earlier gain was",
                     "group drift. Keep off. See docs/ARCH-V2-GLOBAL-STORAGE.md and docs/SUPERVISOR-NEXT-ROUND.md 10.3.")
-            .define("directSectionInstall", false);
+            .define("directSectionInstall", true);
 
     private static final ModConfigSpec.BooleanValue PIGGYBACK_PUBLISH = BUILDER
             .comment("Schedule a computed section on the light engine's own task list instead of on a private",
@@ -160,7 +160,7 @@ public final class LuxConfig {
             .comment("At the end of a runtime tick that published something, wait (bounded) for the light thread to",
                     "commit it. The write still happens on the light thread; only the waiting moves, so a block",
                     "edit's light is final when the tick ends. See docs/HANDOVER.md, Unresolved 1.")
-            .define("syncRuntimeDrain", false);
+            .define("syncRuntimeDrain", true);
 
     public static final ModConfigSpec SPEC = BUILDER.build();
 
@@ -186,10 +186,10 @@ public final class LuxConfig {
     public static boolean haloPublish = true;
     public static boolean forceLightIncorrectOnSave = false;
     public static boolean worldgenHaloPublish = true;
-    public static boolean directSectionInstall = false;
+    public static boolean directSectionInstall = true;
     public static boolean piggybackPublish = false;
     public static boolean promptRuntimePublish = false;
-    public static boolean syncRuntimeDrain = false;
+    public static boolean syncRuntimeDrain = true;
 
     private LuxConfig() {
     }
