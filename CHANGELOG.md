@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.2.6 — the completion marker stops waiting, and two default-off V3 experiments
+
+**The measurable win of this release**: the benchmark's completion marker no longer waits for the light
+publish queue's 250 us coalescing window. The per-field breakdown showed the whole `sky_hole` deficit sat in
+`wait` (528-1503 us against ScalableLux's 3-314) tracking `queueLat`, while every stage that did work was a
+rounding error and the workload published zero sections. `wait` fell to **235-265 us** (ScalableLux:
+226-265) and the five-rep interleaved median from **1.583x to 1.233x** - the best this workload has ever
+measured. The flush path also drains unconditionally now (sky_hole publishes nothing, and the old
+`published` guard skipped the synchronous drain for exactly that shape); that measured neutral and stays for
+correctness.
+
+**Also here**: the client-side optimisation (light data a client receives per two minutes fell from 11,729
+sections to 5,783 - about 24 MB to 11.8 MB - by notifying only the neighbours whose shared face changed;
+26 tests, 3/3 adjacent-pair probes, four-workload interleave with no regression) and the restart-truncation
+fix from 1.1.5.
+
+**V3 experiments, default off, both refuted with numbers**: a synchronous small-edit path (`syncSmallEdits`)
+that computes and installs in the calling thread with no hand-off - correctness-verified by 4/4 bit-identical
+probes, measured as a no-op on a loaded machine (7.607 vs 8.190 ms, p=1.0); and skipping the section status
+registration on that path (13.148 vs 13.467 ms, ratio 0.976, p=1.0). The earlier `inlineDrain` was 10x worse
+in a healthy window. The conclusion, and the corrected premise ("small edits rebuild the region image" is
+false - the image is built once per region and the steady state is already incremental), are in
+`docs/ARCH-V3-SYNC-STORAGE.md` section 6.
+
+## 1.2.5 — the client-side cut, and the probe gate's second catch
+
+Every publish marked all 27 sections of the 3x3x3 neighbourhood and the server sent all of them: a client
+joining the rig server received **11,729 sections (about 24 MB) in two minutes**. `publishDirect` now
+compares the six face planes of a section's old and new bytes and notifies only the neighbours whose shared
+face changed - **5,783 sections, a 51% cut** - which is safe by construction because a neighbour's light and
+mesh can only depend on the layer it shares with this section, and because the probe shows our client does no
+light computation at all (0 `propagateLightSources` per session). Verified by 26 tests, 3/3 bit-identical
+adjacent-pair probes, a four-workload interleave with no regression, and the client-volume measurement. The
+in-game seam screenshot could not be taken on the rig (a stale file handle on the rig's log files, no JVM
+holding it) and is better checked on a real server; if a seam ever appears, the revert is one line.
+
 ## 1.2.4 — cleanup round: naming, hygiene, and a removal that is mapped instead of rushed
 
 * **The two halo keys now say which path they belong to.** `haloChunks` is the world-generation halo and
