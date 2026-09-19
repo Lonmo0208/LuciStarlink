@@ -551,7 +551,7 @@ public final class LuxRelighter {
     }
 
     private void applyIncomingBoundaryDeltas(RegionLightData data, RuntimeRegionBatch batch, boolean enableSky, boolean enableBlock) {
-        if (batch.isEmptyDeltaSet() || !LuxFlags.boundaryDeltas) {
+        if (batch.isEmptyDeltaSet()) {
             return;
         }
         if (enableSky) {

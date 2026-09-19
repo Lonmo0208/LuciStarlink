@@ -30,8 +30,6 @@ public final class LuxFlags {
     public static volatile boolean worldgenWriting = false;
     public static volatile boolean syncSmallEdits =
             Boolean.parseBoolean(System.getProperty("lucistarlink.syncSmallEdits", "false"));
-    public static volatile boolean boundaryDeltas =
-            Boolean.parseBoolean(System.getProperty("lucistarlink.experimentalBoundaryDeltas", "false"));
     public static volatile boolean runtimeAdoption =
             Boolean.parseBoolean(System.getProperty("lucistarlink.experimentalRuntimeAdoption", "true"));
     /**

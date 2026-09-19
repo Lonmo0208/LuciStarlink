@@ -103,9 +103,6 @@ public final class LuxConfig {
             .comment("Adopt engine-stored light at region init instead of recomputing it")
             .define("experimentalRuntimeAdoption", true);
 
-    private static final ModConfigSpec.BooleanValue BOUNDARY_DELTAS = BUILDER
-            .comment("Cross-region boundary light continuation (prototype, may oscillate)")
-            .define("experimentalBoundaryDeltas", false);
 
     private static final ModConfigSpec.BooleanValue HALO_PUBLISH = BUILDER
             .comment("Publish the halo chunks' dirty sections so light computed across a region border reaches",
@@ -185,7 +182,6 @@ public final class LuxConfig {
     public static boolean experimentalDenseIncremental = true;
     public static boolean experimentalInlineRuntime = true;
     public static boolean experimentalRuntimeAdoption = true;
-    public static boolean experimentalBoundaryDeltas = false;
     public static boolean haloPublish = true;
     public static boolean forceLightIncorrectOnSave = false;
     public static boolean worldgenHaloPublish = true;
@@ -231,7 +227,6 @@ public final class LuxConfig {
         experimentalDenseIncremental = DENSE_INCREMENTAL.get();
         experimentalInlineRuntime = INLINE_RUNTIME.get();
         experimentalRuntimeAdoption = RUNTIME_ADOPTION.get();
-        experimentalBoundaryDeltas = BOUNDARY_DELTAS.get();
         haloPublish = HALO_PUBLISH.get();
         forceLightIncorrectOnSave = FORCE_LIGHT_INCORRECT_ON_SAVE.get();
         worldgenHaloPublish = WORLGEEN_HALO_PUBLISH.get();
@@ -255,7 +250,6 @@ public final class LuxConfig {
         experimentalDenseIncremental = overrideBoolean("lucistarlink.experimentalDenseIncremental", experimentalDenseIncremental);
         experimentalInlineRuntime = overrideBoolean("lucistarlink.experimentalInlineRuntime", experimentalInlineRuntime);
         experimentalRuntimeAdoption = overrideBoolean("lucistarlink.experimentalRuntimeAdoption", experimentalRuntimeAdoption);
-        experimentalBoundaryDeltas = overrideBoolean("lucistarlink.experimentalBoundaryDeltas", experimentalBoundaryDeltas);
         haloPublish = overrideBoolean("lucistarlink.haloPublish", haloPublish);
         forceLightIncorrectOnSave = overrideBoolean("lucistarlink.forceLightIncorrectOnSave", forceLightIncorrectOnSave);
         worldgenHaloPublish = overrideBoolean("lucistarlink.worldgenHaloPublish", worldgenHaloPublish);
@@ -272,7 +266,6 @@ public final class LuxConfig {
         LuxFlags.piggybackPublish = piggybackPublish;
         LuxFlags.promptRuntimePublish = promptRuntimePublish;
         LuxFlags.syncRuntimeDrain = syncRuntimeDrain;
-        LuxFlags.boundaryDeltas = experimentalBoundaryDeltas;
         regionChunks = overrideInt("lucistarlink.regionChunks", regionChunks);
         haloChunks = overrideInt("lucistarlink.haloChunks", haloChunks);
         runtimeHaloChunks = overrideInt("lucistarlink.runtimeHaloChunks", runtimeHaloChunks);

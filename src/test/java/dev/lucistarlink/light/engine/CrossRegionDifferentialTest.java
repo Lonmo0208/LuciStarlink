@@ -50,7 +50,6 @@ class CrossRegionDifferentialTest {
         regionA = new Region(boundsA, 0);
         regionB = new Region(boundsB, 16);
         random = new Random(SEED);
-        LuxFlags.boundaryDeltas = true;
 
         for (int y = 0; y < HEIGHT; y++) {
             for (int z = 0; z < 16; z++) {
@@ -272,7 +271,6 @@ class CrossRegionDifferentialTest {
         }
 
         private void prepareEdits(List<int[]> edits) {
-            borderBefore = BorderDeltaSupport.snapshotBorder(data, null);
         }
 
         private void applyEdits(List<int[]> edits) {
@@ -288,7 +286,6 @@ class CrossRegionDifferentialTest {
             data.clearDirty();
             skyEngine.applyRuntimeChanges(data, changes);
             blockEngine.applyRuntimeChanges(data, changes);
-            BorderDeltaSupport.emitBoundaryDeltas(data, borderBefore, (key, deltas) -> outgoing.add(deltas));
         }
 
         private long[] drainOutgoingDeltas() {
@@ -307,10 +304,8 @@ class CrossRegionDifferentialTest {
         }
 
         private void applyDeltas(long[] deltas) {
-            byte[] before = BorderDeltaSupport.snapshotBorder(data, null);
             skyEngine.applyBoundaryDeltas(data, deltas);
             blockEngine.applyBoundaryDeltas(data, deltas);
-            BorderDeltaSupport.emitBoundaryDeltas(data, before, (key, out) -> outgoing.add(out));
         }
 
         private int block(int localX, int y, int localZ) {
