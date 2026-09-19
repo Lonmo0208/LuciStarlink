@@ -1,4 +1,5 @@
-fdc38a7b63c84b2c8ee183cc5ed8af22 *lucistarlink-1.21.1-1.1.1.jar
+27d26dc61da1b40f10ff868b3ceca0bd *lucistarlink-1.21.1-1.1.5.jar
+（1.1.5 = 修复「重启后光照被截断」的那一版；详见 docs/BUG-SAVE-LIGHT-TRUNCATION.md 与 CHANGELOG.md）
 
 构建（发布件，不带任何 benchmark 开关）：
   ./gradlew clean build                ← 正式发布用这个；互斥声明必须是 incompatible
