@@ -79,6 +79,12 @@ neoForge {
             //   ./gradlew runClientMultiplayer -PclientServer=127.0.0.1:25565
             gameDirectory = project.file('run')
             systemProperty 'lucistarlink.debug', 'true'
+            // V2 客户端功能线：把开关传给客户端 JVM，用于世界内验证，例如
+            //   ./gradlew runClientMultiplayer -PclientTakeover=true -PclientProbe=true
+            // 默认都是 false —— 不开就是原版客户端光照引擎。
+            systemProperty 'lucistarlink.clientLightTakeover',
+                    providers.gradleProperty('clientTakeover').getOrElse('false')
+            systemProperty 'lucistarlink.clientProbe', providers.gradleProperty('clientProbe').getOrElse('false')
             programArgument '--quickPlayMultiplayer'
             programArgument providers.gradleProperty('clientServer').getOrElse('127.0.0.1:25565')
             jvmArgument '-Xmx3G'

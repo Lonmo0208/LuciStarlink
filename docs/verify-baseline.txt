@@ -1,5 +1,6 @@
-27d26dc61da1b40f10ff868b3ceca0bd *lucistarlink-1.21.1-1.1.5.jar
-（1.1.5 = 修复「重启后光照被截断」的那一版；详见 docs/BUG-SAVE-LIGHT-TRUNCATION.md 与 CHANGELOG.md）
+f08b4ba59431b25165fc5fac8c780375 *lucistarlink-1.21.1-1.2.0.jar
+（1.2.0 = 1.1.5 的重启丢光修复 + 客户端光照探针/接管（**默认关闭**，实测收益不成立，见
+ docs/ARCH-V2-CLIENT-LIGHTING.md §0）；1.1.5 那条修复的验收见 docs/BUG-SAVE-LIGHT-TRUNCATION.md）
 
 构建（发布件，不带任何 benchmark 开关）：
   ./gradlew clean build                ← 正式发布用这个；互斥声明必须是 incompatible
