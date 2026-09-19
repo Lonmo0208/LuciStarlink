@@ -29,11 +29,14 @@ public final class LuxCompat {
     }
 
     public static boolean isSablePlotChunk(LightChunkGetter getter, ChunkPos chunkPos) {
-        Level level = levelFromGetter(getter);
-        return level != null && isSablePlotChunk(level, chunkPos.x, chunkPos.z);
+        return isSableLoaded() && isSablePlotChunk(getter, chunkPos.x, chunkPos.z);
     }
 
     public static boolean isSablePlotChunk(LightChunkGetter getter, int chunkX, int chunkZ) {
+        // Presence first: without Sable the cached flag answers the whole question and the getter is never touched.
+        if (!isSableLoaded()) {
+            return false;
+        }
         Level level = levelFromGetter(getter);
         return level != null && isSablePlotChunk(level, chunkX, chunkZ);
     }

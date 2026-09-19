@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.1.0 — the per-change guard stops paying for the benchmark, and the publish source stops being global
+
+### Performance: the block-change path (which is where `dense_chunk_patch` was losing)
+
+Applying the same 2048 block changes through the same harness cost us 1440 us against ScalableLux's 888 us, while the
+time we spent *waiting* for the engine was shorter than theirs (593 vs 620 us) - the dense deficit was never light
+computation, it was our own interception. Every block change evaluates `shouldHandleBlockChange` (config, worldgen
+suppression, backpressure, queue capacity, Sable), two benchmark-only injections evaluated it a second and a third
+time, and the guard itself read the clock and a ThreadLocal. Now:
+
+* one `checkBlock` injection instead of three, so the guard is answered once per change;
+* `runtimeBackpressureActive` reads the clock only while backpressure is actually on (`tickRuntime` clears an expired
+  deadline) - which also removes a latent case where a zero deadline counted as "backpressure active" on a platform
+  whose `nanoTime()` is negative;
+* the worldgen write scope moved into `WorldgenWriteScope`: same per-thread semantics, but a scope counter answers the
+  common case without touching the ThreadLocal, and an unbalanced exit clamps at zero so a later scope cannot end up
+  unsuppressed while it is still open;
+* `LuxCompat.isSablePlotChunk` checks whether Sable is installed before resolving the level.
+
+Measured in one interleaved group of 5 (per-pass minimum, median, `ab-compare.ps1`): the dense deficit went from
+1.83x (an interleaved run earlier the same day: 2.500 vs 1.368 ms) to **1.25x** (2.595 vs 2.069 ms). The same group
+reads `block_toggle_border` 1.308 vs 2.323 ms - **1.78x ahead**, p=0.008; `structure_cube` 2.753 vs 3.749 ms -
+1.36x ahead, p=0.69 because two of our five runs in that block were environment-stalled (9.9 / 7.3 ms against
+2.2-2.8 ms); `sky_hole` 0.912 vs 0.576 ms - **1.58x behind**, p=0.008. Two workloads ahead, two behind: that is the
+honest summary, not "three of four".
+
+### Correctness: the publish engine's light source is per-thread
+
+`LuxPublishEngine`'s "did this section actually change?" source was a single volatile field. Publishing happens on the
+job's own thread, but several jobs run at once and on a multi-dimension server they belong to different levels: a
+second thread could read the source another thread - or another dimension - had just installed, so the identity check
+compared bytes from the wrong world, and an accidental match **skipped a publication that was required, losing
+light**. It is now per-thread and cleared after the collect, so a worker thread also no longer pins the light engine
+of an unloaded dimension through a lambda.
+
+### Tests
+
+`WorldgenWriteScopeTest` (5 cases): suppression inside the scope, nesting, an unbalanced exit, another thread's scope
+not suppressing this thread, and one thread leaving not ending another thread's scope - the last two are exactly what
+a naive `volatile boolean` fast path would get wrong. 29 tests pass, 0 failures.
+
 ## 1.0.3 — authorship and thanks list
 
 The artifact credited nobody: `mod_authors` was a sentence about the lineage (and described Lucis's author wrongly),

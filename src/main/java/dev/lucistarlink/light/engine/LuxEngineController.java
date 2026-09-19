@@ -66,7 +66,7 @@ public final class LuxEngineController {
     private final ExecutorService worldgenWorkers = Executors.newFixedThreadPool(worldgenWorkerCount(), new LuxWorldgenThreadFactory());
     private final AtomicInteger pendingWorldgenTasks = new AtomicInteger();
     private final AtomicInteger inflightWorldgenTasks = new AtomicInteger();
-    private final ThreadLocal<Integer> worldgenWriteDepth = ThreadLocal.withInitial(() -> 0);
+    private final WorldgenWriteScope worldgenWriteScope = new WorldgenWriteScope();
     private final ThreadLocal<RuntimeBulkScope> runtimeBulkScope = new ThreadLocal<>();
     private final AtomicLong runtimeBackpressureUntilNanos = new AtomicLong();
     /** Set while a prompt dispatch is queued, so a burst of changes costs at most one per tick. */
@@ -447,6 +447,7 @@ public final class LuxEngineController {
             return;
         }
         reapStaleBulkScope();
+        refreshRuntimeBackpressure();
         boolean published = runtimeManager.tick(lightEngine, getter, relighter, runtimeRegionChunks(), runtimeHaloChunks(),
                 LuxConfig.enableSky, LuxConfig.enableBlock);
         // The commit itself still happens on the light thread; waiting for it here only moves it inside the tick,
@@ -500,7 +501,7 @@ public final class LuxEngineController {
         }
         closed = true;
         runtimeBulkScope.remove();
-        worldgenWriteDepth.remove();
+        worldgenWriteScope.reset();
         runtimeManager.close();
         worldgenWorkers.shutdownNow();
     }
@@ -514,20 +515,15 @@ public final class LuxEngineController {
     }
 
     public void beginWorldgenWrite() {
-        worldgenWriteDepth.set(worldgenWriteDepth.get() + 1);
+        worldgenWriteScope.begin();
     }
 
     public void endWorldgenWrite() {
-        int depth = worldgenWriteDepth.get() - 1;
-        if (depth <= 0) {
-            worldgenWriteDepth.remove();
-        } else {
-            worldgenWriteDepth.set(depth);
-        }
+        worldgenWriteScope.end();
     }
 
     private boolean isWorldgenWriteActive() {
-        return worldgenWriteDepth.get() > 0;
+        return worldgenWriteScope.isActive();
     }
 
     private boolean isWorldgenWriteSuppressed() {
@@ -573,7 +569,17 @@ public final class LuxEngineController {
     }
 
     private boolean runtimeBackpressureActive() {
-        return System.nanoTime() < runtimeBackpressureUntilNanos.get();
+        // A cleared or past deadline blocks nothing, so the clock is only read while backpressure is actually on.
+        long until = runtimeBackpressureUntilNanos.get();
+        return until != 0L && System.nanoTime() < until;
+    }
+
+    /** Zeroes an expired backpressure deadline so {@link #runtimeBackpressureActive} can answer without reading the clock. */
+    private void refreshRuntimeBackpressure() {
+        long until = runtimeBackpressureUntilNanos.get();
+        if (until != 0L && System.nanoTime() >= until) {
+            runtimeBackpressureUntilNanos.set(0L);
+        }
     }
 
     private void activateRuntimeBackpressure() {

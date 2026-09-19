@@ -1,6 +1,21 @@
 # LuciStarlink handover: what is left, with evidence and acceptance criteria
 
 Project: `E:\LuciStarlin\LuciStarlink` (mod id `lucistarlink`, MC 1.21.1 / NeoForge 21.1.234-235).
+
+## 现在的状态（2026-09-19，新窗口从这里看起）
+
+* 发布线 `master` = **1.0.3**（`dist/[光源优化模组V1龙师傅特供]lucistarlink-1.21.1-1.0.3.jar`）；git 已存在，每个改动都是可回退的提交。
+* **V2 全局存储**已完整实现并**收线**在 `v2-storage` 分支：阶段 0/1/2 落地并逐格验证（storage-parity），
+  性能中性（0.815 vs 0.819 ms，p=0.69），阶段 3 因前提错误而取消。默认仍是 `lightEngineMode = region`，
+  storage 是一条可切换、经 parity 验证的替代路径。**读 `docs/V2-CONTINUATION.md`。**
+* **dense 档差距（本次诊断）**：不在光照引擎，而在我们自己的改方块拦截路径（每方块 ~256 ns 的守卫与仪表开销）。
+  已修（守卫只问一次、背压不看时钟、世界生成抑制抽成 `WorldgenWriteScope` 快路径、Sable 先查存在性）。
+  **读 `docs/TASK-PERF-DENSE.md`** —— 里面也有「progress 总计不能当每轮归因」和「14~15.6 ms 调度饥饿特征」两条教训。
+* 测试 **29 通过 / 0 失败 / 1 继承跳过**（`WorldgenWriteScopeTest` 5 条是新的）。
+* 本文件下面的正文来自更早的会话，**测量数字已被新的 ≥5 轮交错表取代**：读的时候以
+  `docs/TASK-PERF-SKY.md`、`docs/TASK-PERF-DENSE.md` 和 `docs/verify-baseline.txt` 为准；
+  仍然有效的部分是**构建/运行规则、测量机制（怎么测才有效）、以及未解决项的清单**。
+
 Artifact: `dist/lucistarlink-1.21.1-0.1.0.jar` (md5 in `docs/verify-baseline.txt`). **Git now exists** (2 commits,
 baseline + dist); from here every change is a revertable commit.
 Tests: 21 pass / 0 fail / 1 inherited skip.
@@ -136,10 +151,24 @@ Scenario for it: `mc-smoketest/ls-border-scenario.sh gen <tag>` (strip, then one
 Residual known gap (unchanged, still needs the conservative flag or a chunk-save-time check): neighbours that are
 *unloaded* at generate time cannot be marked, so their saved light can stay stale.
 
-## Unresolved 4: interop measurement never run
+## Unresolved 4: interop measured with C2ME (2026-09-19), Generator Accelerator still not run
 
-Run a worldgen stress scenario with C2ME and Generator Accelerator installed and require no light divergence.
-Jar not present in the rig (`mc-smoketest/mods` expects `c2me-*.jar` / `*Generator Accelerator*.jar`).
+C2ME `c2me-neoforge-mc1.21.1-0.4.0-alpha.0.122.jar` (user-provided) was put in `mc-smoketest/mods` (the border
+scenario script does not wipe that directory, only the world and logs) and the same `gen` scenario was run twice on
+the same seed: once without C2ME, once with it.
+
+* **No crash, save and shutdown clean**; no mixin apply failure of ours (grep for `mixin apply failed` /
+  `Critical injection` - empty), so our engine's hooks are in place under C2ME. C2ME's own log noise is limited to a
+  `RuntimeDistCleaner` client-class warning and its sub-mod discovery lines.
+* **Sky light bit-identical on all three fingerprints**: `strip` `ce0e43e726463e8d`, `strip_plus_beyond`
+  `cf916cd9aa3dca8d`, `beyond` `b85c37ba14d2bd5c` - same values with and without C2ME.
+* Block light matched on the pure-worldgen area (`beyond` `1eb24bed88e1b855`) and differed on the two labels that
+  contain the scenario's own edits - which is the established non-oracle: block light is not a usable comparison,
+  vanilla itself varies there (see Unresolved 2), and sky is the oracle.
+* Caveat, stated plainly: this says the combination boots and produces identical light on a worldgen-heavy scenario;
+  it is not a promise about C2ME's faster chunk pipeline in general, and C2ME's developer warns its module can break
+  NeoForge chunk capabilities. Generator Accelerator is still not measured (no jar).
+
 
 ## Unresolved 5: cleanup
 

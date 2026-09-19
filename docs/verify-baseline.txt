@@ -1,30 +1,44 @@
-0d220c139c5f31dd2f2d24b597efd1bc *lucistarlink-1.21.1-1.0.3.jar
+9ff12d90979b01b807263710bde20dff *lucistarlink-1.21.1-1.1.0.jar
 
 构建（发布件，不带任何 benchmark 开关）：
   ./gradlew clean build                ← 正式发布用这个；互斥声明必须是 incompatible
     （注意：rig 版要额外带 -PbenchmarkAllowScalableLux=true -PbenchmarkAllowLucis=true，
       那会把声明改成 discouraged，只能用于 mc-smoketest 里的对照，绝不能进 dist/）
   JAVA_HOME 与 PATH 都必须指向 JDK 21；见 docs/HANDOVER.md 的构建铁律
-测试：21 tests / 0 failures / 0 errors / 1 inherited skip
+测试：29 tests / 0 failures / 0 errors / 1 inherited skip
 默认（全部为默认，未开启任何实验开关）：
   region 发布路线；regionChunks=1、haloChunks=1、runtimeHaloChunks=1、haloPublish=on、
   worldgenHaloPublish=on；experimentalBoundaryDeltas=off、directSectionInstall=off、
   piggybackPublish=off、promptRuntimePublish=off、syncRuntimeDrain=off、
   -Dlucistarlink.notifyNeighbourSections 默认 true、-Dlucistarlink.promptDispatch 默认 false
 
-1.0.0 与 0.1.0 的差别（详见 CHANGELOG.md / NOTICE）：
-  * 自检修出的 4 个正确性修复（worldgen 误用运行时 ThreadLocal 导致跳发光环与跳过 stale 标记；
-    RuntimeUpdateQueue 的 drain 与 enqueue 竞态会静默丢改动；fullRelight 从不发布光环；
-    作业抛异常时批次丢失）；
-  * regionChunks / haloChunks 两个"文档里有效、实际没人读"的配置键已接通（默认值下行为不变）；
-  * 清理已验证无引用的死成员；被否决的 boundary-delta 原型保留（默认关），列入 1.1 清理。
-  默认行为与 0.1.0 完全一致 —— 新增/重测的开关全部保持原默认。
+1.1.0 的内容（详见 CHANGELOG.md / docs/RELEASE-1.1.md / docs/TASK-PERF-DENSE.md）：
+  * 改方块路径的守卫开销：`checkBlock` 三段注入合并为一段（一次改动只问守卫一次）、背压不再无条件读时钟
+    （`tickRuntime` 负责清零过期期限）、世界生成抑制抽成 `WorldgenWriteScope`（语义仍按线程，先走全局计数
+    快路径，不成对退出钳在 0）、`LuxCompat.isSablePlotChunk` 先查 Sable 是否存在；
+  * 正确性：发布引擎"这个 section 是否没变"的光源原本是单个 volatile 字段 —— 多作业/多维度并发时会读到别的
+    世界的光源，一旦字节相同就会**跳过本来必须的发布（丢光）**。改为按线程，并在采集结束后 `remove()`，
+    同时不再让工作线程钉住已卸载维度的光照引擎；
+  * 新增 `WorldgenWriteScopeTest` 5 条（29 = 原 24 + 新 5），专盯"把 volatile 快路径写成朴素布尔"会犯的错。
+
+性能（同场交错、5 轮、每轮最小值取中位、精确双侧 p；`ab-compare.ps1` 输出，详见 docs/TASK-PERF-SKY.md §10.12）：
+  block_toggle_border  1.308 vs 2.323 ms → 快 1.78×，p=0.0079   ✓ 显著
+  structure_cube       2.753 vs 3.749 ms → 快 1.36×，p=0.6905   （我方 2/5 轮被环境突发污染成 9.9 / 7.3 ms）
+  dense_chunk_patch    2.595 vs 2.069 ms → 慢 1.25×，p=0.0317   （修复前同会话是 1.83×；历史"dense 我们赢"未复现）
+  sky_hole             0.912 vs 0.576 ms → 慢 1.58×，p=0.0079   （与监督者那组 0.924/0.530 一致；
+                                                                 实施者 0.651/0.593 不成立于交错测量，作废）
+  → 对外表述：**两个负载赢、两个输**，不是"三项领先"。
+
+互操作（详见 docs/HANDOVER.md 未解决项 4）：
+  C2ME `c2me-neoforge-mc1.21.1-0.4.0-alpha.0.122.jar`：同一 `gen` 场景同 seed 跑两次（无/有 C2ME），
+  天空指纹三组逐位相同、无崩溃、存档与关闭正常、我们的 mixin 全部应用；纯 worldgen 区域的 block 指纹也相同。
+  Generator Accelerator 仍未测（无 jar）。
 
 发布前验证：
-  * 21 项差分测试全绿；
+  * 29 项差分/单元测试全绿（0 失败 0 错误 1 继承跳过）；
+  * `verify.sh` 验收门：构建 + 测试通过、rig 元数据正确、halo / externalRefresh 正确性证据在、我方日志 0 错误；
   * 相邻成对探针（同一世界快照、同一次运行时边界编辑）：无流体气层带（y 90~112）与原版逐位一致
     （edit / edit_border 两个标签）；全列 block 指纹两侧都不同，且原版自己跨会话也不同 → 不是判据；
   * 内存预算、存档往返、客户端同步见 docs/HANDOVER.md 与 mc-smoketest/clientcase-evidence/。
-性能（settled-world 协议、同场交错、≥5 轮、精确 U/p，详见 docs/TASK-PERF-SKY.md）：
-  对照原版：拆建 4.3×、结构 2.1×、密集 1.76×、天空持平；
-  对照 ScalableLux：拆建 2.05×、结构 1.77×、密集慢 21%、天空慢 2.0×（异步交付链，14 个杠杆已全部实测否定）。
+  * dense 档诊断与修复的完整证据链：docs/TASK-PERF-DENSE.md（含"phase 总计不能当每轮归因"与
+    "14~15.6 ms 调度饥饿特征"两条教训）。

@@ -405,8 +405,14 @@ public final class LuxRelighter {
         long epochAfterRefresh = state.externalEpoch();
         state.touch();
         publishEngine.setCurrentLightSource(currentSourceFor(getter));
-        List<LuxRelightResult> results = computeRuntimeRegion(getter, state, data, coreChunk, batch,
-                enableSky, enableBlock, deltaSink);
+        List<LuxRelightResult> results;
+        try {
+            results = computeRuntimeRegion(getter, state, data, coreChunk, batch,
+                    enableSky, enableBlock, deltaSink);
+        } finally {
+            // 采集阶段已经读完引擎的光照；不留下引用，工作线程才不会钉住已卸载维度的光照引擎
+            publishEngine.clearCurrentLightSource();
+        }
         if (state.externalEpoch() != epochAfterRefresh) {
             // the engine moved under this job: publishing now could overwrite fresher light with values derived
             // from the old baseline, so re-queue instead (the batch is idempotent)

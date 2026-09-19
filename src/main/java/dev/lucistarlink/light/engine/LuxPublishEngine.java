@@ -25,10 +25,24 @@ public final class LuxPublishEngine {
         SectionLightSource NONE = (sectionPos, layer) -> null;
     }
 
-    private volatile SectionLightSource currentLightSource = SectionLightSource.NONE;
+    // 按线程而不是全局：发布由作业线程自己完成（设光源 → 计算 → 在同一个线程里 collect），但同一时刻可以有多个
+    // 作业在跑，多维度服务器上还可能是不同 level 的作业。用单个 volatile 字段时，B 线程会读到 A 线程或另一个维度
+    // 刚设进去的光源，于是「这个 section 是否没变」的身份比较拿到的是别的世界的字节 —— 一旦相等就会**跳过一次
+    // 本来必须的发布（丢光）**。按线程后，设置与读取必然落在同一个线程内，跨线程和跨维度都不再共享。
+    private final ThreadLocal<SectionLightSource> lightSourceByThread =
+            ThreadLocal.withInitial(() -> SectionLightSource.NONE);
 
     public void setCurrentLightSource(SectionLightSource source) {
-        this.currentLightSource = source == null ? SectionLightSource.NONE : source;
+        this.lightSourceByThread.set(source == null ? SectionLightSource.NONE : source);
+    }
+
+    /** 用完必须清掉：光源 lambda 捕获着那个 level 的光照引擎，留在工作线程的 ThreadLocal 里会把已卸载的维度钉住不回收。 */
+    public void clearCurrentLightSource() {
+        this.lightSourceByThread.remove();
+    }
+
+    private SectionLightSource currentLightSource() {
+        return lightSourceByThread.get();
     }
 
     public LuxRelightResult publishChunk(ChunkPos chunkPos, RegionLightData data) {
@@ -163,7 +177,7 @@ public final class LuxPublishEngine {
             int worldSectionZ = chunkPos.z << 4;
             int worldSectionY = data.bounds.minSectionY() + sectionY;
             DataLayer packed = NibblePacker.packSection(data, source, worldSectionX, worldSectionY, worldSectionZ);
-            byte[] current = currentLightSource.current(SectionPos.of(chunkPos, data.bounds.minSectionY() + sectionY), layer);
+            byte[] current = currentLightSource().current(SectionPos.of(chunkPos, data.bounds.minSectionY() + sectionY), layer);
             if (current != null && java.util.Arrays.equals(current, packed.getData())) {
                 LuxBenchmarkSupport.count("lucistarlink.publish.skippedIdentical.sections");
                 continue;

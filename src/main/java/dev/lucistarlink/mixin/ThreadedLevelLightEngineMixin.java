@@ -163,33 +163,37 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
         cir.setReturnValue(future);
     }
 
+    /**
+     * 每个方块改动都会走到这里：要么我们接管（取消原版 checkBlock），要么交给原版。守卫是这条路上最贵的一步
+     * （配置、世界生成压制、背压、任务队列容量、Sable），所以整个方法只问它一次 —— 之前为了记录「原版花了
+     * 多久」在三个注入点各问一次，纯仪表开销就占了每次改方块的一大半。计时现在挂在本方法与 RETURN 之间。
+     */
     @Inject(method = "checkBlock", at = @At("HEAD"), cancellable = true)
     private void lucistarlink$checkBlock(BlockPos pos, org.spongepowered.asm.mixin.injection.callback.CallbackInfo ci) {
-        if (!LuxServices.controller().shouldHandleBlockChange(lucistarlink$chunkSource, pos)) {
+        boolean handled = LuxServices.controller().shouldHandleBlockChange(lucistarlink$chunkSource, pos);
+        if (!LuxBenchmarkSupport.enabled()) {
+            if (handled) {
+                ci.cancel();
+            }
             return;
         }
-
-        long startedAt = LuxBenchmarkSupport.start();
-        LuxBenchmarkSupport.recordSince("lucistarlink.check_block", startedAt);
-        ci.cancel();
-    }
-
-    @Inject(method = "checkBlock", at = @At("HEAD"))
-    private void lucistarlink$startVanillaCheckBlock(BlockPos pos, CallbackInfo ci) {
-        if (!LuxServices.controller().shouldHandleBlockChange(lucistarlink$chunkSource, pos) && LuxBenchmarkSupport.enabled()) {
-            lucistarlink$checkBlockStartedAt.set(LuxBenchmarkSupport.start());
+        if (handled) {
+            lucistarlink$checkBlockStartedAt.remove();
+            LuxBenchmarkSupport.recordSince("lucistarlink.check_block", LuxBenchmarkSupport.start());
+            ci.cancel();
+            return;
         }
+        lucistarlink$checkBlockStartedAt.set(LuxBenchmarkSupport.start());
     }
 
     @Inject(method = "checkBlock", at = @At("RETURN"))
     private void lucistarlink$finishVanillaCheckBlock(BlockPos pos, CallbackInfo ci) {
-        if (!LuxServices.controller().shouldHandleBlockChange(lucistarlink$chunkSource, pos)) {
-            Long startedAt = lucistarlink$checkBlockStartedAt.get();
-            if (startedAt != null) {
-                LuxBenchmarkSupport.recordSince("engine.check_block", startedAt);
-            }
-            lucistarlink$checkBlockStartedAt.remove();
+        Long startedAt = lucistarlink$checkBlockStartedAt.get();
+        if (startedAt == null) {
+            return;
         }
+        lucistarlink$checkBlockStartedAt.remove();
+        LuxBenchmarkSupport.recordSince("engine.check_block", startedAt);
     }
 
     @Override
