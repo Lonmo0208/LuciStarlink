@@ -344,6 +344,15 @@ public final class LuxEngineController {
         } catch (Throwable throwable) {
             LuciStarlink.LOGGER.warn("LuciStarlink benchmark flush dispatch failed", throwable);
         }
+        // 「调用方说：就是现在」—— 把这一 tick 的发布立刻推完，不等那个 250 µs 合并窗口。
+        // 为什么不能只在 publishedThisTick 为真时做：像 sky_hole 这种「算完发现不用改」的负载（sections=0、
+        // identical=11）永远不为真，于是同步 drain 被整段跳过，调用方要等定时器 —— 实测那正是 wait 里
+        // 528~1503 µs 的来源（SL 那一侧只有 3~314 µs）。drain 是幂等的，没有待办时它什么也不做。
+        try {
+            ((dev.lucistarlink.light.runtime.LuxLightPublisher) lightEngine).lucistarlink$drainNow();
+        } catch (Throwable throwable) {
+            LuciStarlink.LOGGER.warn("LuciStarlink benchmark flush drain failed", throwable);
+        }
         return ((dev.lucistarlink.light.runtime.LuxLightPublisher) lightEngine).lucistarlink$flushMarker(chunkX, chunkZ);
     }
 
