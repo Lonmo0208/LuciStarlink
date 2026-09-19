@@ -1,4 +1,4 @@
-a6f5464361b66ea7b079a21113f3f5e4 *lucistarlink-1.21.1-1.2.5.jar
+00452f794d9287372f318af12bf1cc02 *lucistarlink-1.21.1-1.2.6.jar
 （1.2.1 = 1.2.0 + 一个真 bug 的修复：`lucistarlink$installSection` 在**没有光照引擎的层**（无方块光的维度，
  listener 是 DummyLightLayerEventListener）会抛 ClassCastException；只有开启 directSectionInstall 才走到，
  是**探针闸**在翻默认之前抓到的（见 docs/TASK-PERF-SKY.md §10.14）。修复后探针 3/3 逐位一致、异常归零。

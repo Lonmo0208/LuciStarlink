@@ -359,8 +359,14 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
                     section.dataLayer().getData());
             if (LuxFlags.directSectionInstall) {
                 // section state first: for a section the engine does not know yet this is what creates its
-                // layer (and its neighbour bookkeeping), which the install below then overwrites with our data
-                super.updateSectionStatus(section.sectionPos(), false);
+                // layer (and its neighbour bookkeeping), which the install below then overwrites with our data.
+                // V3 M3：在「小改动同步路径」里，对引擎**已经认识**的 section 不再登记状态 —— 登记会让引擎在
+                // 自己的 pass 里处理该 section，于是它的任务队列在负载下空不了，pass 就要多等一个 tick（实测）。
+                // 只同步路径跳过；其余路径一字不动。
+                if (!this.lucistarlink$syncSmallEditDrain
+                        || lucistarlink$currentLayerBytes(section.layer(), section.sectionPos()) == null) {
+                    super.updateSectionStatus(section.sectionPos(), false);
+                }
                 lucistarlink$installSection(section.layer(), section.sectionPos(), section.dataLayer());
             } else {
                 super.queueSectionData(section.layer(), section.sectionPos(), section.dataLayer());
@@ -644,6 +650,11 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     private static final boolean LUCIS_INLINE_DRAIN =
             Boolean.parseBoolean(System.getProperty("lucistarlink.inlineDrain", "false"));
 
+    /** V3 M3：为真表示正处在「小改动同步路径」里 —— 该路径下对引擎已认识的 section 跳过 updateSectionStatus，
+     *  让引擎自己的任务队列保持空闲（实测那是 pass 在有负载的机器上仍要多等一个 tick 的最后一笔）。 */
+    @Unique
+    private boolean lucistarlink$syncSmallEditDrain;
+
     /**
      * 服务器线程直提：与 {@link #lucistarlink$drainQueuedLightTasks()} 同样的搬运，但在**调用线程**上做，
      * 并**跳过引擎自己的更新吸收**（`installSection` 已经把两份地图都写成最终值，`directSectionInstall`
@@ -661,6 +672,7 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
     @Override
     public void lucistarlink$drainInlineForced() {
         long startedAt = LuxBenchmarkSupport.start();
+        this.lucistarlink$syncSmallEditDrain = true;
         ArrayDeque<LuxQueuedLightTask> batch = this.lucistarlink$publishBatch;
         batch.clear();
         synchronized (this.lucistarlink$publishLock) {
@@ -689,6 +701,7 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
             LuxBenchmarkSupport.recordSince("lucistarlink.publish_batch.inlineDrain", startedAt);
         } finally {
             this.lucistarlink$drainRunning.set(false);
+            this.lucistarlink$syncSmallEditDrain = false;
         }
     }
 
