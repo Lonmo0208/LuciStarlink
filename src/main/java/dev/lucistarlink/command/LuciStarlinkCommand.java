@@ -84,6 +84,7 @@ public final class LuciStarlinkCommand {
         int radius = Math.min(Math.max(radiusChunks, 0), MAX_RELIGHT_RADIUS_CHUNKS);
 
         int queued = 0;
+        int nudged = 0;
         // 强制发布：存档里的光照可能「传播没做完却自称已完成」，那时我们算出来的字节与现有数据完全相同，
         // 「没变就不发」会把发布全部吞掉 —— 而那次发布才是让引擎重新传播的触发点。只对本次刷新打开。
         dev.lucistarlink.light.engine.LuxPublishEngine.forcePublishIdentical = true;
@@ -96,19 +97,92 @@ public final class LuciStarlinkCommand {
                 chunk.setLightCorrect(false);
                 lightEngine.lightChunk(chunk, true);
                 queued++;
+                nudged += nudgedEmitters(level, chunk);
             }
         }
 
         final int total = queued;
         final int usedRadius = radius;
+        final int nudgedTotal = nudged;
         source.sendSuccess(() -> Component.literal(String.format(java.util.Locale.ROOT,
                 "LuciStarlink: queued a full light recompute for %d loaded chunk(s) in %s within %d chunk(s) "
-                        + "(max %d). Each job publishes when it finishes, so a big radius takes a while; the chunks "
-                        + "stay marked as needing light, so even a failed job is retried on the next load. For the "
-                        + "whole world including unloaded chunks use forceLightIncorrectOnSave + save-all flush + "
-                        + "restart.",
-                total, level.dimension().location(), usedRadius, MAX_RELIGHT_RADIUS_CHUNKS)), true);
+                        + "(max %d), and repaired %d light source(s) in place: torches and other non-full blocks get a "
+                        + "no-op change (air -> stone -> air) in an air cell beside them, full blocks like glowstone "
+                        + "get themselves broken and re-placed within the same tick with the exact same state. Lava "
+                        + "and blocks with block entities are skipped - those still need a manual break and place.",
+                total, level.dimension().location(), usedRadius, MAX_RELIGHT_RADIUS_CHUNKS, nudgedTotal)), true);
         return total;
+    }
+
+    /**
+     * 修每一个发光方块周围缺掉的那圈光。分成两路，依据的是实测结论：
+     *
+     * <p>非完整方块（火把、灯笼…）：在它旁边一个**空气格**上做一次「放石头 → 立刻放回空气」，只碰空气、净变化为零，
+     * 对这类方块有效。
+     *
+     * <p>完整方块（荧石、海晶灯…）：只改旁边**无效**，必须把它自己拆掉再原样放回 —— 因为缺光的根源在它自己那个格子
+     * 没有被引擎重新登记为光源。两次改动在同一个 tick 内完成，方块状态原样恢复，因此不改变任何建筑。
+     *
+     * <p>两类都跳过：流体（岩浆等，拆放会牵扯流动）与带方块实体的方块（信标、容器等，拆掉会丢内部数据）—— 它们
+     * 只能手动处理。
+     */
+    private static int nudgedEmitters(net.minecraft.server.level.ServerLevel level,
+                                      net.minecraft.world.level.chunk.LevelChunk chunk) {
+        int repaired = 0;
+        net.minecraft.core.BlockPos.MutableBlockPos emitter = new net.minecraft.core.BlockPos.MutableBlockPos();
+        net.minecraft.core.BlockPos.MutableBlockPos target = new net.minecraft.core.BlockPos.MutableBlockPos();
+        net.minecraft.world.level.chunk.LevelChunkSection[] sections = chunk.getSections();
+        int minSectionY = level.getMinSection();
+        for (int index = 0; index < sections.length; index++) {
+            net.minecraft.world.level.chunk.LevelChunkSection section = sections[index];
+            if (section == null || section.hasOnlyAir()) {
+                continue;
+            }
+            int baseY = (minSectionY + index) << 4;
+            for (int y = 0; y < 16; y++) {
+                for (int z = 0; z < 16; z++) {
+                    for (int x = 0; x < 16; x++) {
+                        if (section.getBlockState(x, y, z).getLightEmission() <= 0) {
+                            continue;
+                        }
+                        emitter.set(chunk.getPos().getMinBlockX() + x, baseY + y, chunk.getPos().getMinBlockZ() + z);
+                        if (repairEmitter(level, emitter, target)) {
+                            repaired++;
+                        }
+                    }
+                }
+            }
+        }
+        return repaired;
+    }
+
+    /** 修一个发光方块；成功返回 true。 */
+    private static boolean repairEmitter(net.minecraft.server.level.ServerLevel level,
+                                         net.minecraft.core.BlockPos emitter,
+                                         net.minecraft.core.BlockPos.MutableBlockPos target) {
+        net.minecraft.world.level.block.state.BlockState original = level.getBlockState(emitter);
+        if (original.getLightEmission() <= 0 || !original.getFluidState().isEmpty() || original.hasBlockEntity()) {
+            return false;
+        }
+        if (original.canOcclude()) {
+            // 完整方块：缺光的根源在它自己那一格没被重新登记为光源，所以必须动人自己
+            try {
+                level.setBlock(emitter, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), 3);
+            } finally {
+                level.setBlock(emitter, original, 3);
+            }
+            return true;
+        }
+        for (net.minecraft.core.Direction direction : net.minecraft.core.Direction.values()) {
+            target.setWithOffset(emitter, direction);
+            if (!level.isLoaded(target) || !level.getBlockState(target).isAir()) {
+                continue;
+            }
+            level.setBlock(target, net.minecraft.world.level.block.Blocks.STONE.defaultBlockState(), 2);
+            level.setBlock(target, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), 2);
+            return true;
+        }
+        return false;
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> dumpPlaneCommand() {
