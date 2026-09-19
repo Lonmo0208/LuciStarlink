@@ -269,6 +269,14 @@ public final class LuxRuntimeManager implements AutoCloseable {
         drainedBatches.clear();
         int drained = updateQueue.drainTo(drainedBatches);
         LuxBenchmarkSupport.count("lucistarlink.runtime.drain.records", drained);
+        if (LuxFlags.syncSmallEdits) {
+            // V3 M1：先只计量「如果开了同步小改动路径，这一 tick 会有多少次够格」。够格条件与设计文档一致：
+            // 小批量（≤8 条改动）且 regionChunks==1。计量不改变行为，用来决定下一步的实现取舍。
+            if (drained > 0 && drained <= 8 && regionChunks == 1) {
+                LuxBenchmarkSupport.count("lucistarlink.syncSmallEdits.wouldRoute");
+            }
+            LuxBenchmarkSupport.count("lucistarlink.syncSmallEdits.ticks");
+        }
         int scheduled = 0;
         int maxSubmits = runtimeSubmitBudget();
         ArrayList<ScheduledRegionBatch> selected = new ArrayList<>(Math.min(maxSubmits, drainedBatches.size() + 1));

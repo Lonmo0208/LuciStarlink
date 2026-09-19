@@ -25,6 +25,9 @@ public final class LuxFlags {
             Boolean.parseBoolean(System.getProperty("lucistarlink.experimentalDenseIncremental", "true"));
     public static volatile boolean inlineRuntime =
             Boolean.parseBoolean(System.getProperty("lucistarlink.experimentalInlineRuntime", "true"));
+    /** V3 M1：小批量改动走「同线程算完并写库、不等待」的新路径（默认关，先只计量不改变行为）。 */
+    public static volatile boolean syncSmallEdits =
+            Boolean.parseBoolean(System.getProperty("lucistarlink.syncSmallEdits", "false"));
     public static volatile boolean boundaryDeltas =
             Boolean.parseBoolean(System.getProperty("lucistarlink.experimentalBoundaryDeltas", "false"));
     public static volatile boolean runtimeAdoption =
