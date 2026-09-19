@@ -448,6 +448,8 @@ public final class LuxEngineController {
         }
         reapStaleBulkScope();
         refreshRuntimeBackpressure();
+        // 峰值保持：遥测窗口必然错过工作瞬间，峰值必须每 tick 采
+        runtimeManager.samplePeaks();
         boolean published = runtimeManager.tick(lightEngine, getter, relighter, runtimeRegionChunks(), runtimeHaloChunks(),
                 LuxConfig.enableSky, LuxConfig.enableBlock);
         // The commit itself still happens on the light thread; waiting for it here only moves it inside the tick,

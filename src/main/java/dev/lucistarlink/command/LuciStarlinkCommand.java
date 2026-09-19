@@ -85,6 +85,8 @@ public final class LuciStarlinkCommand {
 
         int queued = 0;
         int nudged = 0;
+        long[] timers = new long[2];
+        long startedAt = System.nanoTime();
         // 强制发布：存档里的光照可能「传播没做完却自称已完成」，那时我们算出来的字节与现有数据完全相同，
         // 「没变就不发」会把发布全部吞掉 —— 而那次发布才是让引擎重新传播的触发点。只对本次刷新打开。
         dev.lucistarlink.light.engine.LuxPublishEngine.forcePublishIdentical = true;
@@ -97,37 +99,44 @@ public final class LuciStarlinkCommand {
                 chunk.setLightCorrect(false);
                 lightEngine.lightChunk(chunk, true);
                 queued++;
-                nudged += nudgedEmitters(level, chunk);
+                nudged += nudgedEmitters(level, chunk, timers);
             }
         }
+        long totalNanos = System.nanoTime() - startedAt;
 
         final int total = queued;
         final int usedRadius = radius;
         final int nudgedTotal = nudged;
+        final long repairMillis = timers[1] / 1_000_000L;
+        final long totalMillis = totalNanos / 1_000_000L;
+        final long scanMillis = Math.max(0L, totalMillis - repairMillis);
         source.sendSuccess(() -> Component.literal(String.format(java.util.Locale.ROOT,
                 "LuciStarlink: queued a full light recompute for %d loaded chunk(s) in %s within %d chunk(s) "
                         + "(max %d), and repaired %d light source(s) in place: torches and other non-full blocks get a "
                         + "no-op change (air -> stone -> air) in an air cell beside them, full blocks like glowstone "
                         + "get themselves broken and re-placed within the same tick with the exact same state. Lava "
-                        + "and blocks with block entities are skipped - those still need a manual break and place.",
-                total, level.dimension().location(), usedRadius, MAX_RELIGHT_RADIUS_CHUNKS, nudgedTotal)), true);
+                        + "and blocks with block entities are skipped - those still need a manual break and place. "
+                        + "Cost: %d ms total, of which %d ms repairing emitters and %d ms scanning chunks and "
+                        + "queueing their relight.",
+                total, level.dimension().location(), usedRadius, MAX_RELIGHT_RADIUS_CHUNKS, nudgedTotal,
+                totalMillis, repairMillis, scanMillis)), true);
         return total;
     }
 
     /**
-     * 修每一个发光方块周围缺掉的那圈光。分成两路，依据的是实测结论：
+     * 修每一个发光方块周围缺掉的那圈光，并把**修复本身**耗掉的时间累加进 {@code repairNanos}（下标 0）。
+     * 剩下的时间就是扫描（逐格读方块状态问"你发光吗"）—— 这两项的占比决定值不值得并行化：
+     * 扫描是纯读、可切分；修复是方块改动、必须留在服务器线程。
      *
-     * <p>非完整方块（火把、灯笼…）：在它旁边一个**空气格**上做一次「放石头 → 立刻放回空气」，只碰空气、净变化为零，
-     * 对这类方块有效。
-     *
-     * <p>完整方块（荧石、海晶灯…）：只改旁边**无效**，必须把它自己拆掉再原样放回 —— 因为缺光的根源在它自己那个格子
+     * <p>非完整方块（火把、灯笼…）：在它旁边一个**空气格**上做一次「放石头 → 立刻放回空气」，只碰空气、净变化为零。
+     * 完整方块（荧石、海晶灯…）：只改旁边**无效**，必须把它自己拆掉再原样放回 —— 因为缺光的根源在它自己那个格子
      * 没有被引擎重新登记为光源。两次改动在同一个 tick 内完成，方块状态原样恢复，因此不改变任何建筑。
      *
-     * <p>两类都跳过：流体（岩浆等，拆放会牵扯流动）与带方块实体的方块（信标、容器等，拆掉会丢内部数据）—— 它们
-     * 只能手动处理。
+     * <p>两类都跳过：流体（岩浆等，拆放会牵扯流动）与带方块实体的方块（信标、容器等，拆掉会丢内部数据）。
      */
     private static int nudgedEmitters(net.minecraft.server.level.ServerLevel level,
-                                      net.minecraft.world.level.chunk.LevelChunk chunk) {
+                                      net.minecraft.world.level.chunk.LevelChunk chunk,
+                                      long[] timers) {
         int repaired = 0;
         net.minecraft.core.BlockPos.MutableBlockPos emitter = new net.minecraft.core.BlockPos.MutableBlockPos();
         net.minecraft.core.BlockPos.MutableBlockPos target = new net.minecraft.core.BlockPos.MutableBlockPos();
@@ -146,7 +155,10 @@ public final class LuciStarlinkCommand {
                             continue;
                         }
                         emitter.set(chunk.getPos().getMinBlockX() + x, baseY + y, chunk.getPos().getMinBlockZ() + z);
-                        if (repairEmitter(level, emitter, target)) {
+                        long repairStartedAt = System.nanoTime();
+                        boolean changed = repairEmitter(level, emitter, target);
+                        timers[1] += System.nanoTime() - repairStartedAt;
+                        if (changed) {
                             repaired++;
                         }
                     }

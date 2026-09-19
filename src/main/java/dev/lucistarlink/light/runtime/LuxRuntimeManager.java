@@ -170,6 +170,34 @@ public final class LuxRuntimeManager implements AutoCloseable {
      * them stay bounded instead of guessing. The region cache is the big one: every entry pins four byte
      * planes of the region volume (which is why it is trimmed by bytes, not by entry count).
      */
+    /**
+     * 峰值保持（high-water mark）。存在的理由是一条实测：30 秒一次的遥测采样**必然错过**绝大多数工作瞬间 ——
+     * 45 个采样全是 0，而引擎确实在干活，于是「有界」这件事拿不到证据。所以每 tick 采一次当前占用并保留历史
+     * 最大值，任何一次采样都能看到自启动以来的峰值。读的都是现成计数，开销可忽略。
+     */
+    private int peakRegionCacheRegions;
+    private long peakRegionCacheBytes;
+    private int peakCoalesceEntries;
+    private long peakPendingRecords;
+    private int peakPendingRegions;
+    private int peakPendingBatches;
+    private int peakCommitQueue;
+    private int peakScheduledRegions;
+
+    /** 由 {@code tickRuntime} 每 tick 调用一次，把当前占用并入历史峰值。 */
+    public void samplePeaks() {
+        peakRegionCacheRegions = Math.max(peakRegionCacheRegions, regionCache.size());
+        peakRegionCacheBytes = Math.max(peakRegionCacheBytes, regionCache.cachedBytes());
+        peakCoalesceEntries = Math.max(peakCoalesceEntries, fullRelightCoalesceUntil.size());
+        peakPendingRecords = Math.max(peakPendingRecords, updateQueue.pendingRecordCount());
+        peakPendingRegions = Math.max(peakPendingRegions, updateQueue.regionCount());
+        peakCommitQueue = Math.max(peakCommitQueue, commitQueue.size());
+        peakScheduledRegions = Math.max(peakScheduledRegions, scheduledRegions.size());
+        synchronized (pendingBatchesLock) {
+            peakPendingBatches = Math.max(peakPendingBatches, pendingBatchesByRegion.size());
+        }
+    }
+
     /** One-line engine status, shared by the periodic log and the /lucistarlink status command. */
     public String statusLine() {
         int pendingBatchCount;
@@ -181,7 +209,9 @@ public final class LuxRuntimeManager implements AutoCloseable {
                         + "pending batches %d, commits %d, scheduled %d; halo sections published %d, external sections "
                         + "marked %d/refreshed %d, worldgen neighbour-stale marked %d, baseline re-runs %d, "
                         + "adopted-batch changes %d, save forced "
-                        + "light-incorrect: pending %d global %d",
+                        + "light-incorrect: pending %d global %d; peaks since boot: region cache %d regions (%d MiB), "
+                        + "coalescing %d, queued changes %d, queued regions %d, pending batches %d, commits %d, "
+                        + "scheduled %d",
                 regionCache.size(), LuxConfig.maxCachedRegions,
                 regionCache.cachedBytes() >> 20, LuxConfig.maxCachedRegionBytes >> 20,
                 fullRelightCoalesceUntil.size(),
@@ -194,7 +224,9 @@ public final class LuxRuntimeManager implements AutoCloseable {
                 LuxBenchmarkSupport.countValue("lucistarlink.runtime.jobs.rerunBaselineMoved"),
                 LuxBenchmarkSupport.countValue("lucistarlink.runtime.init.adoptedChanges"),
                 LuxBenchmarkSupport.countValue("lucistarlink.save.forcedLightIncorrect.pendingWork"),
-                LuxBenchmarkSupport.countValue("lucistarlink.save.forcedLightIncorrect.global"));
+                LuxBenchmarkSupport.countValue("lucistarlink.save.forcedLightIncorrect.global"),
+                peakRegionCacheRegions, peakRegionCacheBytes >> 20, peakCoalesceEntries, peakPendingRecords,
+                peakPendingRegions, peakPendingBatches, peakCommitQueue, peakScheduledRegions);
     }
 
 
