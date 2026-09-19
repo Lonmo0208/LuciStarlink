@@ -361,7 +361,7 @@ public final class LuxRuntimeManager implements AutoCloseable {
             long jobStartedAt = LuxBenchmarkSupport.start();
             try {
                 RuntimeRelightOutcome outcome = relighter.relightRuntimeRegion(getter, ownedState, coreChunk,
-                        batch, enableSky, enableBlock, this::enqueueBoundaryDeltas);
+                        batch, enableSky, enableBlock);
                 if (closed) {
                     return;
                 }

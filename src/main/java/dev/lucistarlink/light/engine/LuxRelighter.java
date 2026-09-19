@@ -38,9 +38,6 @@ public final class LuxRelighter {
     /**
      * Receives cross-region boundary light deltas produced by a region job.
      */
-    public interface BoundaryDeltaSink extends BorderDeltaSupport.BoundaryDeltaSink {
-    }
-
     public LuxRelighter(LightMaterialCache materialCache, LuxRegionExtractor extractor) {
         this.materialCache = materialCache;
         this.extractor = extractor;
@@ -382,8 +379,7 @@ public final class LuxRelighter {
     }
 
     public RuntimeRelightOutcome relightRuntimeRegion(LightChunkGetter getter, RuntimeRegionState state, LightChunk coreChunk,
-                                                         RuntimeRegionBatch batch, boolean enableSky, boolean enableBlock,
-                                                         BoundaryDeltaSink deltaSink) {
+                                                         RuntimeRegionBatch batch, boolean enableSky, boolean enableBlock) {
         RegionLightData data = state.data();
         // cells a neighbouring region published into the engine since this image was last used must be re-read
         // first, otherwise they are stale baselines for the propagation below
@@ -404,7 +400,7 @@ public final class LuxRelighter {
         List<LuxRelightResult> results;
         try {
             results = computeRuntimeRegion(getter, state, data, coreChunk, batch,
-                    enableSky, enableBlock, deltaSink);
+                    enableSky, enableBlock);
         } finally {
             // 采集阶段已经读完引擎的光照；不留下引用，工作线程才不会钉住已卸载维度的光照引擎
             publishEngine.clearCurrentLightSource();
@@ -422,7 +418,7 @@ public final class LuxRelighter {
     private List<LuxRelightResult> computeRuntimeRegion(LightChunkGetter getter, RuntimeRegionState state,
                                                         RegionLightData data, LightChunk coreChunk,
                                                         RuntimeRegionBatch batch, boolean enableSky,
-                                                        boolean enableBlock, BoundaryDeltaSink deltaSink) {
+                                                        boolean enableBlock) {
         if (!state.initializedFor(coreChunk)) {
             LuxBenchmarkSupport.count(state.initialized()
                     ? "lucistarlink.runtime.region.reload"
