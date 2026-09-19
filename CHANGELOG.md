@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.1.5 — the bug that mattered: every restart truncated block light
+
+Reported from a live server and reproduced here: after **every** restart, light sources lit only their own block,
+and breaking and replacing a block repaired it only until the next restart. **The save was fine** - reloading the
+same world with the mod's engine disabled gave bit-identical fingerprints - so the damage happened **at load**: our
+`lightChunk` hook did not distinguish a chunk that declares its light correct from a freshly generated one, and
+relighting a loaded chunk produced an emitter-only field (at load time the engine has no light installed yet to use
+as a propagation baseline) which was then published **over** the good saved data.
+
+* `lightChunk` now leaves a chunk alone when `chunk.isLightCorrect()` is true - the saved light is authoritative.
+  Freshly generated chunks report false and still get our relight, so worldgen lighting is unchanged.
+* `publishDirect` also writes `visibleSectionData` (the map chunk packets and serialization read) instead of relying
+  on the engine's own update cycle to promote what `queueSectionData` puts into `updatingSectionData`.
+
+Evidence, every line a bit-identical fingerprint comparison on one world: engine OFF (control) identical; engine ON
+before the fix, all three block-light labels differed while sky stayed identical; engine ON with
+`-Dlucistarlink.enableWorldgen=false` identical (isolating the load-time relight); engine ON with the gate,
+identical. The runtime border-edit probe (`ls-border-edit.sh`) matches the engine-off control on both labels, so the
+runtime path is untouched. 26 tests green, metadata `incompatible`.
+
+**A world that was already damaged stays damaged** - the broken field is what is on disk. Repair each area once with
+`/lucistarlink relight 256`; from this version on, restarts no longer undo it.
+
+## 1.1.4 / 1.1.3 / 1.1.2 — the repair command, and two attempts that did not turn out to be the cause
+
+These three were shipped while chasing the restart bug and are documented here so the record is complete:
+
+* **1.1.4** - `/lucistarlink relight` now repairs **full-cube** emitters as well (glowstone, sea lanterns) by breaking
+  and re-placing them within the same tick with the state restored in a `finally`; non-full blocks (torches) keep the
+  cheaper no-op change in an air cell beside them. Fluids (lava) and blocks with block entities are skipped on
+  purpose. The rule came from the user's own testing: a change beside an emitter repairs torches but not glowstone.
+* **1.1.3** - the first version of that repair: a no-op `air -> stone -> air` in an air cell beside every emitter.
+  Correct for torches, ineffective for full blocks, which 1.1.4 fixed.
+* **1.1.2** - `LuxPublishEngine.forcePublishIdentical` (system property, default off; switched on for the duration of
+  `relight`): publish sections even when the computed bytes equal what the engine holds. It was aimed at the
+  "identical sections are skipped, so nothing tells the engine to re-propagate" theory; that theory was wrong for this
+  bug, and the switch is kept as a documented lever, not as a fix.
+
 ## 1.1.1 — `/lucistarlink relight`: after switching engines, light that nothing would ever recompute
 
 A server that had been running ScalableLux and then switched to this mod came up with light sources lighting only
