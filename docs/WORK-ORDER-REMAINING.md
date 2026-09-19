@@ -106,6 +106,15 @@ pass 时间零变化）。它真正的用武之地有两个：
 **教训**：本会话用 sed/perl 改多行 Java **失败两次**（M3 括号未配平 ✗），改用文件工具一次成功 ✓。
 建议**两个绿色检查点**：先让 `LuxRelighter` 不再引用该类（类变成孤儿 ✓ 构建绿 ✓），再删类与配置 ✓ 构建绿 ✓。
 
+**唯一锚点（已抓全，逐处删除时用它消歧义 ✓）**：4 组守卫块文本完全相同，必须靠上下文区分 ——
+每组 `emitBoundaryDeltas` 的**上一行**分别是
+`countPublished("lucistarlink.runtime.init", results);`（约 466 行）、
+`countPublished("lucistarlink.runtime.full", results);`（约 497 行）、
+`countPublished("lucistarlink.runtime.incremental", results);`（约 526 行，**8 空格缩进**）、
+以及同样的 `runtime.incremental`（约 568 行，**4 空格缩进** ← 靠缩进区分）。
+对应的 4 处 `snapshotBorder` 行（约 450、479、514 行，第四处在 514 之后同一分支里）则用各自分支的
+`recordSince("lucistarlink.stage.runtime.<分支>.publish", startedAt);` 作为锚点 ✓。
+
 1. **`LuxRelighter`（先做，多行处用 Edit 工具）**：
    - 删 `public interface BoundaryDeltaSink extends BorderDeltaSupport.BoundaryDeltaSink {}`（约 41 行）；
    - 删 `sinkWrapper(...)`（约 168 行）；
