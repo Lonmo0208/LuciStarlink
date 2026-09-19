@@ -166,14 +166,10 @@ public final class LuxRuntimeManager implements AutoCloseable {
     }
 
     /**
-     * Verbose-only view of the structures that hold memory in this manager, so a server admin can watch
-     * them stay bounded instead of guessing. The region cache is the big one: every entry pins four byte
-     * planes of the region volume (which is why it is trimmed by bytes, not by entry count).
-     */
-    /**
      * 峰值保持（high-water mark）。存在的理由是一条实测：30 秒一次的遥测采样**必然错过**绝大多数工作瞬间 ——
      * 45 个采样全是 0，而引擎确实在干活，于是「有界」这件事拿不到证据。所以每 tick 采一次当前占用并保留历史
-     * 最大值，任何一次采样都能看到自启动以来的峰值。读的都是现成计数，开销可忽略。
+     * 最大值，任何一次采样都能看到自启动以来的峰值（`statusLine` 的 "peaks since boot" 一段）。读的都是现成
+     * 计数，开销可忽略。
      */
     private int peakRegionCacheRegions;
     private long peakRegionCacheBytes;

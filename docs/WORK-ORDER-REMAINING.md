@@ -60,8 +60,24 @@ pass 时间零变化）。它真正的用武之地有两个：
 
 ## 4. 其它仍未做（低优先，记着就行）
 
-- `BorderDeltaSupport` + `experimentalBoundaryDeltas` 删除（默认关的死代码，需一次专门提交 + 探针）；
-- 发布光源改成显式参数（能让 worldgen 路径也享受"没变就跳过"，但会改变已测行为 → 1.2）；
-- `RuntimeUpdateQueue` 的 `Long` 装箱 CHM（~20–40 ns/方块，缓存必须带代次校验否则会静默吞改动）；
-- `haloChunks` 与 `runtimeHaloChunks` 的命名歧义；
-- 基准代码位于 `src/main/java`（应在专门的源码集或标注清楚）。
+**已做（1.2.3 之后的清理轮）**：`LuxRuntimeManager` 里那处孤立 javadoc（峰值字段上方留着一块属于旧遥测视图的
+注释，已并入并说明用途）✓；`dev/lucistarlink/test` 加了 `package-info.java`，说明基准装置为什么留在主源码集、
+受什么纪律约束（默认全部关闭、不得改变默认行为）✓。
+
+**待做（下一轮，按此清单执行）**：
+
+1. **删除 `BorderDeltaSupport` + `experimentalBoundaryDeltas`**（默认关的死原型，被否决且已知会振荡）。
+   **引用图（已摸清，直接照做）**：
+   - `light/engine/BorderDeltaSupport.java`（162 行，整个删）；
+   - `config/LuxConfig.java`：5 处（`define`、字段、`sync()`、`applyOverrides`、校验）+ `light/LuxFlags.java` 1 处；
+   - `light/engine/LuxRelighter.java`：`BoundaryDeltaSink` 接口、`sinkWrapper`，以及**4 个调用点**（成对出现
+     `snapshotBorder` / `emitBoundaryDeltas`，且都已被标志位包住）——注意 `computeRuntimeRegion(...)` 的
+     `deltaSink` 参数要一并摘掉，会牵动该方法的签名与调用方；
+   - `test/.../CrossRegionDifferentialTest.java` 直接用了 `BorderDeltaSupport.snapshotBorder/emitBoundaryDeltas`
+     —— 删除后该测试的这部分要一并去掉；
+   - **验收**：26 项测试全绿 + 四项工作负载同场交错零回归（删除本身应当零行为变化，因为默认关闭）。
+2. **`haloChunks` 与 `runtimeHaloChunks` 的命名歧义**：改善两处配置注释（世界生成 vs 运行期），
+   **不要改键名**（改键会让已有配置失效）。
+3. **发布光源改成显式参数**（让 worldgen 路径也能跳过未变 section）—— **不是清理**：它改变已测行为，必须单独做 A/B。
+4. **`RuntimeUpdateQueue` 的 `Long` 装箱 CHM**（~20–40 ns/方块）—— **不是清理**：单槽缓存必须带代次校验，
+   否则会静默吞掉改动；风险高于收益，除非有测量显示它真的在关键路径上。
