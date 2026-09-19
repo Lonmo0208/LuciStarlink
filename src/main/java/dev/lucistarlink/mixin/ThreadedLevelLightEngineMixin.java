@@ -241,9 +241,15 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
 
     @Override
     public CompletableFuture<Void> lucistarlink$flushMarker(int chunkX, int chunkZ) {
-        return lucistarlink$addPostTask(chunkX, chunkZ, () -> {
+        CompletableFuture<Void> completion = lucistarlink$addPostTask(chunkX, chunkZ, () -> {
             // no-op: its only job is to complete after everything queued before it has been published
         });
+        // 这个标记是「完成信号」，不是光照数据 —— 它绝不能等合并窗口。实测 sky_hole 每轮的 wait 是 528~1503 µs
+        // 而 SL 那一侧只有 3~314 µs，且 wait ≈ queueLat（691/395 µs）：说明这一档的时间几乎全部花在「等我们自己
+        // 的发布队列被那个 250 µs 定时器唤醒」。立即把 drain 投进引擎邮箱（不经过定时器），排在这个标记前面的
+        // 发布就和它落在同一轮里 —— 调用方等的那句「已经全部落地」不再需要跨过合并窗口。
+        this.lucistarlink$taskMailbox.tell(this::lucistarlink$drainQueuedLightTasks);
+        return completion;
     }
 
     @Unique
