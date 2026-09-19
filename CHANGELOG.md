@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.2.0 / 1.2.1 / 1.2.2 / 1.2.3 — the client line, two defects the gates caught, and the synchronous default
+
+These four shipped while the client feature line and the `sky_hole` campaign were being finished; they are grouped
+here so the record is complete.
+
+**1.2.0 — client light line, step 1+2 (both default off).** A read-only client probe (`ClientLightEngineProbeMixin`
++ `LuxClientLightProbe`) counting what the client's own light engine actually does, and a conservative takeover
+(`LuxClientLightEngine` + `ClientChunkCacheMixin`, hooked at the single construction point) that only no-ops
+`checkBlock` and `propagateLightSources` while keeping vanilla's data structures and pipeline intact (Sodium and
+shaders read them; `queueSectionData` writes the storage synchronously and `runLightUpdates` promotes it, so skipping
+that would freeze the client's light). **Measured in-world and the premise failed**: a vanilla client reports
+`propagateLightSources` 0 calls and 108 `checkBlock` calls over a session — the client never computes light, it
+receives it. Shipped as a default-off switch and a probe tool, not as a performance feature.
+(`docs/ARCH-V2-CLIENT-LIGHTING.md`)
+
+**1.2.1 — the probe gate caught a real defect.** Enabling the two synchronous switches made
+`lucistarlink$installSection` cast a layer's listener to `LightEngineAccessor` unconditionally, but a layer with no
+light engine (a dimension without block light) hands out `DummyLightLayerEventListener`: a `ClassCastException` on a
+worker thread, logged and swallowed. Guarded with an `instanceof` check. This is why the gate exists.
+
+**1.2.2 — the synchronous-publish combination becomes the default.** `sky_hole`, same-session interleaved, exact
+p: default 0.912 vs 0.573 = **1.583x, p=0.0079** (significantly behind) → `directSectionInstall + syncRuntimeDrain`
+0.719 vs 0.573 = **1.256x, p=0.0556** (no longer significant), with ScalableLux's baseline stable at 0.573-0.576
+across both groups. Four-workload guardrail: border **2.1x ahead**, structure **1.42x ahead**, dense 1.22x behind,
+sky_hole behind — the two wins are intact. Probe gate with the new defaults: fingerprints bit-identical to the
+engine-off control. **Closer, not an overtake**: every mechanism that could close the rest has been measured, and
+what remains is ~0.15 ms of inherent async-hand-off cost.
+
+**1.2.3 — V2 items 1 and 2.** Memory telemetry keeps **high-water marks** (a 30 s sampler provably misses the work:
+45 samples read zero while the engine was busy); soak evidence over 5,563 sustained passes: peaks 2,067 queued
+changes (cap 131,072), 10 queued regions, region cache 49 regions / 165 MiB (cap 128 / 256 MiB) — everything inside
+budget, and the current values at the end read zero, i.e. without the peaks that run would have looked like the
+inconclusive one. **In-job parallelism decided: do not do it** — `/lucistarlink relight 64` over 1,024 loaded chunks
+and 6,334 emitters measured 9,062 ms, of which **8,694 ms (96%) repairing emitters** and 368 ms scanning; block
+changes must stay on the server thread, so there is nothing to parallelise. The command now reports that breakdown
+itself.
+
 ## 1.1.5 — the bug that mattered: every restart truncated block light
 
 Reported from a live server and reproduced here: after **every** restart, light sources lit only their own block,

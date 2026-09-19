@@ -12,27 +12,34 @@ three strongest public designs in this space into one engine.
 It is **not** a scheduler over vanilla light tasks and **not** a Starlight fork: it owns the computation
 (material image + propagation) per region and publishes only dirty sections back into the vanilla engine.
 
-> Status: **1.0.0 — server-side engine, correct across region borders, memory-bounded, saves safe.**
+> Status: **1.2.3 — server-side engine, correct across region borders, memory-bounded, saves safe, and the
+> restart-truncation defect fixed (1.1.5).**
 > Benchmarked against **vanilla** and **ScalableLux** in same-session interleaved runs (the engines alternate
 > round by round, ≥5 reps each; statistic = the median of per-pass minima over a run; every comparison carries an
 > exact two-sided Mann-Whitney p). All numbers use the settled-world protocol
 > (`-Dlucistarlink.benchmark.prepareRing=3 -Dlucistarlink.benchmark.quiesceSettleMs=1000`); see
 > [docs/TASK-PERF-SKY.md](docs/TASK-PERF-SKY.md) §7.8 for why older numbers were not comparable.
 >
-> **Two independent interleaved sessions are shown as ranges** — every *direction* below was replicated in both,
-> with perfect separation (all five runs of one engine on one side of all five of the other), but magnitudes vary
-> up to ~40% between sessions, so read the range rather than a single value:
+> **The current standing table (2026-09-19, 1.2.2 defaults — one interleaved session, 5 reps, so quote it as one
+> measurement, not as a range across sessions):**
 >
-> | workload | vanilla | LuciStarlink | ScalableLux | vs vanilla | vs ScalableLux |
-> |---|---|---|---|---|---|
-> | `block_toggle_border` | 3.44 | **0.70–0.81** | 1.64–1.75 | **4.3–4.9× faster** | **2.05–2.49× faster** (p=0.008) |
-> | `structure_cube` | 3.69–4.33 | **1.74–2.43** | 3.04–3.19 | **1.8–2.1× faster** | **1.31–1.77× faster** (p=0.008) |
-> | `dense_chunk_patch` | 3.02–3.16 | **1.80–2.45** | 1.42–1.49 | **1.23–1.76× faster** | 1.21–1.73× slower (p≤0.095) |
-> | `sky_hole` | 0.76–0.82 | 0.71–0.82 | **0.36–0.44** | parity (p=0.69) | 1.87–2.0× slower (p≤0.016) |
+> | workload | LuciStarlink | ScalableLux | vs ScalableLux | p |
+> |---|---|---|---|---|
+> | `block_toggle_border` | **1.308** | 2.323 | **1.78× faster** | 0.0079 |
+> | `structure_cube` | **2.753** | 3.749 | **1.36× faster** | 0.6905 (our copy had two environment-stalled runs) |
+> | `dense_chunk_patch` | 2.595 | **2.069** | 1.25× slower | 0.0317 |
+> | `sky_hole` | 0.912 → **0.719** | 0.573 | 1.58× slower → **1.26× slower** | 0.0079 → 0.0556 (no longer significant) |
+>
+> Since **1.2.2** the synchronous-publish combination (`directSectionInstall` + `syncRuntimeDrain`) is the default;
+> it is what moved `sky_hole` from 1.583× to 1.256× while a four-workload guardrail showed the two wins intact
+> (border 2.1×, structure 1.42×, dense 1.22× behind). **Honest summary: two workloads decisively ahead, two behind —
+> not "ahead on three".** `sky_hole` remains behind by an inherent async-hand-off cost of roughly 0.15 ms per small
+> edit, and every mechanism that could close it has been measured ([docs/TASK-PERF-SKY.md](docs/TASK-PERF-SKY.md)
+> §10.13–10.14); ScaleableLux's edge there is structural — it never hands sections to the light engine at all.
 >
 > Wall time (the whole run rather than the best pass) tells the same story: 1.5–4.9× faster than vanilla and
-> parity on `sky_hole`; 1.3–2.5× faster than ScalableLux on the two workloads that matter most, 16–73% behind on
-> `dense_chunk_patch` and 1.9–2.2× behind on `sky_hole` — where we sit at vanilla level. ScalableLux's edge on
+> parity on `sky_hole`; 1.3–2.5× faster than ScalableLux on the two workloads that matter most, and behind on
+> `dense_chunk_patch` and `sky_hole` — where we sit at vanilla level.
 > that one workload is structural: it never hands sections to the light engine at all, which is what the V2
 > storage mode ([docs/ARCH-V2-GLOBAL-STORAGE.md](docs/ARCH-V2-GLOBAL-STORAGE.md), plan in
 > [docs/V2-PLAN.md](docs/V2-PLAN.md)) exists for.
