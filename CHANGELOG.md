@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.2.4 — cleanup round: naming, hygiene, and a removal that is mapped instead of rushed
+
+* **The two halo keys now say which path they belong to.** `haloChunks` is the world-generation halo and
+  `runtimeHaloChunks` is the runtime (block update) halo; a reader could not tell them apart at a glance. Each
+  comment now opens with its path in brackets, warns explicitly not to confuse the two, and cross-references the
+  other. **Key names unchanged on purpose** — renaming would invalidate every existing configuration.
+* **`dev/lucistarlink/test/package-info.java`**: why the benchmark harness deliberately lives in the main source set
+  (the rig jar is built from it, so measuring must build the code that ships) and the discipline that follows —
+  everything default-off, and no measurement code may change default behaviour.
+* A stray javadoc block in `LuxRuntimeManager` (left floating above the new peak fields) is merged into one comment.
+* README and CHANGELOG are aligned with the current numbers: one standing table instead of two, the 1.2.2 default
+  change, and the honest summary **"two workloads decisively ahead, two behind"**.
+* **`BorderDeltaSupport` + `experimentalBoundaryDeltas` are mapped, not deleted.** Tracing every reference showed
+  the dead prototype reaches the *light engine compute classes* (`skyLightEngine`/`blockLightEngine.applyBoundaryDeltas`)
+  through the runtime batch, the queue merge and `LuxRuntimeManager`, plus five sites in `CrossRegionDifferentialTest`.
+  That spans the publish layer, the runtime layer and the engine itself — the one part of this project that has
+  produced two real bugs — so it gets a dedicated round with the full site list and current line numbers in
+  `docs/WORK-ORDER-REMAINING.md` §4, and the acceptance that comes with it (26 tests + four-workload interleave,
+  expected zero behaviour change because it is default-off).
+
 ## 1.2.0 / 1.2.1 / 1.2.2 / 1.2.3 — the client line, two defects the gates caught, and the synchronous default
 
 These four shipped while the client feature line and the `sky_hole` campaign were being finished; they are grouped
