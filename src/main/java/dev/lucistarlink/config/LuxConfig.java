@@ -25,20 +25,23 @@ public final class LuxConfig {
             .defineInRange("regionChunks", 1, 1, 16);
 
     private static final ModConfigSpec.IntValue HALO_CHUNKS = BUILDER
-            .comment("Read-only halo size in chunks for the world-generation image: how far beyond the owned",
+            .comment("[世界生成路径 worldgen] 生成的区块向外多算几格光照，好让它能发布进已经加载的邻居。",
+                    "**不要与 runtimeHaloChunks 混淆**：那个只管运行期（方块更新）作业，这个只管世界生成。",
+                    "1 覆盖 15 格的光传播距离；填 0 会在区块边缘截断传播、留下跨区光缝，因此这条路径上按 1 处理",
+                    "（旧版本写下的配置里 0 也出现过 —— 那时这个键其实没被读取，代码固定用 1）。",
+                    "Read-only halo size in chunks for the world-generation image: how far beyond the owned",
                     "chunk a generated chunk computes light so that it can be published into an already-loaded",
-                    "neighbour. 1 covers the 15-block light travel distance; 0 would stop propagation at the chunk",
-                    "edge and leave a light seam on the border, so it is treated as 1 on this path (0 also appears",
-                    "in configurations written by older builds, where this key did nothing and the code used 1).")
+                    "neighbour. Distinct from runtimeHaloChunks, which only affects runtime (block update) jobs.")
             .defineInRange("haloChunks", 1, 0, 2);
 
     private static final ModConfigSpec.IntValue RUNTIME_HALO_CHUNKS = BUILDER
-            .comment("Halo size in chunks for runtime (block update) jobs.",
-                    "0 is the fastest but leaves light under-propagated across chunk borders: a job's",
-                    "propagation stops at its region edge, so light that vanilla would carry into the",
-                    "neighbouring chunk is lost until something else touches that region. 1 gives every",
-                    "job a one chunk (15 block) halo - exactly the light travel distance - at the cost of",
-                    "a larger working image per job.")
+            .comment("[运行期路径 runtime] 方块更新作业的光环大小。**不要与 haloChunks 混淆**：那个只管世界生成。",
+                    "0 最快，但跨区传播会不足：作业的传播在区域边缘停住，原版会带进邻区的那部分光会一直缺着，",
+                    "直到别的改动碰到那片区域。1 给每个作业一个区块（15 格）的光环 —— 正好是光传播距离 ——",
+                    "代价是每个作业的工作映像更大。",
+                    "Halo size in chunks for runtime (block update) jobs. 0 is fastest but leaves light",
+                    "under-propagated across chunk borders; 1 gives every job a one chunk (15 block) halo,",
+                    "exactly the light travel distance, at the cost of a larger working image per job.")
             .defineInRange("runtimeHaloChunks", 1, 0, 2);
 
     private static final ModConfigSpec.IntValue MAX_BATCH_CHUNKS = BUILDER
