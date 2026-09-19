@@ -17,6 +17,8 @@
     "compat.sable.SableServerLevelAccessor"
   ],
   "client": [
+    "client.ClientChunkCacheMixin",
+    "client.ClientLightEngineProbeMixin"
   ],
   "injectors": {
     "defaultRequire": 1
