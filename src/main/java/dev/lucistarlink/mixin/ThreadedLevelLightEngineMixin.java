@@ -385,6 +385,79 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
      * <p>A pending queued layer is dropped because it would shadow ours in {@code getDataLayerData}, and the
      * lookup cache is cleared because it may still hold the object this call replaced.
      */
+    /**
+     * 客户端优化的核心判据：这个 section 的**六个面**里，哪些面真的有格子变了。
+     *
+     * <p>为什么需要它：原版（以及我们目前的默认）在发布一个 section 时会把 3×3×3 共 27 个 section 都标成
+     * 「光照变了」，而这些标记会让服务端给客户端发光照数据 —— 实测通知量因此是必要的 7.1 倍
+     * （10015 → 1401），第一轮客户端实测进服两分钟就收到 11,729 个 section（约 24 MB）。
+     *
+     * <p>规则**构造上正确**：邻区的光照与网格只可能因为与它共享的那一层变化而变化。所以「没变的面 → 不通知那个
+     * 邻区」永远不会漏掉必需的通知（比直接关掉扇出安全），而「变了的面 → 照旧扇出」也永远不会少通知（保守一侧）。
+     *
+     * @return 位掩码：1=-X 2=+X 4=-Y 8=+Y 16=-Z 32=+Z；`before` 为 null 时返回 63（全变，按最保守处理）
+     */
+    @Unique
+    private static int lucistarlink$changedFaces(byte[] before, byte[] after) {
+        if (before == null || after == null) {
+            return 63;
+        }
+        int mask = 0;
+        for (int y = 0; y < 16; y++) {
+            for (int z = 0; z < 16; z++) {
+                if (lucistarlink$nibble(before, y, z, 0) != lucistarlink$nibble(after, y, z, 0)) {
+                    mask |= 1;
+                }
+                if (lucistarlink$nibble(before, y, z, 15) != lucistarlink$nibble(after, y, z, 15)) {
+                    mask |= 2;
+                }
+            }
+        }
+        for (int x = 0; x < 16; x++) {
+            for (int z = 0; z < 16; z++) {
+                if (lucistarlink$nibble(before, 0, z, x) != lucistarlink$nibble(after, 0, z, x)) {
+                    mask |= 4;
+                }
+                if (lucistarlink$nibble(before, 15, z, x) != lucistarlink$nibble(after, 15, z, x)) {
+                    mask |= 8;
+                }
+            }
+        }
+        for (int x = 0; x < 16; x++) {
+            for (int y = 0; y < 16; y++) {
+                if (lucistarlink$nibble(before, y, 0, x) != lucistarlink$nibble(after, y, 0, x)) {
+                    mask |= 16;
+                }
+                if (lucistarlink$nibble(before, y, 15, x) != lucistarlink$nibble(after, y, 15, x)) {
+                    mask |= 32;
+                }
+            }
+        }
+        return mask;
+    }
+
+    /** 按原版 DataLayer 的打包方式取一格光照：索引 (y&lt;&lt;8)|(z&lt;&lt;4)|x，偶数索引取低四位。 */
+    @Unique
+    private static int lucistarlink$nibble(byte[] data, int y, int z, int x) {
+        int index = (y << 8) | (z << 4) | x;
+        return (data[index >> 1] >> ((index & 1) * 4)) & 15;
+    }
+
+    /** 引擎当前持有的这一层 section 字节（用于在写入前算出六面变化掩码）；没有则返回 null。 */
+    @Unique
+    private byte[] lucistarlink$currentLayerBytes(LightLayer layer, SectionPos sectionPos) {
+        Object listener = super.getLayerListener(layer);
+        if (!(listener instanceof LightEngineAccessor engineAccessor)) {
+            return null;
+        }
+        LayerLightSectionStorageAccessor storage =
+                (LayerLightSectionStorageAccessor) (Object) engineAccessor.lucistarlink$storage();
+        net.minecraft.world.level.lighting.DataLayerStorageMap updating =
+                (net.minecraft.world.level.lighting.DataLayerStorageMap) storage.lucistarlink$updatingSectionData();
+        net.minecraft.world.level.chunk.DataLayer layerData = updating.getLayer(sectionPos.asLong());
+        return layerData == null ? null : layerData.getData();
+    }
+
     @Unique
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void lucistarlink$installSection(LightLayer layer, SectionPos sectionPos, net.minecraft.world.level.chunk.DataLayer dataLayer) {
