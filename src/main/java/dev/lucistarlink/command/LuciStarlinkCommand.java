@@ -84,6 +84,9 @@ public final class LuciStarlinkCommand {
         int radius = Math.min(Math.max(radiusChunks, 0), MAX_RELIGHT_RADIUS_CHUNKS);
 
         int queued = 0;
+        // 强制发布：存档里的光照可能「传播没做完却自称已完成」，那时我们算出来的字节与现有数据完全相同，
+        // 「没变就不发」会把发布全部吞掉 —— 而那次发布才是让引擎重新传播的触发点。只对本次刷新打开。
+        dev.lucistarlink.light.engine.LuxPublishEngine.forcePublishIdentical = true;
         for (int chunkX = originChunkX - radius; chunkX <= originChunkX + radius; chunkX++) {
             for (int chunkZ = originChunkZ - radius; chunkZ <= originChunkZ + radius; chunkZ++) {
                 net.minecraft.world.level.chunk.LevelChunk chunk = chunkSource.getChunkNow(chunkX, chunkZ);

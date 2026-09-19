@@ -29,6 +29,17 @@ public final class LuxPublishEngine {
     // 作业在跑，多维度服务器上还可能是不同 level 的作业。用单个 volatile 字段时，B 线程会读到 A 线程或另一个维度
     // 刚设进去的光源，于是「这个 section 是否没变」的身份比较拿到的是别的世界的字节 —— 一旦相等就会**跳过一次
     // 本来必须的发布（丢光）**。按线程后，设置与读取必然落在同一个线程内，跨线程和跨维度都不再共享。
+    /**
+     * 强制发布：即使某个 section 算出来的字节与引擎里现有的完全一样，也照样交给引擎一次。
+     *
+     * <p>存在的理由是一次真实的换模组事故：存档里的光照是「传播没做完」的，而它自称已完成。我们算出来的结果与
+     * 那份坏数据逐字节相同，于是「没变就不发」的优化把每一次发布都吞掉 —— 可那次发布正是让引擎把这些区块标成
+     * 「需要重新传播」的唯一触发点（放一格火把之所以能修好一片，就是因为它强行触发了一次真实发布）。打开这个开关
+     * 只会让引擎收到一份内容与现有数据相同的数据，因此最多是白做一次，不会把光照改坏。
+     */
+    public static volatile boolean forcePublishIdentical =
+            Boolean.parseBoolean(System.getProperty("lucistarlink.forcePublishIdentical", "false"));
+
     private final ThreadLocal<SectionLightSource> lightSourceByThread =
             ThreadLocal.withInitial(() -> SectionLightSource.NONE);
 
@@ -178,9 +189,12 @@ public final class LuxPublishEngine {
             int worldSectionY = data.bounds.minSectionY() + sectionY;
             DataLayer packed = NibblePacker.packSection(data, source, worldSectionX, worldSectionY, worldSectionZ);
             byte[] current = currentLightSource().current(SectionPos.of(chunkPos, data.bounds.minSectionY() + sectionY), layer);
-            if (current != null && java.util.Arrays.equals(current, packed.getData())) {
+            if (current != null && java.util.Arrays.equals(current, packed.getData()) && !forcePublishIdentical) {
                 LuxBenchmarkSupport.count("lucistarlink.publish.skippedIdentical.sections");
                 continue;
+            }
+            if (current != null && java.util.Arrays.equals(current, packed.getData())) {
+                LuxBenchmarkSupport.count("lucistarlink.publish.forcedIdentical.sections");
             }
             out.add(new LuxSectionData(SectionPos.of(chunkPos, data.bounds.minSectionY() + sectionY), layer, packed));
             LuxBenchmarkSupport.count(sky ? "lucistarlink.publish.sky.sections" : "lucistarlink.publish.block.sections");
