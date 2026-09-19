@@ -447,7 +447,6 @@ public final class LuxRelighter {
                 data.clearDirty();
                 return results;
             }
-            byte[] borderBefore = deltaSink != null && LuxFlags.boundaryDeltas ? BorderDeltaSupport.snapshotBorder(data, borderScratch.get()) : null;
             startedAt = LuxBenchmarkSupport.start();
             if (enableSky) {
                 skyLightEngine.compute(data);
@@ -463,9 +462,6 @@ public final class LuxRelighter {
             List<LuxRelightResult> results = publish(data);
             LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.init.publish", startedAt);
             countPublished("lucistarlink.runtime.init", results);
-            if (borderBefore != null) {
-            BorderDeltaSupport.emitBoundaryDeltas(data, borderBefore, sinkWrapper(deltaSink));
-        }
             data.clearDirty();
             return results;
         }
@@ -476,7 +472,6 @@ public final class LuxRelighter {
             // is empty (the trigger was a bulk write, not records), and changesNearBorder() on an empty list is
             // always false, which used to skip both the halo publication and the neighbour marking
             haloTouchedScratch.set(Boolean.TRUE);
-            byte[] borderBefore = deltaSink != null && LuxFlags.boundaryDeltas ? BorderDeltaSupport.snapshotBorder(data, borderScratch.get()) : null;
             long startedAt = LuxBenchmarkSupport.start();
             extractor.populate(getter, data, coreChunk);
             LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.full.extract", startedAt);
@@ -494,9 +489,6 @@ public final class LuxRelighter {
             List<LuxRelightResult> results = publish(data);
             LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.full.publish", startedAt);
             countPublished("lucistarlink.runtime.full", results);
-            if (borderBefore != null) {
-            BorderDeltaSupport.emitBoundaryDeltas(data, borderBefore, sinkWrapper(deltaSink));
-        }
             data.clearDirty();
             return results;
         }
@@ -511,7 +503,6 @@ public final class LuxRelighter {
         LuxBenchmarkSupport.count("lucistarlink.runtime.region.incremental");
         LuxBenchmarkSupport.count("lucistarlink.runtime.change.records", changes.size());
         data.clearDirty();
-        byte[] borderBefore = deltaSink != null && LuxFlags.boundaryDeltas ? BorderDeltaSupport.snapshotBorder(data, borderScratch.get()) : null;
         long startedAt = LuxBenchmarkSupport.start();
         RuntimeLightChangeBuffer runtimeChanges = runtimeChangeBuffers.get();
         runtimeChanges.clear();
@@ -523,9 +514,6 @@ public final class LuxRelighter {
             applyIncomingBoundaryDeltas(data, batch, enableSky, enableBlock);
             List<LuxRelightResult> results = publish(data);
             countPublished("lucistarlink.runtime.incremental", results);
-            if (borderBefore != null) {
-            BorderDeltaSupport.emitBoundaryDeltas(data, borderBefore, sinkWrapper(deltaSink));
-        }
             data.clearDirty();
             return results;
         }
@@ -565,9 +553,6 @@ public final class LuxRelighter {
         List<LuxRelightResult> results = publish(data);
         LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.incremental.publish", startedAt);
         countPublished("lucistarlink.runtime.incremental", results);
-        if (borderBefore != null) {
-            BorderDeltaSupport.emitBoundaryDeltas(data, borderBefore, sinkWrapper(deltaSink));
-        }
         data.clearDirty();
         runtimeChanges.clear();
         return results;
