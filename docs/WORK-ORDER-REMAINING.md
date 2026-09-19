@@ -1,6 +1,6 @@
 # 剩余功能工作单（客户端光照接管 / 作业内并行 / 天空档决定）
 
-> 这份写给下一个窗口。当前发布线 `master` = **1.1.4**（`dist/[光源优化模组V1龙师傅特供]lucistarlink-1.21.1-1.1.4.jar`，
+> 这份写给下一个窗口。当前发布线 `master` = **1.1.4**（`dist/lucistarlink-1.21.1-1.1.4.jar`，
 > md5 `1b4ff645afcac146ab3347c8a5dd3b61`，26 测试全绿）。性能现状见 `docs/TASK-PERF-SKY.md` §10.12：
 > 同场 5 轮交错下 **两个负载赢、两个输**（border 1.78× 快 / structure 1.36× 快但不显著 / dense 1.25× 慢 / sky_hole 1.58× 慢）。
 

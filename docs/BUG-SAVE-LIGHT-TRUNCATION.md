@@ -27,7 +27,7 @@
    `queueSectionData` 写入 `updatingSectionData` 的数据。
 
 **验收已经达到**：`gen → reload` 三标签方块光指纹逐位相同；26 个测试全绿；运行期边界编辑探针与对照逐位一致；
-产物元数据 `incompatible`（`dist/[光源优化模组V1龙师傅特供]lucistarlink-1.21.1-1.1.5.jar`，
+产物元数据 `incompatible`（`dist/lucistarlink-1.21.1-1.1.5.jar`，
 md5 `27d26dc61da1b40f10ff868b3ceca0bd`）。
 
 **对已经坏过的世界**：盘上那份已经被写坏了，1.1.5 不能凭空变回来 —— 用 `/lucistarlink relight 256` 分区域修一次，

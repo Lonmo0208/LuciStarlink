@@ -4,7 +4,7 @@ Project: `E:\LuciStarlin\LuciStarlink` (mod id `lucistarlink`, MC 1.21.1 / NeoFo
 
 ## 现在的状态（2026-09-19，新窗口从这里看起）
 
-* 发布线 `master` = **1.0.3**（`dist/[光源优化模组V1龙师傅特供]lucistarlink-1.21.1-1.0.3.jar`）；git 已存在，每个改动都是可回退的提交。
+* 发布线 `master` = **1.0.3**（`dist/lucistarlink-1.21.1-1.0.3.jar`）；git 已存在，每个改动都是可回退的提交。
 * **V2 全局存储**已完整实现并**收线**在 `v2-storage` 分支：阶段 0/1/2 落地并逐格验证（storage-parity），
   性能中性（0.815 vs 0.819 ms，p=0.69），阶段 3 因前提错误而取消。默认仍是 `lightEngineMode = region`，
   storage 是一条可切换、经 parity 验证的替代路径。**读 `docs/V2-CONTINUATION.md`。**
