@@ -35,7 +35,7 @@ of magnitude faster (435 → 0.87 ms), client light traffic halved (−51%), ser
 introspection and memory telemetry with peaks, and a reproducible acceptance pipeline (differential suite,
 adjacent-pair probes, save round trip, client case).
 
-**The one honest caveat that belongs in any claim**: on a **machine under heavy load** (QQ plus video, say)
+**The one honest caveat that belongs in any claim**: on a **machine under heavy load** (background tasks competing for the CPU, say)
 our async delivery chain is slowed by the whole-machine scheduling — measured across five design variants;
 that is the machine, not the mod.
 
