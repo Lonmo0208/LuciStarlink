@@ -165,11 +165,7 @@ public final class LuxRelighter {
         }
     }
 
-    private BorderDeltaSupport.BoundaryDeltaSink sinkWrapper(BoundaryDeltaSink sink) {
-        return (neighborRegionKey, deltas) -> {
-            LuxBenchmarkSupport.count("lucistarlink.runtime.boundary.deltas", deltas.length);
-            sink.accept(neighborRegionKey, deltas);
-        };
+    private void sinkWrapperRemovedPlaceholder() {
     }
 
     /**
