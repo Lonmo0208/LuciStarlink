@@ -1,5 +1,21 @@
 # V2 功能线：客户端光照接管（设计 + 实施顺序）
 
+## 0. 当前状态（2026-09-19）
+
+**第 1、2 步已实现并已提交**（`master`，版本号 1.2.0 未发布）：
+
+- `LuxClientLightProbe` + `ClientLightEngineProbeMixin`（只读统计，`-Dlucistarlink.clientProbe=true` 才输出）；
+- `LuxClientLightEngine` + `ClientChunkCacheMixin`（`ClientChunkCache` 构造函数里的唯一构造点，
+  `-Dlucistarlink.clientLightTakeover=true` 才换成我们的子类，否则原版引擎）；
+  子类**只**空实现 `checkBlock` 与 `propagateLightSources`，`runLightUpdates` / `queueSectionData` /
+  `updateSectionStatus` 保持原版 —— 它们是数据管线（`queueSectionData` 同步写存储、`runLightUpdates` 负责提升到
+  可见层，跳过它会把客户端光照冻住，正是 1.1.5 在服务端修过的那个坑）。
+- **已验证**：构建通过、26 测试全绿、**开发客户端完整启动且 0 个 mixin 应用失败、0 异常**
+  （这道闸是必须的：客户端 mixin 应用失败会让每个客户端启动即崩）。
+- **未验证（下一步）**：开启接管后**在世界里**的行为 —— 需要按 §6 跑一轮
+  `clientcase`（`ls-border-edit.sh ... KEEP_SERVER_RUNNING=1` + `runClientMultiplayer`），
+  用探针数值证明「服务端送来的 section 数据远多于客户端自己的重算」，再截图验证光照与帧时间。
+
 > 背景：`V2`（全局存储架构）已收线（`docs/V2-CONTINUATION.md`），这条是**下一个大版本的功能线**。
 > 客户端光照接管是我们在与 ScalableLux/Starlight 的对比里唯一明确写着「未做」的维度，也是唯一还能给用户
 > 带来**体感**收益的未做项（省客户端 CPU/内存 + 两端光照同源）。
