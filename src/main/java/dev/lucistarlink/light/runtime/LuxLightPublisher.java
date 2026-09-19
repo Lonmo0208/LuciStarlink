@@ -26,6 +26,13 @@ public interface LuxLightPublisher {
     void lucistarlink$drainInline();
 
     /**
+     * V3 M1：**强制**在调用线程上把待发布的数据写完（不看开关、不经过邮箱）。它就是「同步小改动路径」的最后一步：
+     * 小批量改动由调用线程自己算完（已有的增量引擎）之后不再交给光照线程，而是就地写进引擎的两份地图并发出通知 ——
+     * 也就是 ScalableLux 的形状（改动调用返回时这一格的光已是最终值）。大改动仍走异步区域路径。
+     */
+    void lucistarlink$drainInlineForced();
+
+    /**
      * Queues a no-op publish task and completes the returned future when it runs, i.e. after every publication
      * queued before it has been handed to the engine.
      *

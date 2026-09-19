@@ -655,6 +655,11 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
             lucistarlink$drainNow();
             return;
         }
+        lucistarlink$drainInlineForced();
+    }
+
+    @Override
+    public void lucistarlink$drainInlineForced() {
         long startedAt = LuxBenchmarkSupport.start();
         ArrayDeque<LuxQueuedLightTask> batch = this.lucistarlink$publishBatch;
         batch.clear();

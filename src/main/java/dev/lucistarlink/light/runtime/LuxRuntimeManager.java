@@ -269,13 +269,11 @@ public final class LuxRuntimeManager implements AutoCloseable {
         drainedBatches.clear();
         int drained = updateQueue.drainTo(drainedBatches);
         LuxBenchmarkSupport.count("lucistarlink.runtime.drain.records", drained);
-        if (LuxFlags.syncSmallEdits) {
-            // V3 M1：先只计量「如果开了同步小改动路径，这一 tick 会有多少次够格」。够格条件与设计文档一致：
-            // 小批量（≤512 条记录，实测单 tick 是 159~267 条：每个方块改动约生成 6 条记录）且 regionChunks==1。
-            if (drained > 0 && drained <= 512 && regionChunks == 1) {
-                LuxBenchmarkSupport.count("lucistarlink.syncSmallEdits.wouldRoute");
-            }
-            LuxBenchmarkSupport.count("lucistarlink.syncSmallEdits.ticks");
+        // V3 M1：只在这一 tick 的改动是「小批量」且 regionChunks==1 时走同步路径（实测单 tick 159~267 条记录，
+        // 每个方块改动约生成 6 条）。大改动继续走下面的异步区域路径 —— 它在健康窗口里更快。
+        boolean syncSmallEditTick = LuxFlags.syncSmallEdits && drained > 0 && drained <= 512 && regionChunks == 1;
+        if (syncSmallEditTick) {
+            LuxBenchmarkSupport.count("lucistarlink.syncSmallEdits.routed");
         }
         int scheduled = 0;
         int maxSubmits = runtimeSubmitBudget();
@@ -306,6 +304,10 @@ public final class LuxRuntimeManager implements AutoCloseable {
 
         for (ScheduledRegionBatch batch : selected) {
             scheduleRegion(lightEngine, batch.regionKey(), batch.batch(), getter, relighter, regionChunks, haloChunks, enableSky, enableBlock);
+        }
+        if (syncSmallEditTick) {
+            // 同步小改动路径的最后一步：不再把结果交给光照线程，就地写进引擎的两份地图并发出通知。
+            ((dev.lucistarlink.light.runtime.LuxLightPublisher) lightEngine).lucistarlink$drainInlineForced();
         }
     }
 
