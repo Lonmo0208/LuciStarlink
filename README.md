@@ -12,8 +12,13 @@ three strongest public designs in this space into one engine.
 It is **not** a scheduler over vanilla light tasks and **not** a Starlight fork: it owns the computation
 (material image + propagation) per region and publishes only dirty sections back into the vanilla engine.
 
-> Status: **1.2.3 — server-side engine, correct across region borders, memory-bounded, saves safe, and the
-> restart-truncation defect fixed (1.1.5).**
+> Status: **1.2.6 — server-side engine, correct across region borders, memory-bounded, saves safe, the
+> restart-truncation defect fixed (1.1.5), and the light traffic a client receives cut by half (1.2.5).**
+>
+> **Honest standing summary**: in a **healthy** window we match ScalableLux on the small-edit workload
+> (589 vs 573 µs) and lead on the two heavy ones; on a **machine under heavy load** the small-edit workload
+> falls behind, because the whole server tick is scheduled slower - that was measured across five variants
+> of our design and of theirs, and the conclusion is recorded in `docs/ARCH-V3-SYNC-STORAGE.md` §6.
 > Benchmarked against **vanilla** and **ScalableLux** in same-session interleaved runs (the engines alternate
 > round by round, ≥5 reps each; statistic = the median of per-pass minima over a run; every comparison carries an
 > exact two-sided Mann-Whitney p). All numbers use the settled-world protocol
