@@ -349,7 +349,7 @@ public final class LuxEngineController {
         // identical=11）永远不为真，于是同步 drain 被整段跳过，调用方要等定时器 —— 实测那正是 wait 里
         // 528~1503 µs 的来源（SL 那一侧只有 3~314 µs）。drain 是幂等的，没有待办时它什么也不做。
         try {
-            ((dev.lucistarlink.light.runtime.LuxLightPublisher) lightEngine).lucistarlink$drainNow();
+            ((dev.lucistarlink.light.runtime.LuxLightPublisher) lightEngine).lucistarlink$drainInline();
         } catch (Throwable throwable) {
             LuciStarlink.LOGGER.warn("LuciStarlink benchmark flush drain failed", throwable);
         }
@@ -465,7 +465,7 @@ public final class LuxEngineController {
         // which is where a block edit's light work belongs (it is what the game's own light pipeline does for the
         // changes it handles). Bounded in the publisher, so a busy light thread degrades to the async path.
         if (published && LuxFlags.syncRuntimeDrain) {
-            ((dev.lucistarlink.light.runtime.LuxLightPublisher) lightEngine).lucistarlink$drainNow();
+            ((dev.lucistarlink.light.runtime.LuxLightPublisher) lightEngine).lucistarlink$drainInline();
         }
     }
 

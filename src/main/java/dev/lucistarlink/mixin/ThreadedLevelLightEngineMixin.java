@@ -639,6 +639,54 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
                 .execute(() -> this.lucistarlink$taskMailbox.tell(this::lucistarlink$drainQueuedLightTasks));
     }
 
+    /** 服务器线程直提的开关（实验，默认关）。 */
+    @Unique
+    private static final boolean LUCIS_INLINE_DRAIN =
+            Boolean.parseBoolean(System.getProperty("lucistarlink.inlineDrain", "false"));
+
+    /**
+     * 服务器线程直提：与 {@link #lucistarlink$drainQueuedLightTasks()} 同样的搬运，但在**调用线程**上做，
+     * 并**跳过引擎自己的更新吸收**（`installSection` 已经把两份地图都写成最终值，`directSectionInstall`
+     * 已证明这条自洽）。默认关；关了就走原来的异步/邮箱路径，行为一字不变。
+     */
+    @Override
+    public void lucistarlink$drainInline() {
+        if (!LUCIS_INLINE_DRAIN) {
+            lucistarlink$drainNow();
+            return;
+        }
+        long startedAt = LuxBenchmarkSupport.start();
+        ArrayDeque<LuxQueuedLightTask> batch = this.lucistarlink$publishBatch;
+        batch.clear();
+        synchronized (this.lucistarlink$publishLock) {
+            int runtimeCount = Math.min(1000, this.lucistarlink$pendingRuntimeTasks.size());
+            for (int index = 0; index < runtimeCount; index++) {
+                batch.add(this.lucistarlink$pendingRuntimeTasks.removeFirst());
+            }
+            int count = Math.min(1000, this.lucistarlink$pendingLightTasks.size());
+            for (int index = 0; index < count; index++) {
+                batch.add(this.lucistarlink$pendingLightTasks.removeFirst());
+            }
+        }
+        this.lucistarlink$drainRunning.set(true);
+        try {
+            for (LuxQueuedLightTask task : batch) {
+                task.runnable().run();
+            }
+            if (!batch.isEmpty()) {
+                lucistarlink$notifyPublishedLightSections();
+            }
+            for (LuxQueuedLightTask task : batch) {
+                if (task.completion() != null) {
+                    task.completion().complete(null);
+                }
+            }
+            LuxBenchmarkSupport.recordSince("lucistarlink.publish_batch.inlineDrain", startedAt);
+        } finally {
+            this.lucistarlink$drainRunning.set(false);
+        }
+    }
+
     @Unique
     private void lucistarlink$drainQueuedLightTasks() {
         long startedAt = LuxBenchmarkSupport.start();
