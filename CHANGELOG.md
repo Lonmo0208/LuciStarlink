@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.2.9 — the cross-region clear converges (community PR #2), verified here with the reproducible probe
+
+**The defect** (reported from play): looping a large `/fill` between glowstone and air and stopping on the air
+step left a dome of stale light in the engine's own state. The client looked dark - its own light engine
+darkens locally from the block updates it receives - but saving and rejoining brought the light back, and a save
+taken while nothing was pending wrote that residue to disk as `isLightCorrect`.
+
+**Why**: the regions a single bulk write drains were computed in parallel, each against the baseline it saw at
+that moment. The first to publish overwrote a later, correct result, and the loser had already passed its
+`externalEpoch` check, so nothing re-ran it.
+
+**The fix** (`2a2bb9e`): the regions of one bulk write now form a group and only one member may be in flight at
+a time, so the next one starts on a baseline that already carries the previous one's staleness marks and
+recomputes from a fresh one - which is why the results converge. The gate is an occupant marker rather than a
+counter, and every early return releases it, so a group cannot deadlock; the `>= 64` changes-on-the-drain
+threshold keeps single-edit workloads (`block_toggle_border` and friends) out of the grouping entirely.
+
+**Verified independently here** with the reproducible probe (`mc-smoketest/ls-refill-probe.sh`, whose `prep`
+phase generates the world first so an air state has a canonical fingerprint): both air states in the cycle now
+read the all-dark canonical `b93a0c83ce3b6325` (`d80ac658736bb725` for the stacked 8x8 fill at y=125) where the
+pre-fix build read `3206f1df4c73167c`, and the save/reload round trip reads the same canonical values. 40 tests,
+0 failures. The defect's history - reproduction, per-cell planes, diagnostic counters, and the two repair
+attempts that were measured and reverted rather than shipped - stays in
+`docs/BUG-CROSSREGION-LIGHT-DECREASE.md`.
+
+**Also here**: a second machine re-checked the three `sky_hole` levers that were left open. `syncSmallEdits` is
+reachable (18 routed) and still does not help; `promptDispatch` and `piggybackPublish` are neutral or worse; and
+the benchmark's `prepare` phase can stall indefinitely on chunks that never load (a configurable timeout plus
+the stalled positions would make it recoverable). Recorded in `docs/TASK-PERF-SKY.md`.
+
 ## 1.2.8 — the halo-emission fix from PR #1's branch, and the cross-region decrease defect written up as open
 
 **Merged**: `lbw14514` pushed a second commit to the same branch after PR #1 (`2ae33d0`) and upstream master was

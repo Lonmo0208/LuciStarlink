@@ -179,22 +179,20 @@ the same seed: once without C2ME, once with it.
   and lower variance when false, but leaves a seam until the neighbour is relit - see ARCH-V2 risk 7),
   `directSectionInstall` (default **false**: fastest measured configuration but blocked by Unresolved 2).
 
-## Unresolved 6 (correctness, **OPEN**): a cross-region light *decrease* does not converge
+## Unresolved 6 (correctness, **FIXED 2026-09-21**): a cross-region light *decrease* used to not converge
 
-* Reported from play on 2026-09-20: `/fill` glowstone -> air -> glowstone -> air over a **large** area, stopped
-  on the air step - the client looks dark (the client's own light engine darkens it locally from the block
-  updates), but saving and rejoining brings light back.
-* Reproduced, mechanism pinned, **not fixed**. One region's job treats the *halo copy* of the neighbouring
-  region's still-lit cells as independent light sources and re-lights what its own batch removed; the two
-  regions only see each other through the engine's light, which updates at publish time, and **nothing ever
-  re-reads** afterwards - so the residue sticks until the player edits there again ("touching a block repairs
-  it", the same reflex as the earlier reports). Because the chunk claims `isLightCorrect`, a save that happens
-  while nothing is pending writes that residue to disk.
-* Evidence, the two refuted repair attempts and the fix direction (an invalidation-triggered full recompute from
-  the *world*, halo materials included) are in **`docs/BUG-CROSSREGION-LIGHT-DECREASE.md`**, together with the
-  probe (`mc-smoketest/ls-refill-probe.sh`) that reproduces it in one run.
-* Workaround for players: `/lucistarlink relight 256` per area, or split a large fill per chunk and nudge the
-  area afterwards. `haloPublish=false` does **not** help (measured).
+* Fixed by community PR #2 (`fix/crossregion-clear`, `2a2bb9e`, merged as `65d0d32`): the regions a single bulk
+  write drains now form one group and only one member is in flight at a time, so the next one starts on a
+  baseline that already includes the previous one's staleness marks. The gate is an occupant marker that every
+  early return releases, so it cannot deadlock, and the threshold (>= 64 changes on the drain) keeps
+  single-edit workloads out of it entirely.
+* Independently verified here with the reproducible probe (`mc-smoketest/ls-refill-probe.sh`): both air states
+  in the glowstone -> air -> glowstone -> air cycle now read the all-dark canonical `b93a0c83ce3b6325`
+  (`d80ac658736bb725` for the stacked 8x8 fill at y=125) where the pre-fix build read `3206f1df4c73167c`.
+  The save/reload round trip reads the same canonical values, so nothing residual reaches the disk.
+* The historical write-up - the reproduction, the per-cell planes, the diagnostic counters and the two repair
+  attempts that were measured and reverted - stays in **`docs/BUG-CROSSREGION-LIGHT-DECREASE.md`** as the
+  record of how the mechanism was found.
 
 ## Not started (feature work, not perf)
 
