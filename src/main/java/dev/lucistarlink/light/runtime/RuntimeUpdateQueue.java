@@ -61,14 +61,17 @@ public final class RuntimeUpdateQueue {
         if (existing == null && pendingByRegion.size() >= maxPendingRecords) {
             return false;
         }
-        // 同 enqueue：入队必须在 compute 的 bin 锁内完成，否则会写进一个正在被 drainTo 摘除的条目。
-        int[] queuedHolder = new int[1];
+        // 同 enqueue：入队与**记账**都必须在 compute 的 bin 锁内完成。分成两步（先 compute 入队、再在锁外
+        // addAndGet）会掉进同一个窗口：drainTo 也走 compute，它可能在这两步之间把条目摘走、并且已经把它那份
+        // 预留数减掉，于是这次加数永远不被减 —— 计数只涨不落，久了会把容量判满、之后的改动再也不被接管。
         pendingByRegion.compute(regionKey, (key, pending) -> {
             PendingRegion target = pending != null ? pending : new PendingRegion();
-            queuedHolder[0] = target.enqueueFullRelight(originalChangeCount);
+            int queued = target.enqueueFullRelight(originalChangeCount);
+            if (queued != 0) {
+                pendingCount.addAndGet(queued);
+            }
             return target;
         });
-        pendingCount.addAndGet(queuedHolder[0]);
         return true;
     }
 
