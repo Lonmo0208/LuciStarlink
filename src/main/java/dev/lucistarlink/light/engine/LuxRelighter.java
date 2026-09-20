@@ -432,7 +432,9 @@ public final class LuxRelighter {
                 // light source placed in a region that had no runtime job yet never lit up.
                 applyAdoptedBatchChanges(getter, data, batch, enableSky, enableBlock);
                 state.markInitialized(coreChunk);
-                List<LuxRelightResult> results = publish(data);
+                // 不许发布 halo：lazy 模式只采纳了自有区块的光照，halo 那片在这张图里还是 0。
+                // 发布出去等于拿“一片漆黑”去覆盖邻居区块已经算好的光 —— 变化检测只会确认它确实不同。
+                List<LuxRelightResult> results = publish(data, false);
                 countPublished("lucistarlink.runtime.init", results);
                 data.clearDirty();
                 return results;
