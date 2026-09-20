@@ -470,9 +470,9 @@ public final class LuxRelighter {
             // always false, which used to skip both the halo publication and the neighbour marking
             haloTouchedScratch.set(Boolean.TRUE);
             long startedAt = LuxBenchmarkSupport.start();
-            // 全量重算与首次初始化一样，要拿邻居的材质当传播输入，所以不能走 lazy：
-            // 光在这里穿不穿墙完全取决于 halo 那片石头是不是被当成了空气。
-            extractor.populate(getter, data, coreChunk, false);
+            // 这里可以走 lazy：区域已经初始化过，halo 那片留着上一次提取的材质（清零只覆盖自有区块），
+            // 传播看到的邻居因此不是空气。首次初始化不一样 —— 那时 halo 还是初值 0，必须全量提取。
+            extractor.populate(getter, data, coreChunk, LuxFlags.lazyHaloLight);
             LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.full.extract", startedAt);
             startedAt = LuxBenchmarkSupport.start();
             if (enableSky) {

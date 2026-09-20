@@ -80,6 +80,13 @@ public final class LuxRegionExtractor {
         BlockGetter level = getter.getLevel();
         BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
         RegionBounds bounds = data.bounds;
+        if (lazyHaloMaterials) {
+            // 只清将要覆盖的那块，halo 留给 materializeReach 按需刷新。
+            // 整片清会把 halo 变成空气，而全量重算那条路不会去补它。
+            data.clearMaterialsForChunks(bounds.originChunkX(), bounds.originChunkZ(), bounds.regionChunks());
+        } else {
+            data.clearAllMaterials();
+        }
         int minChunkX = bounds.minBlockX() >> 4;
         int maxChunkX = (bounds.maxBlockXExclusive() - 1) >> 4;
         int minChunkZ = bounds.minBlockZ() >> 4;

@@ -292,15 +292,37 @@ public final class RegionLightData {
     }
 
     public void beginFullPopulate() {
-        // 整片清零一次：opacity/emission 的初值就是“空气”，所有全空气的 section 因此可以直接跳过，
-        // 不必逐行 Arrays.fill（实测那是提取里真正的大头：15 次提取里 2600 多个空气 section,
-        // 每个 section 原本要 256 行 × 2 次 fill）。非空 section 反正会被覆盖，清零不影响它们的正确性。
-        java.util.Arrays.fill(opacity, (byte) 0);
-        java.util.Arrays.fill(emission, (byte) 0);
-        // 物化标记必须跟着一起失效：清零之后 halo 的材质又变回“空气”，而 materializeReach 只看标记就跳过，
-        // 留着标记等于宣告那片材质是对的 —— 于是全量重算把邻居当空气传播，出射的光穿墙，而且再也补不回来。
+        // 物化标记必须跟着一起失效：populate 之后那些 section 的材质是新读的，而这之前它们可能被
+        // materializeReach 标成“已物化”。留着标记等于宣告那片材质是对的 —— 于是传播把邻居当空气，光穿墙。
         clearLightMaterialized();
         clearDirty();
+    }
+
+    /** 整片清成“空气”。只在 populate 会覆盖全片时用，否则 halo 会白清一遍又没人补。 */
+    public void clearAllMaterials() {
+        java.util.Arrays.fill(opacity, (byte) 0);
+        java.util.Arrays.fill(emission, (byte) 0);
+    }
+
+    /**
+     * 只清自有区块那一块，与 lazy 模式下 populate 的提取范围严格一致。
+     * 全空气 section 靠“初值是 0”才能整段跳过，所以清零的范围必须跟着提取范围走：
+     * 多清一块 halo 就只能让传播把实心方块当空气，少清一块自有区块就会把旧材质留下来。
+     */
+    public void clearMaterialsForChunks(int originChunkX, int originChunkZ, int chunkCount) {
+        int xStart = (originChunkX << 4) - bounds.minBlockX();
+        int zStart = (originChunkZ << 4) - bounds.minBlockZ();
+        int span = chunkCount << 4;
+        int width = bounds.widthBlocks();
+        int area = bounds.area();
+        for (int y = 0; y < bounds.heightBlocks(); y++) {
+            int yBase = y * area;
+            for (int z = 0; z < span; z++) {
+                int rowBase = yBase + (zStart + z) * width + xStart;
+                java.util.Arrays.fill(opacity, rowBase, rowBase + span, (byte) 0);
+                java.util.Arrays.fill(emission, rowBase, rowBase + span, (byte) 0);
+            }
+        }
     }
 
     public void resetForReuse() {
