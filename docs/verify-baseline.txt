@@ -1,5 +1,12 @@
-e68785aeb6d8272c9e3540a2bd56d0f6 *lucistarlink-1.21.1-1.2.7.jar
-（1.2.7 = 社区 PR #1（lbw14514）：世界生成的自然光源光照修复 —— halo 材质在世界生成路径上没被提取
+27ff55abd2e4c71bf304815b0cdf1ef8 *lucistarlink-1.21.1-1.2.8.jar
+（1.2.8 = 合并 lbw14514 在 PR #1 分支上的第二条提交 `2ae33d0`：lazy 提取时清掉 halo 的 **emission**（遮挡不动，
+ 清遮挡等于宣告邻居是空气、光会穿墙，是反方向的错）。40 个单测全绿；发布件互斥声明已核
+ （starlight/scalablelux/lucis = incompatible、sable = optional）。**这条修复没有解决**「大范围 fill 循环回空气后
+ 残留光照」——那条缺陷的实测、两次被回退的修复尝试、以及剩余机制都记在 docs/BUG-CROSSREGION-LIGHT-DECREASE.md，
+ HANDOVER 里是 Unresolved 6：修复后空气那一步仍是 `45b3fe947d9ab5cd`（全黑规范值 `b93a0c83ce3b6325`，
+ 未修复版 `3206f1df4c73167c`）—— 只改形状、不清零。临时办法 `/lucistarlink relight 256`。
+ 上一版 1.2.7 的 md5 = e68785aeb6d8272c9e3540a2bd56d0f6
+ 1.2.7 = 社区 PR #1（lbw14514）：世界生成的自然光源光照修复 —— halo 材质在世界生成路径上没被提取
  （按需物化只由运行期改动集合驱动）导致传播把邻居当空气、并把算错的 halo 光照发布进邻居区块；另有
  世界生成写入已加载邻居时「原版 checkBlock 被取消 + 运行期入队被压制」导致那片光照停在旧值。
  验收实录、几何与逐格对照见 docs/BUG-WORLDGEN-NATURAL-LIGHT.md：下界顶棚天然荧石带（y=100..125，
