@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.2.8 — the halo-emission fix from PR #1's branch, and the cross-region decrease defect written up as open
+
+**Merged**: `lbw14514` pushed a second commit to the same branch after PR #1 (`2ae33d0`) and upstream master was
+not updated, so it came in from the fork. It clears the halo's *emission* during a lazy extraction, keeping its
+opacity - clearing that would declare the neighbour to be air and let light cross the border, the opposite
+error. A stale emission is a light source, and a full relight then leaves a ring of light along the region
+border.
+
+**Verified**: 40 tests, 0 failures. The world-generation half that PR #1 was about stays bit-identical to
+vanilla in the nether ceiling band (see 1.2.7). The defect this commit was also expected to fix - residual
+light after looping a large `/fill` between glowstone and air and stopping on the air step - is **still open**.
+With the now-reproducible probe (`mc-smoketest/ls-refill-probe.sh`; a `prep` phase generates the world first, so
+an air state has a canonical fingerprint) the air step reads `45b3fe947d9ab5cd` against the all-dark canonical
+`b93a0c83ce3b6325`, where the untouched build reads `3206f1df4c73167c`: the fix changes the residue's shape and
+does not remove it. Targeted block assertions prove the cells are air while the engine still holds a single
+source point in the neighbouring chunk. Full evidence, the two measured repair attempts that were reverted
+rather than shipped, and the remaining mechanism (a neighbouring region with no changes of its own republishes
+the stale copy it took from us) are in `docs/BUG-CROSSREGION-LIGHT-DECREASE.md`; `docs/HANDOVER.md` carries it
+as Unresolved 6, with `/lucistarlink relight 256` as the player-facing workaround.
+
+**CI**: the workflow no longer uploads the jar as a build artifact - release artifacts stay local (`dist/`, md5
+recorded in `docs/verify-baseline.txt`) and off GitHub. It still compiles and runs the test suite on every push
+and pull request.
+
 ## 1.2.7 — naturally generated light sources get vanilla's light (community PR #1)
 
 **The defect** (reported in play): the light around a *naturally generated* light source - a village torch, a
