@@ -1,5 +1,13 @@
-27ff55abd2e4c71bf304815b0cdf1ef8 *lucistarlink-1.21.1-1.2.8.jar
-（1.2.8 = 合并 lbw14514 在 PR #1 分支上的第二条提交 `2ae33d0`：lazy 提取时清掉 halo 的 **emission**（遮挡不动，
+3e3be3945c8bc1d7e1bbb0133dc3fa09 *lucistarlink-1.21.1-1.2.9.jar
+（1.2.9 = 社区 PR #2（`fix/crossregion-clear`，lbw14514，提交 `2a2bb9e`，合并 `65d0d32`）：一次批量写触发的
+ 多个区域**串行**（组内只允许一个在飞；占用标记而非计数器，任何早退都释放所以不会死锁；门槛 ≥64 条改动，
+ 单点编辑不命中）。**本仓库用可复现探针独立验证通过**：荧石→空气→荧石→空气 两个循环的空气态都等于
+ 全黑规范值 `b93a0c83ce3b6325`（y=125 叠层那组 `d80ac658736bb725`），修复前是 `3206f1df4c73167c`；
+ **保存重进往返读到的也是同一组规范值** → 残留不再写进存档。40 个单测全绿；发布件互斥声明已核
+ （starlight/scalablelux/lucis = incompatible、sable = optional）。缺陷全过程（复现、逐格平面、计数器、
+ 两次被回退的修复尝试）保留在 docs/BUG-CROSSREGION-LIGHT-DECREASE.md；HANDOVER 的 Unresolved 6 已标 FIXED。
+ 上一版 1.2.8 的 md5 = 27ff55abd2e4c71bf304815b0cdf1ef8
+ 1.2.8 = 合并 lbw14514 在 PR #1 分支上的第二条提交 `2ae33d0`：lazy 提取时清掉 halo 的 **emission**（遮挡不动，
  清遮挡等于宣告邻居是空气、光会穿墙，是反方向的错）。40 个单测全绿；发布件互斥声明已核
  （starlight/scalablelux/lucis = incompatible、sable = optional）。**这条修复没有解决**「大范围 fill 循环回空气后
  残留光照」——那条缺陷的实测、两次被回退的修复尝试、以及剩余机制都记在 docs/BUG-CROSSREGION-LIGHT-DECREASE.md，
