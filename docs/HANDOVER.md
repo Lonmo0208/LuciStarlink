@@ -179,6 +179,23 @@ the same seed: once without C2ME, once with it.
   and lower variance when false, but leaves a seam until the neighbour is relit - see ARCH-V2 risk 7),
   `directSectionInstall` (default **false**: fastest measured configuration but blocked by Unresolved 2).
 
+## Unresolved 6 (correctness, **OPEN**): a cross-region light *decrease* does not converge
+
+* Reported from play on 2026-09-20: `/fill` glowstone -> air -> glowstone -> air over a **large** area, stopped
+  on the air step - the client looks dark (the client's own light engine darkens it locally from the block
+  updates), but saving and rejoining brings light back.
+* Reproduced, mechanism pinned, **not fixed**. One region's job treats the *halo copy* of the neighbouring
+  region's still-lit cells as independent light sources and re-lights what its own batch removed; the two
+  regions only see each other through the engine's light, which updates at publish time, and **nothing ever
+  re-reads** afterwards - so the residue sticks until the player edits there again ("touching a block repairs
+  it", the same reflex as the earlier reports). Because the chunk claims `isLightCorrect`, a save that happens
+  while nothing is pending writes that residue to disk.
+* Evidence, the two refuted repair attempts and the fix direction (an invalidation-triggered full recompute from
+  the *world*, halo materials included) are in **`docs/BUG-CROSSREGION-LIGHT-DECREASE.md`**, together with the
+  probe (`mc-smoketest/ls-refill-probe.sh`) that reproduces it in one run.
+* Workaround for players: `/lucistarlink relight 256` per area, or split a large fill per chunk and nudge the
+  area afterwards. `haloPublish=false` does **not** help (measured).
+
 ## Not started (feature work, not perf)
 
 * Client-side lighting takeover (Starlight/ScalableLux have it; we are server-side only).
