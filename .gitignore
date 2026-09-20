@@ -121,3 +121,5 @@ runs/
 /run*
 /docs/benchmark-scratch/
 /benchmark-runs
+
+/dist/

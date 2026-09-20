@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.2.7 — naturally generated light sources get vanilla's light (community PR #1)
+
+**The defect** (reported in play): the light around a *naturally generated* light source - a village torch, a
+lava lake, nether glowstone - was wrong until the player touched a block nearby, which is the "touch it and
+it repairs itself" report. Root cause, in two halves. Halo *materials* are materialised on demand, and only
+the runtime path has the machinery that fills them in, so a world-generation job propagated with its
+neighbours read as air (light through walls) and then published that wrong halo light into those neighbours,
+overwriting light they had already computed correctly. Separately, a structure or feature writing into an
+already-loaded, ticking neighbour had its `checkBlock` cancelled *and* its enqueue suppressed by the
+world-generation write scope, so that light stayed at its old value forever.
+
+**The fix**: `extract`/`populate` take an explicit `lazyHaloMaterials` flag, and the two full-recompute paths
+(world generation, `/lucistarlink relight`) pass false while the runtime path keeps the lazy behaviour it has
+the machinery for. Extraction moved into the world-generation worker, so the ~5.6 ms per chunk stays off the
+chunk-generation thread. Enqueue no longer honours the world-generation suppression - the caller has already
+established the target chunk is `BLOCK_TICKING`, i.e. that the change is not covered by the generating
+chunk's own full compute - and work dropped by a full queue now opens a backpressure window instead of
+vanishing. Five smaller concurrency/accounting fixes come with it (`compute`-scoped enqueueing, an
+`AtomicReference` swap for the external-section set, materialisation marks invalidated with the materials,
+rolled-back job preparation, one Sable presence answer), plus the removal of the rejected cross-region
+boundary-delta prototype.
+
+**Verified** (this repository's own check, same machine and session): in a fresh nether with
+`randomTickSpeed 0` and 16 force-loaded chunks, the ceiling band y=100..125 - the band full of naturally
+generated glowstone - now matches vanilla **bit for bit**: `543a8d1f6d6e6847` over 102,400 cells and
+`3bc44605ff1713c6` over the 32x32 inner box, identical to the same jar with
+`-Dlucistarlink.enableWorldgen=false`, where the pre-fix build differs from vanilla in both boxes
+(`5dbe73c282d5567e` / `55dc0ebb67c817b3`). The cell-level diff shows the pre-fix leak as a `123456789` ramp
+crossing the chunk border through solid rock, and a `3 -> 2` error on the far side of the same source.
+38 tests, 0 failures; a dev server and client ran a real session on the build with nothing in the log.
+The "an already-lit area survives the generation of the chunk next door" probe passes on *both* builds - said
+plainly in `docs/BUG-WORLDGEN-NATURAL-LIGHT.md`, which also lists what is still open: the runtime
+full-relight path keeps lazy halo materials, the world-generation in-flight cap doubled, and one
+reservation-counting window that predates this change.
+
 ## 1.2.6 — the completion marker stops waiting, and two default-off V3 experiments
 
 **The measurable win of this release**: the benchmark's completion marker no longer waits for the light

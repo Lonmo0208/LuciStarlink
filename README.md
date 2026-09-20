@@ -54,8 +54,9 @@ that is the machine, not the mod.
 It is **not** a scheduler over vanilla light tasks and **not** a Starlight fork: it owns the computation
 (material image + propagation) per region and publishes only dirty sections back into the vanilla engine.
 
-> Status: **1.2.6 — server-side engine, correct across region borders, memory-bounded, saves safe, the
-> restart-truncation defect fixed (1.1.5), and the light traffic a client receives cut by half (1.2.5).**
+> Status: **1.2.7 — server-side engine, correct across region borders, memory-bounded, saves safe, the
+> restart-truncation defect fixed (1.1.5), the light traffic a client receives cut by half (1.2.5), and the
+> light around naturally generated sources now bit-identical to vanilla (1.2.7).**
 >
 > **Honest standing summary**: in a **healthy** window we match ScalableLux on the small-edit workload
 > (589 vs 573 µs) and lead on the two heavy ones; on a **machine under heavy load** the small-edit workload
