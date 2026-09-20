@@ -305,6 +305,45 @@ public final class RegionLightData {
     }
 
     /**
+     * 只把 halo 那片（自有区块以外）的 emission 清成 0，opacity 不动。
+     *
+     * <p>为什么只清 emission：lazy 模式下 halo 的材质保留着上一次提取的值，而那次可能是「邻居那边还有发光
+     * 方块」的时候 —— 全量重算会拿这份 emission 当光源，于是在区域边界留下一圈本该消失的光。客户端自己算
+     * 光照所以它是对的，服务端引擎却会把这份错值写进存档。
+     *
+     * <p>为什么不动 opacity：那是遮挡关系。清掉它等于宣告邻居是空气，传播就会穿墙 —— 那是另一个方向的错。
+     * 只清 emission 是保守一侧：最坏情况是邻居贴着边界放光源时我们这侧略暗，比出一圈亮斑轻得多。
+     */
+    public void clearHaloEmission(int originChunkX, int originChunkZ, int chunkCount) {
+        int xStart = (originChunkX << 4) - bounds.minBlockX();
+        int zStart = (originChunkZ << 4) - bounds.minBlockZ();
+        int span = chunkCount << 4;
+        int xEnd = xStart + span;
+        int zEnd = zStart + span;
+        int width = bounds.widthBlocks();
+        int depth = bounds.depthBlocks();
+        int area = bounds.area();
+        for (int y = 0; y < bounds.heightBlocks(); y++) {
+            int yBase = y * area;
+            if (zStart > 0) {
+                java.util.Arrays.fill(emission, yBase, yBase + zStart * width, (byte) 0);
+            }
+            if (zEnd < depth) {
+                java.util.Arrays.fill(emission, yBase + zEnd * width, yBase + depth * width, (byte) 0);
+            }
+            for (int z = zStart; z < zEnd; z++) {
+                int rowBase = yBase + z * width;
+                if (xStart > 0) {
+                    java.util.Arrays.fill(emission, rowBase, rowBase + xStart, (byte) 0);
+                }
+                if (xEnd < width) {
+                    java.util.Arrays.fill(emission, rowBase + xEnd, rowBase + width, (byte) 0);
+                }
+            }
+        }
+    }
+
+    /**
      * 只清自有区块那一块，与 lazy 模式下 populate 的提取范围严格一致。
      * 全空气 section 靠“初值是 0”才能整段跳过，所以清零的范围必须跟着提取范围走：
      * 多清一块 halo 就只能让传播把实心方块当空气，少清一块自有区块就会把旧材质留下来。

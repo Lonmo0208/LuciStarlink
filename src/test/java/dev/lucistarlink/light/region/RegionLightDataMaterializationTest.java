@@ -143,4 +143,56 @@ class RegionLightDataMaterializationTest {
             assertEquals(0, data.emission[index]);
         }
     }
+
+    @Test
+    void clearHaloEmissionZeroesHaloOnly() {
+        RegionBounds bounds = bounds(1, 1);
+        RegionLightData data = new RegionLightData(bounds);
+        int start = bounds.haloChunks() << 4;
+        int haloX = data.localIndex(0, 0, start);
+        int haloZ = data.localIndex(start, 0, 0);
+        int owned = data.localIndex(start, 0, start);
+        data.emission[haloX] = 15;
+        data.emission[haloZ] = 15;
+        data.emission[owned] = 15;
+        data.opacity[haloX] = 15;
+        data.opacity[haloZ] = 15;
+        data.opacity[owned] = 15;
+
+        data.clearHaloEmission(bounds.originChunkX(), bounds.originChunkZ(), bounds.regionChunks());
+
+        assertEquals(0, data.emission[haloX]);
+        assertEquals(0, data.emission[haloZ]);
+        assertEquals(15, data.emission[owned]);
+        assertEquals(15, data.opacity[haloX]);
+        assertEquals(15, data.opacity[haloZ]);
+        assertEquals(15, data.opacity[owned]);
+    }
+
+    @Test
+    void clearHaloEmissionCoversEveryCellOutsideTheOwnedChunks() {
+        RegionBounds bounds = bounds(1, 1);
+        RegionLightData data = new RegionLightData(bounds);
+        for (int index = 0; index < bounds.volume(); index++) {
+            data.emission[index] = 15;
+        }
+        int start = bounds.haloChunks() << 4;
+        int end = start + (bounds.regionChunks() << 4);
+
+        data.clearHaloEmission(bounds.originChunkX(), bounds.originChunkZ(), bounds.regionChunks());
+
+        for (int y = 0; y < bounds.heightBlocks(); y++) {
+            for (int z = 0; z < bounds.depthBlocks(); z++) {
+                for (int x = 0; x < bounds.widthBlocks(); x++) {
+                    boolean owned = x >= start && x < end && z >= start && z < end;
+                    int value = data.emission[data.localIndex(x, y, z)];
+                    if (owned) {
+                        assertEquals(15, value, "owned cell " + x + "," + y + "," + z + " must be untouched");
+                    } else {
+                        assertEquals(0, value, "halo cell " + x + "," + y + "," + z + " must be cleared");
+                    }
+                }
+            }
+        }
+    }
 }

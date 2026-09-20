@@ -84,6 +84,9 @@ public final class LuxRegionExtractor {
             // 只清将要覆盖的那块，halo 留给 materializeReach 按需刷新。
             // 整片清会把 halo 变成空气，而全量重算那条路不会去补它。
             data.clearMaterialsForChunks(bounds.originChunkX(), bounds.originChunkZ(), bounds.regionChunks());
+            // halo 的 emission 必须跟着清：它保留的是上一次提取时的值，而那时邻居那边可能还有发光方块。
+            // 全量重算会拿它当光源，于是区域边界留下一圈本该消失的光，而且会被写进存档。
+            data.clearHaloEmission(bounds.originChunkX(), bounds.originChunkZ(), bounds.regionChunks());
         } else {
             data.clearAllMaterials();
         }
