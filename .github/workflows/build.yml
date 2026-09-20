@@ -29,8 +29,6 @@ jobs:
       - name: Build and test
         run: gradle build --console=plain
 
-      - name: Upload jar
-        uses: actions/upload-artifact@v4
-        with:
-          name: LuciStarlink
-          path: build/libs/*.jar
+      # No artifact upload on purpose: the mod jar is a release artifact, and the rule here is that release
+      # artifacts stay local (dist/, with the md5 recorded in docs/verify-baseline.txt) and never on GitHub.
+      # This workflow exists to prove the tree compiles and the test suite passes on a clean machine.
