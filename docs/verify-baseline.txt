@@ -1,5 +1,13 @@
-00452f794d9287372f318af12bf1cc02 *lucistarlink-1.21.1-1.2.6.jar
-（1.2.1 = 1.2.0 + 一个真 bug 的修复：`lucistarlink$installSection` 在**没有光照引擎的层**（无方块光的维度，
+e68785aeb6d8272c9e3540a2bd56d0f6 *lucistarlink-1.21.1-1.2.7.jar
+（1.2.7 = 社区 PR #1（lbw14514）：世界生成的自然光源光照修复 —— halo 材质在世界生成路径上没被提取
+ （按需物化只由运行期改动集合驱动）导致传播把邻居当空气、并把算错的 halo 光照发布进邻居区块；另有
+ 世界生成写入已加载邻居时「原版 checkBlock 被取消 + 运行期入队被压制」导致那片光照停在旧值。
+ 验收实录、几何与逐格对照见 docs/BUG-WORLDGEN-NATURAL-LIGHT.md：下界顶棚天然荧石带（y=100..125，
+ randomTickSpeed 0，16 区块 forceload）修复后与原版引擎**逐位相同**（543a8d1f6d6e6847 / 3bc44605ff1713c6），
+ 修复前那份与原版两处都不同（5dbe73c282d5567e / 55dc0ebb67c817b3）；38 个单测 0 失败。
+ 发布件互斥声明已核：starlight/scalablelux/lucis = incompatible、sable = optional。
+ 上一版 1.2.6 的 md5 = 00452f794d9287372f318af12bf1cc02
+ 1.2.1 = 1.2.0 + 一个真 bug 的修复：`lucistarlink$installSection` 在**没有光照引擎的层**（无方块光的维度，
  listener 是 DummyLightLayerEventListener）会抛 ClassCastException；只有开启 directSectionInstall 才走到，
  是**探针闸**在翻默认之前抓到的（见 docs/TASK-PERF-SKY.md §10.14）。修复后探针 3/3 逐位一致、异常归零。
  1.2.0 = 1.1.5 的重启丢光修复 + 客户端光照探针/接管（**默认关闭**，实测收益不成立，见
