@@ -24,7 +24,8 @@ public final class RuntimeRegionState {
      * the engine before the next job uses the image as a baseline. Without that, stale cells could be
      * re-raised across the border - the failure mode the old cross-region delta prototype hit.
      */
-    private final Set<ExternalSection> externalSections = ConcurrentHashMap.newKeySet();
+    private final java.util.concurrent.atomic.AtomicReference<Set<ExternalSection>> externalSections =
+            new java.util.concurrent.atomic.AtomicReference<>(ConcurrentHashMap.newKeySet());
     /**
      * Bumped on every external mark. A job reads it after refreshing and compares afterwards: if it moved, the
      * engine changed underneath the job while it computed, so publishing its result could overwrite fresher
@@ -57,7 +58,7 @@ public final class RuntimeRegionState {
     }
 
     public void markExternalSection(long packedSectionPos, boolean sky) {
-        externalSections.add(new ExternalSection(packedSectionPos, sky));
+        externalSections.get().add(new ExternalSection(packedSectionPos, sky));
         externalEpoch.incrementAndGet();
     }
 
@@ -65,17 +66,27 @@ public final class RuntimeRegionState {
         return externalEpoch.get();
     }
 
+    /**
+     * 取走当前所有外部标记。
+     *
+     * <p>整组替换而不是「复制 + removeAll」：那种写法下，同一个 section 在复制与删除之间被再次标记时，
+     * `add` 会因集合里已有该元素而返回 false，紧接着 `removeAll` 把它一并删掉 —— 那一次变化就永久没人
+     * 刷新了，而这正是这套机制要防的跨区丢光。替换之后到达的标记进新集合，交给下一次。
+     */
     public List<ExternalSection> drainExternalSections() {
-        if (externalSections.isEmpty()) {
-            return List.of();
+        while (true) {
+            Set<ExternalSection> pending = externalSections.get();
+            if (pending.isEmpty()) {
+                return List.of();
+            }
+            if (externalSections.compareAndSet(pending, ConcurrentHashMap.newKeySet())) {
+                return new ArrayList<>(pending);
+            }
         }
-        List<ExternalSection> drained = new ArrayList<>(externalSections);
-        externalSections.removeAll(drained);
-        return drained;
     }
 
     public int externalSectionCount() {
-        return externalSections.size();
+        return externalSections.get().size();
     }
 
     public void touch() {

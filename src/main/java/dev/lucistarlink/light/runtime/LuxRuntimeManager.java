@@ -78,6 +78,8 @@ public final class LuxRuntimeManager implements AutoCloseable {
     private volatile boolean closed;
     /** Set by {@link #tick} when it hands a publication to the light engine. */
     private volatile boolean publishedThisTick;
+    /** Set when the queue was full and a requeue had to drop changes (see {@link #consumeDroppedWork()}). */
+    private volatile boolean droppedWork;
 
     public boolean enqueue(BlockChangeRecord record) {
         return record != null && enqueue(record.x(), record.y(), record.z(), record.oldState(), record.newState());
@@ -348,10 +350,24 @@ public final class LuxRuntimeManager implements AutoCloseable {
         }
 
         long prepStartedAt = LuxBenchmarkSupport.start();
-        RegionBounds bounds = RegionBounds.around(anchor, getter.getLevel(), regionChunks, haloChunks);
-        HashMap<Long, LightChunk> expectedChunks = captureExpectedChunks(getter, bounds);
-        RuntimeRegionState ownedState = regionCache.getOrCreate(bounds);
-        ownedState.touch();
+        RegionBounds bounds;
+        HashMap<Long, LightChunk> expectedChunks;
+        RuntimeRegionState ownedState;
+        try {
+            bounds = RegionBounds.around(anchor, getter.getLevel(), regionChunks, haloChunks);
+            expectedChunks = captureExpectedChunks(getter, bounds);
+            ownedState = regionCache.getOrCreate(bounds);
+            ownedState.touch();
+        } catch (Throwable throwable) {
+            // 准备段抛异常时，owner 与 scheduledRegions 都必须回滚：不回滚的话这个区域会一直留在
+            // scheduledRegions 里，后续改动全卡在 pendingBatchesByRegion，再也不会有作业跑。
+            LuxBenchmarkSupport.count("lucistarlink.runtime.jobs.prepFailed");
+            LuciStarlink.LOGGER.warn("LuciStarlink runtime job preparation failed, requeueing its changes", throwable);
+            ownerTable.release(regionKey, ownerId);
+            scheduledRegions.remove(regionKey);
+            requeue(regionKey, batch);
+            return;
+        }
         LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.jobPrep", prepStartedAt);
         boolean inlinePublish = LuxFlags.inlineRuntime;
         LuxBenchmarkSupport.count("lucistarlink.runtime.jobs.runtime.submit");
@@ -438,15 +454,34 @@ public final class LuxRuntimeManager implements AutoCloseable {
         if (batch == null || batch.isEmpty()) {
             return;
         }
+        boolean accepted;
         if (batch.fullRelight()) {
-            if (!updateQueue.enqueueFullRelight(regionKey, batch.originalChangeCount())) {
+            accepted = updateQueue.enqueueFullRelight(regionKey, batch.originalChangeCount());
+            if (accepted) {
+                markFullRelightCoalescing(regionKey);
+            } else {
                 LuxBenchmarkSupport.count("lucistarlink.runtime.requeued.fullRelightDropped");
-                return;
             }
-            markFullRelightCoalescing(regionKey);
         } else {
-            updateQueue.enqueueAll(regionKey, batch.changes());
+            int queued = updateQueue.enqueueAll(regionKey, batch.changes());
+            accepted = queued == batch.queuedChangeCount();
+            if (!accepted) {
+                LuxBenchmarkSupport.count("lucistarlink.runtime.requeued.changesDropped");
+            }
         }
+        if (!accepted) {
+            // 队列满时丢掉的改动没人会补，而 hasPendingWorkFor 也看不到它们（存档钩子因此不会把区块
+            // 标成光照未正确）。这里只置个标志，由 tick 转成背压 —— 背压窗口属于 controller，
+            // 这个类不该自己持有一份。
+            droppedWork = true;
+        }
+    }
+
+    /** 队列满丢掉过改动时返回 true 并清标志；调用方据此打开背压窗口。 */
+    public boolean consumeDroppedWork() {
+        boolean dropped = droppedWork;
+        droppedWork = false;
+        return dropped;
     }
 
     /**

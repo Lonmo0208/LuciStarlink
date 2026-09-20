@@ -219,6 +219,22 @@ public final class LuxEngineController {
                 && runtimeManager.canAcceptMoreWork();
     }
 
+    /**
+     * 同 {@link #shouldHandleBlockChange(BlockPos)}，但不看「世界生成写入压制」。
+     *
+     * <p>入队那条路必须用这个：能走到那里的调用方已经自己确认目标区块是 BLOCK_TICKING 的已满区块，
+     * 也就是「世界生成把方块写到了一个已经存在的邻居上」。那种改动不是生成中区块自己的光照（世界生成的
+     * 整块计算盖不到它），必须走运行期重算。而如果这里也跟着压制，结果就是：原版 checkBlock 已被取消，
+     * 运行期又没入队，那片光照永远停在旧值。
+     */
+    private boolean shouldHandleBlockChangeIgnoringWorldgen(BlockPos pos) {
+        return enabled()
+                && LuxConfig.enableRuntime
+                && pos != null
+                && !runtimeBackpressureActive()
+                && runtimeManager.canAcceptMoreWork();
+    }
+
     public boolean shouldHandleBlockChange(LightChunkGetter getter, BlockPos pos) {
         return shouldHandleBlockChange(pos) && !LuxCompat.isSablePlotChunk(getter,
                 SectionPos.blockToSectionCoord(pos.getX()), SectionPos.blockToSectionCoord(pos.getZ()));
@@ -254,7 +270,9 @@ public final class LuxEngineController {
         if (bulkScope != null && bulkScope.boundsRegistered && enabled() && LuxConfig.enableRuntime) {
             return true;
         }
-        if (!shouldHandleBlockChange(level, pos)) {
+        if (!shouldHandleBlockChangeIgnoringWorldgen(pos)
+                || LuxCompat.isSablePlotChunk(level, SectionPos.blockToSectionCoord(pos.getX()),
+                        SectionPos.blockToSectionCoord(pos.getZ()))) {
             return false;
         }
         if (bulkScope != null) {
@@ -472,6 +490,9 @@ public final class LuxEngineController {
         }
         reapStaleBulkScope();
         refreshRuntimeBackpressure();
+        if (runtimeManager.consumeDroppedWork()) {
+            activateRuntimeBackpressure();
+        }
         // 峰值保持：遥测窗口必然错过工作瞬间，峰值必须每 tick 采
         runtimeManager.samplePeaks();
         boolean published = runtimeManager.tick(lightEngine, getter, relighter, runtimeRegionChunks(), runtimeHaloChunks(),
