@@ -265,6 +265,11 @@ public final class RegionLightData {
     }
 
     public void beginFullPopulate() {
+        // 整片清零一次：opacity/emission 的初值就是“空气”，所有全空气的 section 因此可以直接跳过，
+        // 不必逐行 Arrays.fill（实测那是提取里真正的大头：15 次提取里 2600 多个空气 section,
+        // 每个 section 原本要 256 行 × 2 次 fill）。非空 section 反正会被覆盖，清零不影响它们的正确性。
+        java.util.Arrays.fill(opacity, (byte) 0);
+        java.util.Arrays.fill(emission, (byte) 0);
         clearDirty();
     }
 

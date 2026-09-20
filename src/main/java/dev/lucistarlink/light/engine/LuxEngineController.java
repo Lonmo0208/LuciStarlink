@@ -72,7 +72,7 @@ public final class LuxEngineController {
      * chunk-load bursts into latency rather than unbounded heap growth.
      */
     private static final int MAX_INFLIGHT_WORLDGEN_TASKS = Math.max(2,
-            Integer.getInteger("lucistarlink.maxInflightWorldgenTasks", Math.max(2, worldgenWorkerCount() * 2)));
+            Integer.getInteger("lucistarlink.maxInflightWorldgenTasks", Math.max(2, worldgenWorkerCount() * 4)));
 
     private final LightMaterialCache materialCache = new LightMaterialCache();
     private final LuxRelighter relighter = new LuxRelighter(materialCache, new LuxRegionExtractor(materialCache));

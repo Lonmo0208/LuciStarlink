@@ -173,13 +173,26 @@ public final class LuxRegionExtractor {
                 blockZStart - minBlockZ, blockZEnd - minBlockZ, width, area)) {
             return;
         }
+        byte[] opacity = data.opacity;
+        byte[] emission = data.emission;
+        int firstLocalX = blockXStart & 15;
+        int firstLocalZ = blockZStart & 15;
+        int firstLocalY = blockYStart & 15;
         for (int worldY = blockYStart; worldY < blockYEnd; worldY++) {
+            int localY = firstLocalY + (worldY - blockYStart);
             int yBase = (worldY - minBuildY) * area;
             for (int worldZ = blockZStart; worldZ < blockZEnd; worldZ++) {
-                int rowBase = yBase + (worldZ - minBlockZ) * width;
+                int localZ = firstLocalZ + (worldZ - blockZStart);
+                int rowBase = yBase + (worldZ - minBlockZ) * width + (blockXStart - minBlockX);
+                int localX = firstLocalX;
                 for (int worldX = blockXStart; worldX < blockXEnd; worldX++) {
-                    BlockState state = section.getBlockState(worldX & 15, worldY & 15, worldZ & 15);
-                    writeMaterial(level, data, mutable, state, worldX, worldY, worldZ, rowBase + (worldX - minBlockX));
+                    BlockState state = section.getBlockState(localX, localY, localZ);
+                    mutable.set(worldX, worldY, worldZ);
+                    int material = materialCache.lookupLight(level, state, mutable);
+                    opacity[rowBase] = LightMaterial.opacity(material);
+                    emission[rowBase] = LightMaterial.emission(material);
+                    localX++;
+                    rowBase++;
                 }
             }
         }
@@ -197,7 +210,10 @@ public final class LuxRegionExtractor {
                                                int localZStart, int localZEnd, int width, int area) {
         byte fillOpacity;
         if (section.hasOnlyAir()) {
-            fillOpacity = 0;
+            // 全空气：opacity/emission 的“空气”就是 0，而 beginFullPopulate 已经把整片清零，
+            // 所以这里不写反而才是对的；逐行 fill 只会把同样的 0 再写一遍。
+            LuxBenchmarkSupport.count("lucistarlink.extract.sections.air");
+            return true;
         } else if (section.maybeHas(state -> !(state.getLightBlock(EmptyBlockGetter.INSTANCE, BlockPos.ZERO) == 15
                 && state.getLightEmission() == 0))) {
             return false;
@@ -205,7 +221,7 @@ public final class LuxRegionExtractor {
             fillOpacity = LuxConstants.MAX_LIGHT_BYTE;
         }
 
-        LuxBenchmarkSupport.count(fillOpacity == 0 ? "lucistarlink.extract.sections.air" : "lucistarlink.extract.sections.opaque");
+        LuxBenchmarkSupport.count("lucistarlink.extract.sections.opaque");
         for (int localY = localYStart; localY < localYEnd; localY++) {
             int yBase = localY * area;
             for (int localZ = localZStart; localZ < localZEnd; localZ++) {
@@ -245,6 +261,10 @@ public final class LuxRegionExtractor {
         int material = materialCache.lookupLight(level, state, BlockPos.ZERO);
         byte opacity = LightMaterial.opacity(material);
         byte emission = LightMaterial.emission(material);
+        if (opacity == 0 && emission == 0) {
+            // 空气：初值就是 0（beginFullPopulate 清过整片），逐行写一遍同样的 0 没有意义。
+            return;
+        }
         int minBlockX = data.bounds.minBlockX();
         int minBlockZ = data.bounds.minBlockZ();
         int minBuildY = data.bounds.minBuildY();
