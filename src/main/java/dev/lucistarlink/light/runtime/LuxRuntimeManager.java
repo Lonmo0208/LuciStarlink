@@ -30,9 +30,16 @@ public final class LuxRuntimeManager implements AutoCloseable {
     private static final int MAX_RUNTIME_REGION_SUBMITS_PER_TICK = Integer.getInteger("lucistarlink.runtime.maxSubmitsPerTick", 0);
     private static final int MAX_RUNTIME_PENDING_RECORDS = Integer.getInteger("lucistarlink.runtime.maxPendingRecords", 131_072);
     private static final long FULL_RELIGHT_COALESCE_NANOS = Long.getLong("lucistarlink.runtime.fullRelightCoalesceNanos", 5_000_000_000L);
-    /** Owned region size in chunks: the config key, with the hidden property as a rig-only override. */
+    /** Owned region size in chunks: the config key, with the hidden property as a rig-only override. The property
+     *  is read once - {@link #enqueue(int, int, int, BlockState, BlockState)} runs for every block change, and a
+     *  per-call property lookup there is pure overhead. */
+    private static final Integer RUNTIME_REGION_CHUNKS_OVERRIDE =
+            Integer.getInteger("lucistarlink.runtimeRegionChunks");
     private static int runtimeRegionChunks() {
-        return Math.max(1, Math.min(Integer.getInteger("lucistarlink.runtimeRegionChunks", LuxConfig.regionChunks), 16));
+        int configured = RUNTIME_REGION_CHUNKS_OVERRIDE != null
+                ? RUNTIME_REGION_CHUNKS_OVERRIDE
+                : LuxConfig.regionChunks;
+        return Math.max(1, Math.min(configured, 16));
     }
 
     /**
@@ -106,13 +113,6 @@ public final class LuxRuntimeManager implements AutoCloseable {
         }
         markFullRelightCoalescing(regionKey);
         return true;
-    }
-
-    public void enqueueBoundaryDeltas(long regionKey, long[] deltas) {
-        if (closed || deltas == null || deltas.length == 0) {
-            return;
-        }
-        updateQueue.enqueueBoundaryDeltas(regionKey, deltas);
     }
 
     public boolean canAcceptMoreWork() {
@@ -497,7 +497,8 @@ public final class LuxRuntimeManager implements AutoCloseable {
         int regionChunks = bounds.regionChunks();
         int haloChunks = LuxFlags.haloPublish ? bounds.haloChunks() : 0;
         // halo chunks are published too, so they need the same chunk identity check on publish as the core
-        HashMap<Long, LightChunk> expectedChunks = new HashMap<>((regionChunks + haloChunks * 2) ^ 2);
+        HashMap<Long, LightChunk> expectedChunks =
+                new HashMap<>((regionChunks + haloChunks * 2) * (regionChunks + haloChunks * 2));
         int minChunkX = bounds.originChunkX() - haloChunks;
         int minChunkZ = bounds.originChunkZ() - haloChunks;
         int maxChunkX = bounds.originChunkX() + regionChunks + haloChunks;
@@ -556,17 +557,7 @@ public final class LuxRuntimeManager implements AutoCloseable {
         ArrayList<BlockChangeRecord> merged = new ArrayList<>(existing.queuedChangeCount() + incoming.queuedChangeCount());
         merged.addAll(existing.changes());
         merged.addAll(incoming.changes());
-        long[] deltas = existing.boundaryDeltas();
-        long[] incomingDeltas = incoming.boundaryDeltas();
-        if (deltas != null && incomingDeltas != null) {
-            long[] combined = new long[deltas.length + incomingDeltas.length];
-            System.arraycopy(deltas, 0, combined, 0, deltas.length);
-            System.arraycopy(incomingDeltas, 0, combined, deltas.length, incomingDeltas.length);
-            deltas = combined;
-        } else if (incomingDeltas != null) {
-            deltas = incomingDeltas;
-        }
-        return new RuntimeRegionBatch(merged, false, existing.originalChangeCount() + incoming.originalChangeCount(), deltas);
+        return new RuntimeRegionBatch(merged, false, existing.originalChangeCount() + incoming.originalChangeCount());
     }
 
     private void flushCommits(ThreadedLevelLightEngine lightEngine) {

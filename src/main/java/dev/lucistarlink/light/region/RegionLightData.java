@@ -272,5 +272,8 @@ public final class RegionLightData {
         java.util.Arrays.fill(opacity, (byte) 0);
         java.util.Arrays.fill(emission, (byte) 0);
         clearLight();
+        // 物化标记必须一起清：不清的话采纱失败回退到全量计算的路径会先在清零的基线上算，
+        // 而 materializeReach 看到 isLightMaterialized=true 会跳过这些 section，永远不补 halo 材质。
+        clearLightMaterialized();
     }
 }

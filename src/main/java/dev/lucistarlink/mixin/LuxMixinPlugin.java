@@ -11,7 +11,7 @@ public final class LuxMixinPlugin implements IMixinConfigPlugin {
     private static final String SABLE_MIXIN_PACKAGE = "dev.lucistarlink.mixin.compat.sable.";
     private static final String SABLE_MARKER_CLASS = "dev.ryanhcode.sable.Sable";
 
-    private Boolean sablePresent;
+    private volatile Boolean sablePresent;
 
     @Override
     public void onLoad(String mixinPackage) {

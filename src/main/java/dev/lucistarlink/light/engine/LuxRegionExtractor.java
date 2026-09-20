@@ -27,18 +27,19 @@ public final class LuxRegionExtractor {
         this.materialCache = materialCache;
     }
 
-    public RegionLightData extract(LightChunkGetter getter, RegionBounds bounds) {
-        return extract(getter, bounds, null);
-    }
-
-    public RegionLightData extract(LightChunkGetter getter, RegionBounds bounds, LightChunk coreChunk) {
+    /**
+     * @param lazyHaloMaterials 是否只提取自有区块的材质（halo 的材质留给 {@code materializeReach} 按需补）。
+     *                          **全量重算的路径必须传 false**（世界生成、{@code /lucistarlink relight}）：它们没有
+     *                          {@code materializeReach}（那个由运行期批次的改动集合驱动，全量重算没有改动集），
+     *                          跳过的 halo 材质会一直是“空气”，据此算出的 halo 光照再被 halo 发布写进邻居区块，
+     *                          就会把邻居已经算好的光照改坏 —— 玩家看到的是“自然生成的光源方块发光不对，而自己放
+     *                          一个方块就好了”（放方块触发运行期重算，那条路径的材质是完整的）。
+     */
+    public RegionLightData extract(LightChunkGetter getter, RegionBounds bounds, LightChunk coreChunk,
+                                   boolean lazyHaloMaterials) {
         RegionLightData data = new RegionLightData(bounds);
-        populate(getter, data, coreChunk);
+        populate(getter, data, coreChunk, lazyHaloMaterials);
         return data;
-    }
-
-    public void populate(LightChunkGetter getter, RegionLightData data) {
-        populate(getter, data, null);
     }
 
     /** Extracts the materials of a single section from the world (lazy halo mode). */
@@ -74,7 +75,7 @@ public final class LuxRegionExtractor {
         }
     }
 
-    public void populate(LightChunkGetter getter, RegionLightData data, LightChunk coreChunk) {
+    public void populate(LightChunkGetter getter, RegionLightData data, LightChunk coreChunk, boolean lazyHaloMaterials) {
         data.beginFullPopulate();
         BlockGetter level = getter.getLevel();
         BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
@@ -91,7 +92,7 @@ public final class LuxRegionExtractor {
         int area = bounds.area();
         int chunkWidth = maxChunkX - minChunkX + 1;
         int chunkCount = chunkWidth * (maxChunkZ - minChunkZ + 1);
-        if (LuxFlags.lazyHaloLight) {
+        if (lazyHaloMaterials) {
             minChunkX = Math.max(minChunkX, bounds.originChunkX());
             maxChunkX = Math.min(maxChunkX, bounds.originChunkX() + bounds.regionChunks() - 1);
             minChunkZ = Math.max(minChunkZ, bounds.originChunkZ());
@@ -219,15 +220,43 @@ public final class LuxRegionExtractor {
     private void populateFallback(BlockGetter level, RegionLightData data, BlockPos.MutableBlockPos mutable,
                                   LightChunk chunk, BlockState missingState, int blockXStart, int blockXEnd,
                                   int blockZStart, int blockZEnd) {
+        if (chunk == null) {
+            // 邻居根本没加载（世界生成时最常见）：整片按同一个状态批量填。逐格走一遍时每一格都要做一次
+            // 材质查询（含注册表取 id），而这里的方块是同一个 —— 填的字节与逐格完全一致。
+            fillUniformMaterial(level, data, missingState, blockXStart, blockXEnd, blockZStart, blockZEnd);
+            return;
+        }
         for (int worldY = data.bounds.minBuildY(); worldY < data.bounds.maxBuildY(); worldY++) {
             int yBase = (worldY - data.bounds.minBuildY()) * data.bounds.area();
             for (int worldZ = blockZStart; worldZ < blockZEnd; worldZ++) {
                 int rowBase = yBase + (worldZ - data.bounds.minBlockZ()) * data.bounds.widthBlocks();
                 for (int worldX = blockXStart; worldX < blockXEnd; worldX++) {
                     mutable.set(worldX, worldY, worldZ);
-                    BlockState state = chunk == null ? missingState : chunk.getBlockState(mutable);
+                    BlockState state = chunk.getBlockState(mutable);
                     writeMaterial(level, data, mutable, state, worldX, worldY, worldZ, rowBase + (worldX - data.bounds.minBlockX()));
                 }
+            }
+        }
+    }
+
+    /** 把一个统一状态铺满给定范围，与逐格 {@link #writeMaterial} 的结果逐字节相同。 */
+    private void fillUniformMaterial(BlockGetter level, RegionLightData data, BlockState state,
+                                     int blockXStart, int blockXEnd, int blockZStart, int blockZEnd) {
+        int material = materialCache.lookupLight(level, state, BlockPos.ZERO);
+        byte opacity = LightMaterial.opacity(material);
+        byte emission = LightMaterial.emission(material);
+        int minBlockX = data.bounds.minBlockX();
+        int minBlockZ = data.bounds.minBlockZ();
+        int minBuildY = data.bounds.minBuildY();
+        int width = data.bounds.widthBlocks();
+        int area = data.bounds.area();
+        int length = blockXEnd - blockXStart;
+        for (int worldY = minBuildY; worldY < data.bounds.maxBuildY(); worldY++) {
+            int yBase = (worldY - minBuildY) * area;
+            for (int worldZ = blockZStart; worldZ < blockZEnd; worldZ++) {
+                int rowBase = yBase + (worldZ - minBlockZ) * width + (blockXStart - minBlockX);
+                Arrays.fill(data.opacity, rowBase, rowBase + length, opacity);
+                Arrays.fill(data.emission, rowBase, rowBase + length, emission);
             }
         }
     }

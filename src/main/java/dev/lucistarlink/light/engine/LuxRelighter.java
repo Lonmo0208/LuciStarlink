@@ -31,7 +31,6 @@ public final class LuxRelighter {
     private final LuxPublishEngine publishEngine = new LuxPublishEngine();
     private final ThreadLocal<RuntimeLightChangeBuffer> runtimeChangeBuffers = ThreadLocal.withInitial(() -> new RuntimeLightChangeBuffer(256));
     private final ThreadLocal<BlockPos.MutableBlockPos> runtimeMaterialPos = ThreadLocal.withInitial(BlockPos.MutableBlockPos::new);
-    private final ThreadLocal<byte[]> borderScratch = ThreadLocal.withInitial(() -> new byte[0]);
     private final ThreadLocal<java.util.BitSet> reachScratch = ThreadLocal.withInitial(java.util.BitSet::new);
     private final ThreadLocal<Boolean> haloTouchedScratch = ThreadLocal.withInitial(() -> Boolean.TRUE);
 
@@ -162,9 +161,6 @@ public final class LuxRelighter {
         }
     }
 
-    private void sinkWrapperRemovedPlaceholder() {
-    }
-
     /**
      * Worldgen border ordering: after a freshly generated chunk computed its light, compare the neighbouring
      * chunks' cells this image covers (the halo) against the light the engine currently stores for them. Where
@@ -282,7 +278,9 @@ public final class LuxRelighter {
 
     public RegionLightData extractChunkData(LightChunkGetter getter, ChunkAccess chunk, int regionChunks, int haloChunks) {
         RegionBounds bounds = RegionBounds.around(chunk.getPos(), chunk.getHeightAccessorForGeneration(), regionChunks, haloChunks);
-        return extractor.extract(getter, bounds, chunk);
+        // 世界生成路径全量提取材质（含 halo）：按需物化那一套靠运行期批次的改动集合驱动，生成时没有改动集，
+        // 而 halo 的材质缺失会让传播把实心方块当空气，算出的 halo 光照又被 halo 发布写进邻居区块。
+        return extractor.extract(getter, bounds, chunk, false);
     }
 
     public LuxRelightResult relightPreparedChunk(ChunkPos chunkPos, RegionLightData data, boolean enableSky, boolean enableBlock,
@@ -331,7 +329,8 @@ public final class LuxRelighter {
                                                   int regionChunks, int haloChunks) {
         RegionBounds bounds = RegionBounds.around(anchorChunk, getter.getLevel(), regionChunks, haloChunks);
         long startedAt = LuxBenchmarkSupport.start();
-        RegionLightData data = extractor.extract(getter, bounds);
+        // 这条路径与世界生成一样是全量重算，没有按需物化 halo 材质的后续步骤，所以必须全量提取。
+        RegionLightData data = extractor.extract(getter, bounds, null, false);
         LuxBenchmarkSupport.recordSince("lucistarlink.stage.region.extract", startedAt);
         startedAt = LuxBenchmarkSupport.start();
         if (enableSky) {
@@ -424,7 +423,7 @@ public final class LuxRelighter {
                     ? "lucistarlink.runtime.region.reload"
                     : "lucistarlink.runtime.region.init");
             long startedAt = LuxBenchmarkSupport.start();
-            extractor.populate(getter, data, coreChunk);
+            extractor.populate(getter, data, coreChunk, LuxFlags.lazyHaloLight);
             LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.init.extract", startedAt);
             if (LuxFlags.runtimeAdoption && adoptEngineLight(getter, data, coreChunk)) {
                 LuxBenchmarkSupport.count("lucistarlink.runtime.region.adopted");
@@ -432,7 +431,6 @@ public final class LuxRelighter {
                 // (the engine is bypassed for them), so apply them on top before publishing. Without this a
                 // light source placed in a region that had no runtime job yet never lit up.
                 applyAdoptedBatchChanges(getter, data, batch, enableSky, enableBlock);
-                applyIncomingBoundaryDeltas(data, batch, enableSky, enableBlock);
                 state.markInitialized(coreChunk);
                 List<LuxRelightResult> results = publish(data);
                 countPublished("lucistarlink.runtime.init", results);
@@ -465,7 +463,7 @@ public final class LuxRelighter {
             // always false, which used to skip both the halo publication and the neighbour marking
             haloTouchedScratch.set(Boolean.TRUE);
             long startedAt = LuxBenchmarkSupport.start();
-            extractor.populate(getter, data, coreChunk);
+            extractor.populate(getter, data, coreChunk, LuxFlags.lazyHaloLight);
             LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.full.extract", startedAt);
             startedAt = LuxBenchmarkSupport.start();
             if (enableSky) {
@@ -486,9 +484,8 @@ public final class LuxRelighter {
         }
 
         List<BlockChangeRecord> changes = batch.changes();
-        boolean hasDeltas = !batch.isEmptyDeltaSet();
 
-        if (changes.isEmpty() && !hasDeltas) {
+        if (changes.isEmpty()) {
             return List.of();
         }
 
@@ -503,7 +500,6 @@ public final class LuxRelighter {
         if (runtimeChanges.isEmpty()) {
             LuxBenchmarkSupport.count("lucistarlink.runtime.change.light_noop", changes.size());
             runtimeChanges.clear();
-            applyIncomingBoundaryDeltas(data, batch, enableSky, enableBlock);
             List<LuxRelightResult> results = publish(data);
             countPublished("lucistarlink.runtime.incremental", results);
             data.clearDirty();
@@ -539,27 +535,12 @@ public final class LuxRelighter {
         }
         LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.incremental.block", startedAt);
         startedAt = LuxBenchmarkSupport.start();
-        applyIncomingBoundaryDeltas(data, batch, enableSky, enableBlock);
-        LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.incremental.deltas", startedAt);
-        startedAt = LuxBenchmarkSupport.start();
         List<LuxRelightResult> results = publish(data);
         LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.incremental.publish", startedAt);
         countPublished("lucistarlink.runtime.incremental", results);
         data.clearDirty();
         runtimeChanges.clear();
         return results;
-    }
-
-    private void applyIncomingBoundaryDeltas(RegionLightData data, RuntimeRegionBatch batch, boolean enableSky, boolean enableBlock) {
-        if (batch.isEmptyDeltaSet()) {
-            return;
-        }
-        if (enableSky) {
-            skyLightEngine.applyBoundaryDeltas(data, batch.boundaryDeltas());
-        }
-        if (enableBlock) {
-            blockLightEngine.applyBoundaryDeltas(data, batch.boundaryDeltas());
-        }
     }
 
     private void materializeChanges(BlockGetter level, RegionLightData data, List<BlockChangeRecord> changes, RuntimeLightChangeBuffer runtimeChanges) {
@@ -726,6 +707,10 @@ public final class LuxRelighter {
     }
 
     private void countPublished(String prefix, List<LuxRelightResult> results) {
+        // 仪表关闭时连字符串拼接和这次遍历都不做：参数在调用前就已经求值，进不去 count 也照样分配。
+        if (!LuxBenchmarkSupport.enabled()) {
+            return;
+        }
         int sections = 0;
         for (LuxRelightResult result : results) {
             sections += result.sections().size();
