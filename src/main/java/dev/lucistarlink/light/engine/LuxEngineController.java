@@ -23,7 +23,6 @@ import net.minecraft.world.level.chunk.LightChunkGetter;
 
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -440,12 +439,7 @@ public final class LuxEngineController {
     }
 
     private boolean flushBulkScope(RuntimeBulkScope scope) {
-        boolean accepted = true;
-        for (Map.Entry<Long, Long> entry : scope.regionChangeCounts.entrySet()) {
-            if (!runtimeManager.enqueueFullRelight(entry.getKey(), entry.getValue())) {
-                accepted = false;
-            }
-        }
+        boolean accepted = runtimeManager.enqueueBulkRelight(scope.regionChangeCounts);
         LuxBenchmarkSupport.count("lucistarlink.runtime.bulk.regions", scope.regionChangeCounts.size());
         LuxBenchmarkSupport.count("lucistarlink.runtime.bulk.estimated_changes", scope.originalChangeCount);
         if (scope.boundsRegistered) {

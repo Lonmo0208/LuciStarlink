@@ -28,6 +28,18 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public final class LuxRuntimeManager implements AutoCloseable {
     private static final int MAX_RUNTIME_REGION_SUBMITS_PER_TICK = Integer.getInteger("lucistarlink.runtime.maxSubmitsPerTick", 0);
+
+    /**
+     * 同一 tick 里出现两个以上这样体量的区域批次时，它们改成串行。
+     *
+     * <p>为什么：每区各自拿一份基线去算，算完就发布。并发跑的时候先发布的那份旧结果会盖住后发布的
+     * 正确结果，而后者已经过了 epoch 检查，没人叫它重算 —— 大片 fill 之后残留一块亮斑就是这个。
+     * 串行之后，后一个开算前会 drain 到前一个留下的失效标记，于是基于新基线重算，结果收敛。
+     *
+     * <p>阈值取 64 是为了只命中「整片填充」这类形状：单点改动（block_toggle_border 那类）根本不达标。
+     */
+    private static final int LARGE_BATCH_SERIALISE_CHANGES =
+            Math.max(2, Integer.getInteger("lucistarlink.runtime.largeBatchSerialiseChanges", 64));
     private static final int MAX_RUNTIME_PENDING_RECORDS = Integer.getInteger("lucistarlink.runtime.maxPendingRecords", 131_072);
     private static final long FULL_RELIGHT_COALESCE_NANOS = Long.getLong("lucistarlink.runtime.fullRelightCoalesceNanos", 5_000_000_000L);
     /** Owned region size in chunks: the config key, with the hidden property as a rig-only override. The property
@@ -69,6 +81,20 @@ public final class LuxRuntimeManager implements AutoCloseable {
     private final LuxScheduler scheduler = new LuxScheduler(runtimeWorkerCount());
     private final ConcurrentLinkedQueue<RuntimeCommit> commitQueue = new ConcurrentLinkedQueue<>();
     private final Set<Long> scheduledRegions = ConcurrentHashMap.newKeySet();
+
+    /**
+     * 同一次批量写（{@code /fill} 之类）触发的多个区域属于同一个组；组内只允许一个区域在飞。
+     *
+     * <p>为什么必须串行：每个区域各自拿一份当时的基线去算，算完就发布。并发跑的时候，先发布的
+     * 那份旧结果会盖住后发布的正确结果，而后者已经把 epoch 检查过了，没人叫它重算 —— 这就是
+     * 大范围 fill 之后残留一块亮斑的成因。串行之后，后一个开算前会先 drain 到前一个留下的失效
+     * 标记（{@code refreshExternalSections}），于是它基于新基线重算，结果收敛。
+     *
+     * <p>只对批量写生效。单点改动（{@code block_toggle_border} 那类）不会走到这里。
+     */
+    private final ConcurrentHashMap<Long, Long> regionBulkGroup = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, Long> bulkGroupOccupant = new ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicLong bulkGroupSequence = new java.util.concurrent.atomic.AtomicLong();
     private final AtomicLong ownerIds = new AtomicLong();
     private final HashMap<Long, RuntimeRegionBatch> drainedBatches = new HashMap<>();
     private final HashMap<Long, RuntimeRegionBatch> pendingBatchesByRegion = new HashMap<>();
@@ -115,6 +141,25 @@ public final class LuxRuntimeManager implements AutoCloseable {
         }
         markFullRelightCoalescing(regionKey);
         return true;
+    }
+
+    /**
+     * 把一次批量写触及的所有区排成一个组，组内串行处理。返回值同 {@link #enqueueFullRelight}。
+     */
+    public boolean enqueueBulkRelight(java.util.Map<Long, Long> regionChangeCounts) {
+        if (regionChangeCounts == null || regionChangeCounts.isEmpty()) {
+            return true;
+        }
+        long groupId = bulkGroupSequence.incrementAndGet();
+        boolean accepted = true;
+        for (Map.Entry<Long, Long> entry : regionChangeCounts.entrySet()) {
+            regionBulkGroup.put(entry.getKey(), groupId);
+            if (!enqueueFullRelight(entry.getKey(), entry.getValue())) {
+                regionBulkGroup.remove(entry.getKey(), groupId);
+                accepted = false;
+            }
+        }
+        return accepted;
     }
 
     public boolean canAcceptMoreWork() {
@@ -271,6 +316,21 @@ public final class LuxRuntimeManager implements AutoCloseable {
         drainedBatches.clear();
         int drained = updateQueue.drainTo(drainedBatches);
         LuxBenchmarkSupport.count("lucistarlink.runtime.drain.records", drained);
+
+        // 同一 tick 里多个大体量区域：挂到同一个组，组内只允许一个在飞（见 regionBulkGroup 的注释）。
+        int largeRegionBatches = 0;
+        for (RuntimeRegionBatch drainedBatch : drainedBatches.values()) {
+            if (drainedBatch.queuedChangeCount() >= LARGE_BATCH_SERIALISE_CHANGES) {
+                largeRegionBatches++;
+            }
+        }
+        if (largeRegionBatches >= 2) {
+            long groupId = bulkGroupSequence.incrementAndGet();
+            for (Long regionKey : drainedBatches.keySet()) {
+                regionBulkGroup.put(regionKey, groupId);
+            }
+            LuxBenchmarkSupport.count("lucistarlink.runtime.largeBatch.serialised");
+        }
         // V3 M1：只在这一 tick 的改动是「小批量」且 regionChunks==1 时走同步路径（实测单 tick 159~267 条记录，
         // 每个方块改动约生成 6 条）。大改动继续走下面的异步区域路径 —— 它在健康窗口里更快。
         // 必须避开世界生成：实测两个写者（世界生成路径 + 同步路径）会让 prepare 阶段卡死。
@@ -282,6 +342,7 @@ public final class LuxRuntimeManager implements AutoCloseable {
         int scheduled = 0;
         int maxSubmits = runtimeSubmitBudget();
         ArrayList<ScheduledRegionBatch> selected = new ArrayList<>(Math.min(maxSubmits, drainedBatches.size() + 1));
+        HashMap<Long, Long> selectedGroups = new HashMap<>();
         synchronized (pendingBatchesLock) {
             for (Map.Entry<Long, RuntimeRegionBatch> entry : drainedBatches.entrySet()) {
                 pendingBatchesByRegion.merge(entry.getKey(), entry.getValue(), LuxRuntimeManager::mergeBatches);
@@ -299,6 +360,15 @@ public final class LuxRuntimeManager implements AutoCloseable {
                 if (scheduledRegions.contains(entry.getKey())) {
                     continue;
                 }
+                Long bulkGroup = regionBulkGroup.get(entry.getKey());
+                if (bulkGroup != null) {
+                    if (bulkGroupOccupant.containsKey(bulkGroup)) {
+                        LuxBenchmarkSupport.count("lucistarlink.runtime.bulk.waitingForGroup");
+                        continue;
+                    }
+                    bulkGroupOccupant.put(bulkGroup, entry.getKey());
+                    selectedGroups.put(entry.getKey(), bulkGroup);
+                }
                 RuntimeRegionBatch batch = entry.getValue();
                 iterator.remove();
                 selected.add(new ScheduledRegionBatch(entry.getKey(), batch));
@@ -307,7 +377,8 @@ public final class LuxRuntimeManager implements AutoCloseable {
         }
 
         for (ScheduledRegionBatch batch : selected) {
-            scheduleRegion(lightEngine, batch.regionKey(), batch.batch(), getter, relighter, regionChunks, haloChunks, enableSky, enableBlock);
+            scheduleRegion(lightEngine, batch.regionKey(), batch.batch(), selectedGroups.get(batch.regionKey()),
+                    getter, relighter, regionChunks, haloChunks, enableSky, enableBlock);
         }
         if (syncSmallEditTick) {
             // 同步小改动路径的最后一步：不再把结果交给光照线程，就地写进引擎的两份地图并发出通知。
@@ -321,9 +392,11 @@ public final class LuxRuntimeManager implements AutoCloseable {
         }
     }
 
-    private void scheduleRegion(ThreadedLevelLightEngine lightEngine, long regionKey, RuntimeRegionBatch batch, LightChunkGetter getter,
-                                LuxRelighter relighter, int regionChunks, int haloChunks, boolean enableSky, boolean enableBlock) {
+    private void scheduleRegion(ThreadedLevelLightEngine lightEngine, long regionKey, RuntimeRegionBatch batch, Long bulkGroupId,
+                                LightChunkGetter getter, LuxRelighter relighter, int regionChunks, int haloChunks,
+                                boolean enableSky, boolean enableBlock) {
         if (closed) {
+            releaseBulkGroup(regionKey, bulkGroupId);
             requeue(regionKey, batch);
             return;
         }
@@ -332,11 +405,13 @@ public final class LuxRuntimeManager implements AutoCloseable {
         LightChunk coreChunk = getter.getChunkForLighting(anchor.x, anchor.z);
         if (coreChunk == null) {
             LuxBenchmarkSupport.count("lucistarlink.runtime.requeued.missingChunk");
+            releaseBulkGroup(regionKey, bulkGroupId);
             requeue(regionKey, batch);
             return;
         }
         if (!scheduledRegions.add(regionKey)) {
             LuxBenchmarkSupport.count("lucistarlink.runtime.requeued.alreadyScheduled");
+            releaseBulkGroup(regionKey, bulkGroupId);
             requeue(regionKey, batch);
             return;
         }
@@ -345,6 +420,7 @@ public final class LuxRuntimeManager implements AutoCloseable {
         if (!ownerTable.tryAcquire(regionKey, ownerId)) {
             LuxBenchmarkSupport.count("lucistarlink.runtime.requeued.ownerBusy");
             scheduledRegions.remove(regionKey);
+            releaseBulkGroup(regionKey, bulkGroupId);
             requeue(regionKey, batch);
             return;
         }
@@ -365,6 +441,7 @@ public final class LuxRuntimeManager implements AutoCloseable {
             LuciStarlink.LOGGER.warn("LuciStarlink runtime job preparation failed, requeueing its changes", throwable);
             ownerTable.release(regionKey, ownerId);
             scheduledRegions.remove(regionKey);
+            releaseBulkGroup(regionKey, bulkGroupId);
             requeue(regionKey, batch);
             return;
         }
@@ -429,6 +506,7 @@ public final class LuxRuntimeManager implements AutoCloseable {
                 LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.job.runtime", jobStartedAt);
                 ownerTable.release(regionKey, ownerId);
                 scheduledRegions.remove(regionKey);
+                releaseBulkGroup(regionKey, bulkGroupId);
             }
         };
 
@@ -446,8 +524,17 @@ public final class LuxRuntimeManager implements AutoCloseable {
             LuxBenchmarkSupport.count("lucistarlink.runtime.requeued.submitRefused");
             ownerTable.release(regionKey, ownerId);
             scheduledRegions.remove(regionKey);
+            releaseBulkGroup(regionKey, bulkGroupId);
             requeue(regionKey, batch);
         }
+    }
+
+    private void releaseBulkGroup(long regionKey, Long groupId) {
+        if (groupId == null) {
+            return;
+        }
+        regionBulkGroup.remove(regionKey, groupId);
+        bulkGroupOccupant.remove(groupId, regionKey);
     }
 
     private void requeue(long regionKey, RuntimeRegionBatch batch) {
