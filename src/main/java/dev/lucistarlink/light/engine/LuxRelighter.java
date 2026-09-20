@@ -437,6 +437,11 @@ public final class LuxRelighter {
                 data.clearDirty();
                 return results;
             }
+            if (LuxFlags.lazyHaloLight) {
+                // 采纳不可用就得自己算光，而算光要拿邻居的材质当传播输入：
+                // 上面那次 populate 是 lazy 的，halo 那片还是“空气”，直接算会让光穿墙。
+                extractor.populate(getter, data, coreChunk, false);
+            }
             startedAt = LuxBenchmarkSupport.start();
             if (enableSky) {
                 skyLightEngine.compute(data);
@@ -463,7 +468,9 @@ public final class LuxRelighter {
             // always false, which used to skip both the halo publication and the neighbour marking
             haloTouchedScratch.set(Boolean.TRUE);
             long startedAt = LuxBenchmarkSupport.start();
-            extractor.populate(getter, data, coreChunk, LuxFlags.lazyHaloLight);
+            // 全量重算与首次初始化一样，要拿邻居的材质当传播输入，所以不能走 lazy：
+            // 光在这里穿不穿墙完全取决于 halo 那片石头是不是被当成了空气。
+            extractor.populate(getter, data, coreChunk, false);
             LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.full.extract", startedAt);
             startedAt = LuxBenchmarkSupport.start();
             if (enableSky) {
@@ -660,7 +667,7 @@ public final class LuxRelighter {
             }
         } catch (Throwable throwable) {
             LuciStarlink.LOGGER.debug("Lux light adoption failed, falling back to full compute", throwable);
-            data.resetForReuse();
+            data.resetLightForRecompute();
             return false;
         }
         LuxBenchmarkSupport.recordSince("lucistarlink.stage.runtime.init.adopt", startedAt);

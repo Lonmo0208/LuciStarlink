@@ -139,6 +139,11 @@ public final class LuxRegionExtractor {
                     }
                 }
             }
+            if (lazyHaloMaterials) {
+                data.markRegionLightMaterialized(bounds.originChunkX(), bounds.originChunkZ(), bounds.regionChunks());
+            } else {
+                data.markAllLightMaterialized();
+            }
         } finally {
             scratch.release(chunkCount);
         }

@@ -127,6 +127,33 @@ public final class RegionLightData {
     }
 
     /**
+     * 只标记 {@code chunkCount × chunkCount} 自有区块的 section，与 {@link #markAllLightMaterialized} 相对。
+     * lazy halo 模式下 {@code populate} 只提取自有区块的材质，halo 交给 materializeReach 按需补，
+     * 所以这里标记的范围必须与它提取的范围完全一致：多标一格就等于那格的材质永远不补。
+     */
+    public void markRegionLightMaterialized(int originChunkX, int originChunkZ, int chunkCount) {
+        int baseChunkX = originChunkX - (bounds.minBlockX() >> 4);
+        int baseChunkZ = originChunkZ - (bounds.minBlockZ() >> 4);
+        for (int y = 0; y < bounds.sectionCount(); y++) {
+            int yBase = y * sectionsPerPlane;
+            for (int z = 0; z < chunkCount; z++) {
+                int localZ = baseChunkZ + z;
+                if (localZ < 0 || localZ >= sectionWidth) {
+                    continue;
+                }
+                int zBase = yBase + localZ * sectionWidth;
+                for (int x = 0; x < chunkCount; x++) {
+                    int localX = baseChunkX + x;
+                    if (localX < 0 || localX >= sectionWidth) {
+                        continue;
+                    }
+                    materializedLightSections.set(zBase + localX);
+                }
+            }
+        }
+    }
+
+    /**
      * Reach of a change for lazily materialising light: {@code radius} blocks horizontally, but the *whole*
      * column vertically. Skylight travels without decay straight down a column, so a change can alter light in
      * sections far above/below it, while horizontally light decays one level per block (radius 15).
@@ -270,6 +297,9 @@ public final class RegionLightData {
         // 每个 section 原本要 256 行 × 2 次 fill）。非空 section 反正会被覆盖，清零不影响它们的正确性。
         java.util.Arrays.fill(opacity, (byte) 0);
         java.util.Arrays.fill(emission, (byte) 0);
+        // 物化标记必须跟着一起失效：清零之后 halo 的材质又变回“空气”，而 materializeReach 只看标记就跳过，
+        // 留着标记等于宣告那片材质是对的 —— 于是全量重算把邻居当空气传播，出射的光穿墙，而且再也补不回来。
+        clearLightMaterialized();
         clearDirty();
     }
 
@@ -280,5 +310,16 @@ public final class RegionLightData {
         // 物化标记必须一起清：不清的话采纱失败回退到全量计算的路径会先在清零的基线上算，
         // 而 materializeReach 看到 isLightMaterialized=true 会跳过这些 section，永远不补 halo 材质。
         clearLightMaterialized();
+    }
+
+    /**
+     * 只回滚“采纳引擎光照”写进去的内容，材质留着。
+     * 材质是 {@code populate} 的产物，而回退后的全量计算正需要它 ——
+     * 连材质一起清掉的话那次计算跑在“全是空气”的基线上，算出来的光整片穿墙。
+     */
+    public void resetLightForRecompute() {
+        clearLight();
+        clearLightMaterialized();
+        clearDirty();
     }
 }
