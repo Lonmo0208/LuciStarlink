@@ -13,8 +13,6 @@ package dev.lucistarlink.light;
  *   cross-tick commit latency; on by default.
  * - runtimeAdoption: adoption-backed region init; on by default, falls back to full
  *   compute automatically whenever adoption is not possible.
- * - boundaryDeltas: cross-region boundary continuation prototype; OFF - the prototype
- *   oscillates for roof-crossing batches (see docs/light-engine-architecture.md).
  */
 public final class LuxFlags {
     public static volatile boolean sectionFastPath =

@@ -5,6 +5,7 @@ import dev.lucistarlink.light.engine.LuxServices;
 import dev.lucistarlink.light.runtime.LuxLightPublisher;
 import dev.lucistarlink.light.runtime.LuxRelightResult;
 import dev.lucistarlink.light.runtime.LuxSectionData;
+import dev.lucistarlink.light.util.SectionFaceMask;
 import dev.lucistarlink.test.LuxBenchmarkSupport;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
@@ -356,20 +357,22 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
             // 客户端优化：写之前先算「六个面里哪些真的变了」，装完按这个掩码决定通知范围。
             // 面没变 → 邻区的光照与网格不可能受影响 → 只通知自己（省掉 7 倍的无用光照数据下发，实测通知量
             // 10015 → 1401；客户端进服两分钟从 11,729 个 section 降下来就是这一步要拿到的）。
-            int changedFaces = lucistarlink$changedFaces(
-                    lucistarlink$currentLayerBytes(section.layer(), section.sectionPos()),
-                    section.dataLayer().getData());
+            // 旧字节只从引擎读一次：掩码要用它，下面的同步路径判定也要用「引擎是否已有这一层」。
+            // storage 也只查一次，随后交给安装步骤复用（同一层的 listener 与 storage 在本次发布内不会变）。
+            LayerLightSectionStorageAccessor storage = lucistarlink$storageFor(section.layer());
+            long packedPos = section.sectionPos().asLong();
+            byte[] existingBytes = lucistarlink$currentLayerBytes(storage, packedPos);
+            int changedFaces = SectionFaceMask.changedFaces(existingBytes, section.dataLayer().getData());
             if (LuxFlags.directSectionInstall) {
                 // section state first: for a section the engine does not know yet this is what creates its
                 // layer (and its neighbour bookkeeping), which the install below then overwrites with our data.
                 // V3 M3：在「小改动同步路径」里，对引擎**已经认识**的 section 不再登记状态 —— 登记会让引擎在
                 // 自己的 pass 里处理该 section，于是它的任务队列在负载下空不了，pass 就要多等一个 tick（实测）。
                 // 只同步路径跳过；其余路径一字不动。
-                if (!this.lucistarlink$syncSmallEditDrain.get()
-                        || lucistarlink$currentLayerBytes(section.layer(), section.sectionPos()) == null) {
+                if (!this.lucistarlink$syncSmallEditDrain.get() || existingBytes == null) {
                     super.updateSectionStatus(section.sectionPos(), false);
                 }
-                lucistarlink$installSection(section.layer(), section.sectionPos(), section.dataLayer());
+                lucistarlink$installSection(storage, packedPos, section.dataLayer());
             } else {
                 super.queueSectionData(section.layer(), section.sectionPos(), section.dataLayer());
                 super.updateSectionStatus(section.sectionPos(), false);
@@ -378,7 +381,7 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
                 // 拿到旧的（常常是全空的）那一份 —— 实测：加了这一步之前，同一份世界重启后方块光指纹三组全变，
                 // 关掉引擎的对照三组逐位不变。两份都写，游戏内与存盘才是同一份数据（installSection 就地覆盖，
                 // 不替换对象，遵守光照线程仍持有该对象的约束）。
-                lucistarlink$installSection(section.layer(), section.sectionPos(), section.dataLayer());
+                lucistarlink$installSection(storage, packedPos, section.dataLayer());
             }
             lucistarlink$queueLightNotificationsForFaces(section.layer(), section.sectionPos(), changedFaces);
         }
@@ -404,92 +407,38 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
      * <p>A pending queued layer is dropped because it would shadow ours in {@code getDataLayerData}, and the
      * lookup cache is cleared because it may still hold the object this call replaced.
      */
-    /**
-     * 客户端优化的核心判据：这个 section 的**六个面**里，哪些面真的有格子变了。
-     *
-     * <p>为什么需要它：原版（以及我们目前的默认）在发布一个 section 时会把 3×3×3 共 27 个 section 都标成
-     * 「光照变了」，而这些标记会让服务端给客户端发光照数据 —— 实测通知量因此是必要的 7.1 倍
-     * （10015 → 1401），第一轮客户端实测进服两分钟就收到 11,729 个 section（约 24 MB）。
-     *
-     * <p>规则**构造上正确**：邻区的光照与网格只可能因为与它共享的那一层变化而变化。所以「没变的面 → 不通知那个
-     * 邻区」永远不会漏掉必需的通知（比直接关掉扇出安全），而「变了的面 → 照旧扇出」也永远不会少通知（保守一侧）。
-     *
-     * @return 位掩码：1=-X 2=+X 4=-Y 8=+Y 16=-Z 32=+Z；`before` 为 null 时返回 63（全变，按最保守处理）
-     */
+    /** 这一层的光照存储；没有光照引擎的层返回 null。 */
     @Unique
-    private static int lucistarlink$changedFaces(byte[] before, byte[] after) {
-        if (before == null || after == null) {
-            return 63;
-        }
-        int mask = 0;
-        for (int y = 0; y < 16; y++) {
-            for (int z = 0; z < 16; z++) {
-                if (lucistarlink$nibble(before, y, z, 0) != lucistarlink$nibble(after, y, z, 0)) {
-                    mask |= 1;
-                }
-                if (lucistarlink$nibble(before, y, z, 15) != lucistarlink$nibble(after, y, z, 15)) {
-                    mask |= 2;
-                }
-            }
-        }
-        for (int x = 0; x < 16; x++) {
-            for (int z = 0; z < 16; z++) {
-                if (lucistarlink$nibble(before, 0, z, x) != lucistarlink$nibble(after, 0, z, x)) {
-                    mask |= 4;
-                }
-                if (lucistarlink$nibble(before, 15, z, x) != lucistarlink$nibble(after, 15, z, x)) {
-                    mask |= 8;
-                }
-            }
-        }
-        for (int x = 0; x < 16; x++) {
-            for (int y = 0; y < 16; y++) {
-                if (lucistarlink$nibble(before, y, 0, x) != lucistarlink$nibble(after, y, 0, x)) {
-                    mask |= 16;
-                }
-                if (lucistarlink$nibble(before, y, 15, x) != lucistarlink$nibble(after, y, 15, x)) {
-                    mask |= 32;
-                }
-            }
-        }
-        return mask;
-    }
-
-    /** 按原版 DataLayer 的打包方式取一格光照：索引 (y&lt;&lt;8)|(z&lt;&lt;4)|x，偶数索引取低四位。 */
-    @Unique
-    private static int lucistarlink$nibble(byte[] data, int y, int z, int x) {
-        int index = (y << 8) | (z << 4) | x;
-        return (data[index >> 1] >> ((index & 1) * 4)) & 15;
-    }
-
-    /** 引擎当前持有的这一层 section 字节（用于在写入前算出六面变化掩码）；没有则返回 null。 */
-    @Unique
-    private byte[] lucistarlink$currentLayerBytes(LightLayer layer, SectionPos sectionPos) {
-        Object listener = super.getLayerListener(layer);
-        if (!(listener instanceof LightEngineAccessor engineAccessor)) {
-            return null;
-        }
-        LayerLightSectionStorageAccessor storage =
-                (LayerLightSectionStorageAccessor) (Object) engineAccessor.lucistarlink$storage();
-        net.minecraft.world.level.lighting.DataLayerStorageMap updating =
-                (net.minecraft.world.level.lighting.DataLayerStorageMap) storage.lucistarlink$updatingSectionData();
-        net.minecraft.world.level.chunk.DataLayer layerData = updating.getLayer(sectionPos.asLong());
-        return layerData == null ? null : layerData.getData();
-    }
-
-    @Unique
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private void lucistarlink$installSection(LightLayer layer, SectionPos sectionPos, net.minecraft.world.level.chunk.DataLayer dataLayer) {
+    private LayerLightSectionStorageAccessor lucistarlink$storageFor(LightLayer layer) {
         Object listener = super.getLayerListener(layer);
         // 没有光照引擎的层（例如无方块光的维度）拿到的是 DummyLightLayerEventListener，它没有 storage 可写。
         // 实测：在 directSectionInstall 路径上会抛 ClassCastException（Worker 线程，被 Util 捕获后只留一行日志），
         // 所以这里必须先认类型 —— 没有引擎就没什么可装的，直接返回就是正确行为。
         if (!(listener instanceof LightEngineAccessor engineAccessor)) {
+            return null;
+        }
+        return (LayerLightSectionStorageAccessor) (Object) engineAccessor.lucistarlink$storage();
+    }
+
+    /** 引擎当前持有的这一层 section 字节（用于在写入前算出六面变化掩码）；没有则返回 null。 */
+    @Unique
+    private byte[] lucistarlink$currentLayerBytes(LayerLightSectionStorageAccessor storage, long packedPos) {
+        if (storage == null) {
+            return null;
+        }
+        net.minecraft.world.level.lighting.DataLayerStorageMap updating =
+                (net.minecraft.world.level.lighting.DataLayerStorageMap) storage.lucistarlink$updatingSectionData();
+        net.minecraft.world.level.chunk.DataLayer layerData = updating.getLayer(packedPos);
+        return layerData == null ? null : layerData.getData();
+    }
+
+    @Unique
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private void lucistarlink$installSection(LayerLightSectionStorageAccessor storage, long packedPos,
+                                             net.minecraft.world.level.chunk.DataLayer dataLayer) {
+        if (storage == null) {
             return;
         }
-        LayerLightSectionStorageAccessor storage =
-                (LayerLightSectionStorageAccessor) (Object) engineAccessor.lucistarlink$storage();
-        long packedPos = sectionPos.asLong();
         net.minecraft.world.level.lighting.DataLayerStorageMap updating =
                 (net.minecraft.world.level.lighting.DataLayerStorageMap) storage.lucistarlink$updatingSectionData();
         net.minecraft.world.level.lighting.DataLayerStorageMap visible =
@@ -533,52 +482,36 @@ public abstract class ThreadedLevelLightEngineMixin extends LevelLightEngine imp
      */
     @Unique
     private void lucistarlink$queueLightNotificationsForFaces(LightLayer layer, SectionPos sectionPos, int changedFaces) {
-        lucistarlink$queueLightNotification(layer, sectionPos);
+        lucistarlink$queueLightNotification(layer, sectionPos.asLong());
         if (!LUCIS_NOTIFY_NEIGHBOURS) {
             return;
         }
+        int x = sectionPos.x();
+        int y = sectionPos.y();
+        int z = sectionPos.z();
         if ((changedFaces & 1) != 0) {
-            lucistarlink$queueLightNotification(layer, SectionPos.of(sectionPos.x() - 1, sectionPos.y(), sectionPos.z()));
+            lucistarlink$queueLightNotification(layer, SectionPos.asLong(x - 1, y, z));
         }
         if ((changedFaces & 2) != 0) {
-            lucistarlink$queueLightNotification(layer, SectionPos.of(sectionPos.x() + 1, sectionPos.y(), sectionPos.z()));
+            lucistarlink$queueLightNotification(layer, SectionPos.asLong(x + 1, y, z));
         }
         if ((changedFaces & 4) != 0) {
-            lucistarlink$queueLightNotification(layer, SectionPos.of(sectionPos.x(), sectionPos.y() - 1, sectionPos.z()));
+            lucistarlink$queueLightNotification(layer, SectionPos.asLong(x, y - 1, z));
         }
         if ((changedFaces & 8) != 0) {
-            lucistarlink$queueLightNotification(layer, SectionPos.of(sectionPos.x(), sectionPos.y() + 1, sectionPos.z()));
+            lucistarlink$queueLightNotification(layer, SectionPos.asLong(x, y + 1, z));
         }
         if ((changedFaces & 16) != 0) {
-            lucistarlink$queueLightNotification(layer, SectionPos.of(sectionPos.x(), sectionPos.y(), sectionPos.z() - 1));
+            lucistarlink$queueLightNotification(layer, SectionPos.asLong(x, y, z - 1));
         }
         if ((changedFaces & 32) != 0) {
-            lucistarlink$queueLightNotification(layer, SectionPos.of(sectionPos.x(), sectionPos.y(), sectionPos.z() + 1));
+            lucistarlink$queueLightNotification(layer, SectionPos.asLong(x, y, z + 1));
         }
     }
 
     @Unique
-    private void lucistarlink$queueAffectedLightNotifications(LightLayer layer, SectionPos sectionPos) {
-        if (!LUCIS_NOTIFY_NEIGHBOURS) {
-            lucistarlink$queueLightNotification(layer, sectionPos);
-            return;
-        }
-        for (int offsetX = -1; offsetX <= 1; offsetX++) {
-            for (int offsetY = -1; offsetY <= 1; offsetY++) {
-                for (int offsetZ = -1; offsetZ <= 1; offsetZ++) {
-                    lucistarlink$queueLightNotification(layer, SectionPos.of(
-                            sectionPos.x() + offsetX,
-                            sectionPos.y() + offsetY,
-                            sectionPos.z() + offsetZ
-                    ));
-                }
-            }
-        }
-    }
-
-    @Unique
-    private void lucistarlink$queueLightNotification(LightLayer layer, SectionPos sectionPos) {
-        LuxLightNotification notification = new LuxLightNotification(layer, sectionPos.asLong());
+    private void lucistarlink$queueLightNotification(LightLayer layer, long packedSectionPos) {
+        LuxLightNotification notification = new LuxLightNotification(layer, packedSectionPos);
         if (this.lucistarlink$pendingLightNotificationKeys.add(notification)) {
             this.lucistarlink$pendingLightNotifications.addLast(notification);
         }

@@ -5,7 +5,6 @@ import dev.lucistarlink.light.LuxFlags;
 import dev.lucistarlink.light.region.RegionBounds;
 import dev.lucistarlink.light.region.RegionLightData;
 import dev.lucistarlink.light.runtime.RuntimeLightChangeBuffer;
-import dev.lucistarlink.light.runtime.RuntimeRegionBatch;
 import dev.lucistarlink.light.util.IntBucketQueue;
 import dev.lucistarlink.light.util.IntRingQueue;
 import dev.lucistarlink.test.LuxBenchmarkSupport;
@@ -290,71 +289,6 @@ public final class LuxSkyLightEngine {
 
     private void processIncreases(RegionLightData data, IntBucketQueue adds) {
         spread(data, adds, false);
-    }
-
-    /**
-     * Applies cross-region boundary deltas from a neighboring region's job for the
-     * skylight layer, using the same exact decrease/increase machinery as local edits.
-     */
-    public void applyBoundaryDeltas(RegionLightData data, long[] deltas) {
-        if (deltas == null || deltas.length == 0) {
-            return;
-        }
-        IntBucketQueue adds = queues.get();
-        IntRingQueue removals = removalQueues.get();
-        adds.clear();
-        removals.clear();
-        boolean any = false;
-        for (int i = 0; i + 1 < deltas.length; i += 2) {
-            long pos = deltas[i];
-            long levels = deltas[i + 1];
-            if (!RuntimeRegionBatch.deltaIsSky(levels)) {
-                continue;
-            }
-            int sourceX = RuntimeRegionBatch.deltaX(pos);
-            int sourceY = RuntimeRegionBatch.deltaY(pos);
-            int sourceZ = RuntimeRegionBatch.deltaZ(pos);
-            int oldLevel = RuntimeRegionBatch.deltaOldLevel(levels);
-            int newLevel = RuntimeRegionBatch.deltaNewLevel(levels);
-            any |= deltaNeighbor(data, adds, removals, sourceX + 1, sourceY, sourceZ, oldLevel, newLevel);
-            any |= deltaNeighbor(data, adds, removals, sourceX - 1, sourceY, sourceZ, oldLevel, newLevel);
-            any |= deltaNeighbor(data, adds, removals, sourceX, sourceY, sourceZ + 1, oldLevel, newLevel);
-            any |= deltaNeighbor(data, adds, removals, sourceX, sourceY, sourceZ - 1, oldLevel, newLevel);
-            any |= deltaNeighbor(data, adds, removals, sourceX, sourceY + 1, sourceZ, oldLevel, newLevel);
-            any |= deltaNeighbor(data, adds, removals, sourceX, sourceY - 1, sourceZ, oldLevel, newLevel);
-        }
-        if (any) {
-            processDecreases(data, adds, removals);
-            processIncreases(data, adds);
-        }
-    }
-
-    private boolean deltaNeighbor(RegionLightData data, IntBucketQueue adds, IntRingQueue removals,
-                                  int worldX, int worldY, int worldZ, int oldLevel, int newLevel) {
-        if (!data.isInside(worldX, worldY, worldZ)) {
-            return false;
-        }
-        int index = data.index(worldX, worldY, worldZ);
-        int current = data.skyLight[index] & 0xF;
-        boolean changed = false;
-        if (current != 0 && current < oldLevel) {
-            data.skyLight[index] = 0;
-            data.markDirtySkyIndex(index);
-            enqueueRemoval(removals, index, current);
-            changed = true;
-        } else if (current > 1) {
-            adds.enqueue(current, index);
-        }
-        int candidate = Math.max(0, newLevel - Math.max(1, data.opacity[index] & 0xF));
-        if (candidate > (data.skyLight[index] & 0xF)) {
-            data.skyLight[index] = (byte) candidate;
-            data.markDirtySkyIndex(index);
-            if (candidate > 1) {
-                adds.enqueue(candidate, index);
-            }
-            changed = true;
-        }
-        return changed;
     }
 
     private boolean shouldPromoteToFullSkyRecompute(RegionLightData data, RuntimeColumns columns) {

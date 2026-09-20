@@ -1,5 +1,6 @@
 package dev.lucistarlink.mixin;
 
+import dev.lucistarlink.compat.sable.SablePresence;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
 import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
@@ -9,9 +10,6 @@ import java.util.Set;
 
 public final class LuxMixinPlugin implements IMixinConfigPlugin {
     private static final String SABLE_MIXIN_PACKAGE = "dev.lucistarlink.mixin.compat.sable.";
-    private static final String SABLE_MARKER_CLASS = "dev.ryanhcode.sable.Sable";
-
-    private Boolean sablePresent;
 
     @Override
     public void onLoad(String mixinPackage) {
@@ -24,25 +22,7 @@ public final class LuxMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
-        return !mixinClassName.startsWith(SABLE_MIXIN_PACKAGE) || isSablePresentEarly();
-    }
-
-    private boolean isSablePresentEarly() {
-        Boolean cached = sablePresent;
-        if (cached == null) {
-            cached = hasClass(SABLE_MARKER_CLASS);
-            sablePresent = cached;
-        }
-        return cached;
-    }
-
-    private static boolean hasClass(String className) {
-        try {
-            Class.forName(className, false, LuxMixinPlugin.class.getClassLoader());
-            return true;
-        } catch (ClassNotFoundException | LinkageError ignored) {
-            return false;
-        }
+        return !mixinClassName.startsWith(SABLE_MIXIN_PACKAGE) || SablePresence.isPresent();
     }
 
     @Override

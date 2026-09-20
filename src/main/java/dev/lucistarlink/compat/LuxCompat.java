@@ -1,31 +1,24 @@
 package dev.lucistarlink.compat;
 
 import dev.lucistarlink.compat.sable.SableCompat;
+import dev.lucistarlink.compat.sable.SablePresence;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.chunk.LightChunkGetter;
-import net.neoforged.fml.ModList;
 
 public final class LuxCompat {
     public static final String SABLE_MOD_ID = "sable";
 
-    private static volatile Boolean sableLoaded;
-
     private LuxCompat() {
     }
 
+    /**
+     * 与 mixin 应用时的判据一致（{@link SablePresence}），不能用 {@code ModList.isLoaded("sable")}：
+     * modid 命中而标记类不在时，accessor 没有被混进去，按 Sable 处理就会每次都抛 ClassCastException。
+     */
     public static boolean isSableLoaded() {
-        Boolean cached = sableLoaded;
-        if (cached == null) {
-            ModList modList = ModList.get();
-            if (modList == null) {
-                return false;
-            }
-            cached = modList.isLoaded(SABLE_MOD_ID);
-            sableLoaded = cached;
-        }
-        return cached;
+        return SablePresence.isPresent();
     }
 
     public static boolean isSablePlotChunk(LightChunkGetter getter, ChunkPos chunkPos) {

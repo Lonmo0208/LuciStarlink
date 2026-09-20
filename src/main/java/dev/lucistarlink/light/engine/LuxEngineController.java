@@ -37,9 +37,23 @@ public final class LuxEngineController {
      * Owned region size in chunks for the runtime path: the config key, with the hidden property as an override so
      * the benchmark rig can vary it without a rebuild. The config key used to be read by nothing at all, which made
      * it a knob that did nothing (the live paths hardcoded 1 or read the hidden property).
+     *
+     * <p>The property is read once at class initialization: this method sits on the per-block-change path (and on
+     * the bulk-bounds walk), and {@code Integer.getInteger} goes through a synchronized property lookup plus a
+     * parse every call. The config field stays live, only the override is frozen.
      */
+    private static final Integer RUNTIME_REGION_CHUNKS_OVERRIDE =
+            Integer.getInteger("lucistarlink.runtimeRegionChunks");
+    private static final Integer RUNTIME_HALO_CHUNKS_OVERRIDE =
+            Integer.getInteger("lucistarlink.runtimeHaloChunks");
+    private static final long PROMPT_DISPATCH_NANOS =
+            Math.max(0L, Long.getLong("lucistarlink.promptDispatchNanos", 250_000L));
+
     public static int runtimeRegionChunks() {
-        return Math.max(1, Math.min(Integer.getInteger("lucistarlink.runtimeRegionChunks", LuxConfig.regionChunks), 16));
+        int configured = RUNTIME_REGION_CHUNKS_OVERRIDE != null
+                ? RUNTIME_REGION_CHUNKS_OVERRIDE
+                : LuxConfig.regionChunks;
+        return Math.max(1, Math.min(configured, 16));
     }
 
     /**
@@ -58,7 +72,7 @@ public final class LuxEngineController {
      * chunk-load bursts into latency rather than unbounded heap growth.
      */
     private static final int MAX_INFLIGHT_WORLDGEN_TASKS = Math.max(2,
-            Integer.getInteger("lucistarlink.maxInflightWorldgenTasks", Math.max(2, worldgenWorkerCount() * 2)));
+            Integer.getInteger("lucistarlink.maxInflightWorldgenTasks", Math.max(2, worldgenWorkerCount() * 4)));
 
     private final LightMaterialCache materialCache = new LightMaterialCache();
     private final LuxRelighter relighter = new LuxRelighter(materialCache, new LuxRegionExtractor(materialCache));
@@ -88,8 +102,9 @@ public final class LuxEngineController {
      * exactly the light travel distance, so {@code runtimeHaloChunks=1} gives vanilla-equivalent borders.
      */
     public static int runtimeHaloChunks() {
-        Integer override = Integer.getInteger("lucistarlink.runtimeHaloChunks");
-        int configured = override != null ? override : LuxConfig.runtimeHaloChunks;
+        int configured = RUNTIME_HALO_CHUNKS_OVERRIDE != null
+                ? RUNTIME_HALO_CHUNKS_OVERRIDE
+                : LuxConfig.runtimeHaloChunks;
         return Math.max(0, Math.min(configured, 2));
     }
 
@@ -108,8 +123,6 @@ public final class LuxEngineController {
         // This warms up the chunk getter's cache and reduces waiting time
         prefetchNeighborChunks(getter, chunkPos);
 
-        RegionLightData data;
-        long extractStartedAt = LuxBenchmarkSupport.start();
         // The world-generation image must keep a halo: 0 stops propagation at the chunk edge, so a chunk generated
         // beside an already-loaded neighbour would leave that neighbour's border light stale (the seam the halo
         // exists to prevent). The config key used to be inert while this call hardcoded 1, so a configuration
@@ -117,28 +130,42 @@ public final class LuxEngineController {
         // off for every existing installation. 0 is therefore treated as 1 here, and the key's useful range on this
         // path is 1..2.
         int worldgenHalo = Math.max(1, LuxConfig.haloChunks);
-        data = relighter.extractChunkData(getter, chunk, runtimeRegionChunks(), worldgenHalo);
-        LuxBenchmarkSupport.recordSince("lucistarlink.stage.worldgen.extract", extractStartedAt);
 
         if (!tryReserveWorldgenSlot()) {
             LuxBenchmarkSupport.count("lucistarlink.worldgen.inflight.inlineFallback");
-            return CompletableFuture.completedFuture(computeWorldgenLight(chunkPos, data, 0L, getter));
+            return CompletableFuture.completedFuture(
+                    computeWorldgenLight(chunkPos, extractWorldgenData(getter, chunk, worldgenHalo), 0L, getter));
         }
 
         pendingWorldgenTasks.incrementAndGet();
         long submittedAt = LuxBenchmarkSupport.start();
         CompletableFuture<LuxRelightResult> future;
         try {
-            future = CompletableFuture.supplyAsync(() -> computeWorldgenLight(chunkPos, data, submittedAt, getter), worldgenWorkers);
+            future = CompletableFuture.supplyAsync(
+                    () -> computeWorldgenLight(chunkPos, extractWorldgenData(getter, chunk, worldgenHalo), submittedAt, getter),
+                    worldgenWorkers);
         } catch (RejectedExecutionException rejected) {
             releaseWorldgenSlot();
             pendingWorldgenTasks.decrementAndGet();
-            return CompletableFuture.completedFuture(computeWorldgenLight(chunkPos, data, 0L, getter));
+            return CompletableFuture.completedFuture(
+                    computeWorldgenLight(chunkPos, extractWorldgenData(getter, chunk, worldgenHalo), 0L, getter));
         }
         return future.whenComplete((result, throwable) -> {
             releaseWorldgenSlot();
             pendingWorldgenTasks.decrementAndGet();
         });
+    }
+
+    /**
+     * 材质提取：与光照计算放在同一条 worker 线程上。它在生成线程上跑时，每次区块生成都要让出约 5.6 ms
+     * （region 加 halo 一共 9 个区块的方块扫描），而这一步只读区块、不碰引擎，vanilla 自己的光照引擎也在
+     * 自己的工作线程上读区块，所以挪到 worker 是安全的；换来的是生成线程不再被这一步卡住。
+     */
+    private RegionLightData extractWorldgenData(LightChunkGetter getter, ChunkAccess chunk, int worldgenHalo) {
+        long extractStartedAt = LuxBenchmarkSupport.start();
+        RegionLightData data = relighter.extractChunkData(getter, chunk, runtimeRegionChunks(), worldgenHalo);
+        LuxBenchmarkSupport.recordSince("lucistarlink.stage.worldgen.extract", extractStartedAt);
+        return data;
     }
 
     private LuxRelightResult computeWorldgenLight(ChunkPos chunkPos, RegionLightData data, long submittedAt, LightChunkGetter getter) {
@@ -183,23 +210,27 @@ public final class LuxEngineController {
         getter.getChunkForLighting(cx - 1, cz - 1);
     }
 
-    public LuxRelightResult relightAtBlock(LightChunkGetter getter, BlockPos pos) {
-        if (!shouldHandleBlockChange(getter, pos)) {
-            return new LuxRelightResult(new ChunkPos(pos), java.util.List.of());
-        }
-
-        LightChunk chunk = getter.getChunkForLighting(pos.getX() >> 4, pos.getZ() >> 4);
-        if (chunk instanceof ChunkAccess chunkAccess) {
-            return relightChunk(getter, chunkAccess, true);
-        }
-        return new LuxRelightResult(new ChunkPos(pos), java.util.List.of());
-    }
-
     public boolean shouldHandleBlockChange(BlockPos pos) {
         return enabled()
                 && LuxConfig.enableRuntime
                 && pos != null
                 && !isWorldgenWriteSuppressed()
+                && !runtimeBackpressureActive()
+                && runtimeManager.canAcceptMoreWork();
+    }
+
+    /**
+     * 同 {@link #shouldHandleBlockChange(BlockPos)}，但不看「世界生成写入压制」。
+     *
+     * <p>入队那条路必须用这个：能走到那里的调用方已经自己确认目标区块是 BLOCK_TICKING 的已满区块，
+     * 也就是「世界生成把方块写到了一个已经存在的邻居上」。那种改动不是生成中区块自己的光照（世界生成的
+     * 整块计算盖不到它），必须走运行期重算。而如果这里也跟着压制，结果就是：原版 checkBlock 已被取消，
+     * 运行期又没入队，那片光照永远停在旧值。
+     */
+    private boolean shouldHandleBlockChangeIgnoringWorldgen(BlockPos pos) {
+        return enabled()
+                && LuxConfig.enableRuntime
+                && pos != null
                 && !runtimeBackpressureActive()
                 && runtimeManager.canAcceptMoreWork();
     }
@@ -239,7 +270,9 @@ public final class LuxEngineController {
         if (bulkScope != null && bulkScope.boundsRegistered && enabled() && LuxConfig.enableRuntime) {
             return true;
         }
-        if (!shouldHandleBlockChange(level, pos)) {
+        if (!shouldHandleBlockChangeIgnoringWorldgen(pos)
+                || LuxCompat.isSablePlotChunk(level, SectionPos.blockToSectionCoord(pos.getX()),
+                        SectionPos.blockToSectionCoord(pos.getZ()))) {
             return false;
         }
         if (bulkScope != null) {
@@ -291,7 +324,7 @@ public final class LuxEngineController {
         // on the server thread, which turned one dispatch per *change* (193 per run) instead of one per burst and
         // measurably helped nothing. A short delay off the server thread coalesces a burst, and the server task
         // queue then runs the dispatch later in the same tick instead of at the next tickRuntime.
-        long delayNanos = Math.max(0L, Long.getLong("lucistarlink.promptDispatchNanos", 250_000L));
+        long delayNanos = PROMPT_DISPATCH_NANOS;
         Runnable wake = () -> server.execute(() -> {
             this.promptDispatchScheduled.set(false);
             LuxBenchmarkSupport.count("lucistarlink.runtime.promptDispatch.run");
@@ -457,6 +490,9 @@ public final class LuxEngineController {
         }
         reapStaleBulkScope();
         refreshRuntimeBackpressure();
+        if (runtimeManager.consumeDroppedWork()) {
+            activateRuntimeBackpressure();
+        }
         // 峰值保持：遥测窗口必然错过工作瞬间，峰值必须每 tick 采
         runtimeManager.samplePeaks();
         boolean published = runtimeManager.tick(lightEngine, getter, relighter, runtimeRegionChunks(), runtimeHaloChunks(),
@@ -530,21 +566,13 @@ public final class LuxEngineController {
         dev.lucistarlink.light.LuxFlags.worldgenWriting = worldgenWriteScope.anyOpen();
     }
 
-
-
-
     public void endWorldgenWrite() {
         worldgenWriteScope.end();
         dev.lucistarlink.light.LuxFlags.worldgenWriting = worldgenWriteScope.anyOpen();
     }
 
-
-    private boolean isWorldgenWriteActive() {
-        return worldgenWriteScope.isActive();
-    }
-
     private boolean isWorldgenWriteSuppressed() {
-        return isWorldgenWriteActive();
+        return worldgenWriteScope.isActive();
     }
 
     private static int regionCount(int minChunkX, int maxChunkX, int minChunkZ, int maxChunkZ) {
