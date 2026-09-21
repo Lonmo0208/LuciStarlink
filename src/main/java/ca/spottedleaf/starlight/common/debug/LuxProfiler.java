@@ -62,6 +62,12 @@ public final class LuxProfiler {
     public static final LongAdder skyQueueAdds = new LongAdder();
     public static final LongAdder blockQueueAdds = new LongAdder();
 
+    // M2-2c: identical-content skip in SWMRNibbleArray.updateVisible()
+    public static final LongAdder identicalSkips = new LongAdder();
+    // M2-2c: sections actually notified to the client (one per layer, = packet mask bits)
+    public static final LongAdder skyNotify = new LongAdder();
+    public static final LongAdder blockNotify = new LongAdder();
+
     public static void flushPropagation(final boolean sky, final long tasks, final long positions, final long writes, final long queueAdds) {
         if (!ENABLED || (tasks | positions | writes | queueAdds) == 0L) {
             return;
@@ -130,6 +136,9 @@ public final class LuxProfiler {
                 + " blkTasks=" + blockTasks.sum()
                 + " blkPos=" + blockPositions.sum()
                 + " blkWrites=" + blockWrites.sum()
-                + " blkQAdds=" + blockQueueAdds.sum());
+                + " blkQAdds=" + blockQueueAdds.sum()
+                + " idSkip=" + identicalSkips.sum()
+                + " skyNotif=" + skyNotify.sum()
+                + " blkNotif=" + blockNotify.sum());
     }
 }

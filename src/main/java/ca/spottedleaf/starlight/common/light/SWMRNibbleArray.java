@@ -1,5 +1,6 @@
 package ca.spottedleaf.starlight.common.light;
 
+import ca.spottedleaf.starlight.common.debug.LuxProfiler;
 import net.minecraft.world.level.chunk.DataLayer;
 import java.util.ArrayDeque;
 import java.util.Arrays;
@@ -338,6 +339,33 @@ public final class SWMRNibbleArray {
         }
 
         synchronized (this) {
+            // B optimization: if state unchanged AND content identical, skip notification.
+            // This catches the common case where a block-light write (0→0) marks the nibble dirty
+            // but the on-disk and on-wire content is unchanged — no point sending a 2048-byte
+            // DataLayer packet that the client already has.
+            if (this.stateUpdating == this.stateVisible) {
+                if (this.stateUpdating == INIT_STATE_NULL || this.stateUpdating == INIT_STATE_UNINIT || this.stateUpdating == INIT_STATE_HIDDEN) {
+                    this.updatingDirty = false;
+                    if (LuxProfiler.enabled()) {
+                        LuxProfiler.identicalSkips.increment();
+                    }
+                    return false;
+                }
+                // INIT state: compare byte arrays (both null or content-equal)
+                if (Arrays.equals(this.storageUpdating, this.storageVisible)) {
+                    if (this.storageUpdating != this.storageVisible) {
+                        freeBytes(this.storageUpdating);
+                        this.storageUpdating = this.storageVisible;
+                    }
+                    this.updatingDirty = false;
+                    if (LuxProfiler.enabled()) {
+                        LuxProfiler.identicalSkips.increment();
+                    }
+                    return false;
+                }
+            }
+
+            // Original merge logic
             if (this.stateUpdating == INIT_STATE_NULL || this.stateUpdating == INIT_STATE_UNINIT) {
                 this.storageVisible = null;
             } else {

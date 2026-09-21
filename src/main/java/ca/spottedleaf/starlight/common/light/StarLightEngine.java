@@ -283,6 +283,9 @@ public abstract class StarLightEngine {
             final int ySections = this.maxSection - this.minSection + 1;
             final int chunkY = ((index / (5*5)) % (ySections + 2 + 2)) - this.chunkOffsetY;
             if ((nibble != null && nibble.updateVisible()) || this.notifyUpdateCache[index]) {
+                if (LuxProfiler.enabled()) {
+                    (this.skylightPropagator ? LuxProfiler.skyNotify : LuxProfiler.blockNotify).increment();
+                }
                 lightAccess.onLightUpdate(this.skylightPropagator ? LightLayer.SKY : LightLayer.BLOCK, SectionPos.of(chunkX, chunkY, chunkZ));
             }
         }
