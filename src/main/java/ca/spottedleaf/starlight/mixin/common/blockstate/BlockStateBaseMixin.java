@@ -1,6 +1,6 @@
 package ca.spottedleaf.starlight.mixin.common.blockstate;
 
-import ca.spottedleaf.starlight.common.ScalableLuxEntrypoint;
+import ca.spottedleaf.starlight.common.LuciStarlinkEntrypoint;
 import ca.spottedleaf.starlight.common.blockstate.ExtendedAbstractBlockState;
 import com.mojang.serialization.MapCodec;
 import it.unimi.dsi.fastutil.objects.Reference2ObjectArrayMap;
@@ -68,7 +68,7 @@ public abstract class BlockStateBaseMixin extends StateHolder<Block, BlockState>
                 this.scalablelux$actuallyDynamicLightEmission = true;
             }
         } catch (Throwable t) {
-            ScalableLuxEntrypoint.LOGGER.error("Failed to analyze class \"{}\" for dynamic lighting, this will impact performance.", this.getClass().toString(), t);
+            LuciStarlinkEntrypoint.LOGGER.error("Failed to analyze class \"{}\" for dynamic lighting, this will impact performance.", this.getClass().toString(), t);
             this.opacityIfCached = -1;
             this.scalablelux$actuallyDynamicLightEmission = true;
         }

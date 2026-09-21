@@ -22,7 +22,7 @@ import net.neoforged.neoforge.event.tick.ServerTickEvent;
  * <p>Driven from both the server tick (so an idle server still reports) and the light engine's own
  * update entry point (so the line always exists even if the tick hook is unavailable).</p>
  */
-@EventBusSubscriber(modid = "scalablelux")
+@EventBusSubscriber(modid = "lucistarlink")
 public final class LuxTelemetry {
 
     private static final long INTERVAL_NANOS =

@@ -46,23 +46,23 @@ import java.util.concurrent.CompletableFuture;
  * read-only and safe; {@code relight} recomputes light for loaded chunks only (unloaded ones are
  * skipped, so run it where the damage is visible).</p>
  */
-@EventBusSubscriber(modid = "scalablelux")
-public final class ScalableLuxCommand {
+@EventBusSubscriber(modid = "lucistarlink")
+public final class LuciStarlinkCommand {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger("ScalableLux");
+    private static final Logger LOGGER = LoggerFactory.getLogger("LuciStarlink");
 
-    private ScalableLuxCommand() {}
+    private LuciStarlinkCommand() {}
 
     @SubscribeEvent
     public static void onRegisterCommands(final RegisterCommandsEvent event) {
         final CommandDispatcher<CommandSourceStack> dispatcher = event.getDispatcher();
-        dispatcher.register(Commands.literal("scalablelux")
+        dispatcher.register(Commands.literal("lucistarlink")
                 .requires(source -> source.hasPermission(2))
                 .then(Commands.literal("stats").executes(context -> {
                     final CommandSourceStack source = context.getSource();
                     final StarLightInterface engine = engineOf(source.getLevel());
                     if (engine == null) {
-                        source.sendFailure(Component.literal("ScalableLux: this level does not run the ScalableLux light engine"));
+                        source.sendFailure(Component.literal("LuciStarlink: this level does not run the ScalableLux light engine"));
                         return 0;
                     }
                     source.sendSuccess(() -> Component.literal("ScalableLux " + engine.lucisStats()
@@ -76,7 +76,7 @@ public final class ScalableLuxCommand {
                             final ServerLevel level = source.getLevel();
                             final BlockPos pos = BlockPosArgument.getLoadedBlockPos(context, "pos");
                             final LevelChunk chunk = level.getChunkAt(pos);
-                            source.sendSuccess(() -> Component.literal("ScalableLux light " + pos.toShortString()
+                            source.sendSuccess(() -> Component.literal("LuciStarlink light " + pos.toShortString()
                                     + " block=" + level.getBrightness(LightLayer.BLOCK, pos)
                                     + " sky=" + level.getBrightness(LightLayer.SKY, pos)
                                     + " raw=" + level.getRawBrightness(pos, 0)
@@ -89,7 +89,7 @@ public final class ScalableLuxCommand {
                             final ServerLevel level = source.getLevel();
                             final StarLightInterface engine = engineOf(level);
                             if (engine == null) {
-                                source.sendFailure(Component.literal("ScalableLux: this level does not run the ScalableLux light engine"));
+                                source.sendFailure(Component.literal("LuciStarlink: this level does not run the ScalableLux light engine"));
                                 return 0;
                             }
                             final int radius = IntegerArgumentType.getInteger(context, "radius");
@@ -107,7 +107,7 @@ public final class ScalableLuxCommand {
                                 }
                             }
                             if (chunks.isEmpty()) {
-                                source.sendSuccess(() -> Component.literal("ScalableLux: no loaded, light-correct chunk in radius "
+                                source.sendSuccess(() -> Component.literal("LuciStarlink: no loaded, light-correct chunk in radius "
                                         + radius + " around " + centerX + "," + centerZ + " - nothing to relight"), false);
                                 return 1;
                             }
@@ -121,19 +121,19 @@ public final class ScalableLuxCommand {
                                 futures[i] = lightEngine.lightChunk(chunks.get(i), false);
                             }
                             final int count = chunks.size();
-                            source.sendSuccess(() -> Component.literal("ScalableLux: relighting " + count
+                            source.sendSuccess(() -> Component.literal("LuciStarlink: relighting " + count
                                     + " chunks around " + centerX + "," + centerZ), false);
                             CompletableFuture.allOf(futures).whenComplete((ignored, throwable) -> source.getServer().execute(() -> {
                                 if (throwable != null) {
-                                    source.sendFailure(Component.literal("ScalableLux relight failed: " + throwable));
+                                    source.sendFailure(Component.literal("LuciStarlink relight failed: " + throwable));
                                 } else {
-                                    source.sendSuccess(() -> Component.literal("ScalableLux: re-lit " + count
+                                    source.sendSuccess(() -> Component.literal("LuciStarlink: re-lit " + count
                                             + " chunks around " + centerX + "," + centerZ), true);
                                 }
                             }));
                             return 1;
                         }))));
-        LOGGER.debug("Registered /scalablelux (stats, light, relight)");
+        LOGGER.debug("Registered /lucistarlink (stats, light, relight)");
     }
 
     private static StarLightInterface engineOf(final ServerLevel level) {

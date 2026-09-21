@@ -21,7 +21,7 @@ public class Config {
     static {
         final Properties properties = new Properties();
         final Properties newProperties = new Properties();
-        final Path path = FMLPaths.CONFIGDIR.get().resolve("scalablelux.properties");
+        final Path path = FMLPaths.CONFIGDIR.get().resolve("lucistarlink.properties");
         if (Files.isRegularFile(path)) {
             try (InputStream in = Files.newInputStream(path, StandardOpenOption.CREATE)) {
                 properties.load(in);
@@ -76,7 +76,7 @@ public class Config {
 //                            message = String.format("Ignoring incompatibility of %s (defined in %s@%s)",
 //                                    key, modContainer.getMetadata().getId(), modContainer.getMetadata().getVersion().getFriendlyString());
 //                        } else {
-//                            message = String.format("Forcing %s in scalablelux.properties to be disabled (defined in %s@%s)",
+//                            message = String.format("Forcing %s in lucistarlink.properties to be disabled (defined in %s@%s)",
 //                                    key, modContainer.getMetadata().getId(), modContainer.getMetadata().getVersion().getFriendlyString());
 //                            boolean0 = false;
 //                        }

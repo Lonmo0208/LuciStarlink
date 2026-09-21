@@ -1,0 +1,34 @@
+LuciStarlink 2.0 - attribution and change list
+=============================================
+
+This distribution is a derivative work: the light engine is ScalableLux.
+
+Upstream (the code base)
+  ScalableLux - https://github.com/RelativityMC/ScalableLux
+  Copyright (c) Spottedleaf, ishland and contributors
+  License: GNU Lesser General Public License v3.0 only (LGPL-3.0-only)
+  Produced here from the NeoForge 1.21.1 backport tree (0.3.0-alpha.0.8).
+
+Previous line
+  Lucis - Copyright (c) Team Argentum, DenisMasterHerobrine (LGPL-3.0-only)
+  LuciStarlink 1.x - Copyright (c) Lonmo - the line this release succeeds.
+
+This derivative
+  LuciStarlink 2.0 - Copyright (c) Lonmo
+  License: LGPL-3.0-only (unchanged from both lineages)
+
+Changes relative to the ScalableLux base (full rationale and measurements in
+docs/PORT-LUCIS-IDEAS.md and docs/LS2-PLAN.md of the source tree)
+  1. Identity: modId `lucistarlink`, display name `LuciStarlink`, entrypoint/command/mixin-config renamed.
+     Internal ScalableLux identifiers (the `scalablelux$` mixin member prefix, the
+     `ca.spottedleaf.starlight` packages) are deliberately kept so the origin of every file stays visible.
+  2. Telemetry: periodic `SLTELEM` line (queue depth, dirty positions, pooled propagators),
+     `-Dscalablelux.telemetrySeconds` (default 30, 0 disables).
+  3. Commands: `/lucistarlink stats | light <pos> | relight <radius>` (permission level 2).
+  4. Client update path: `SWMRNibbleArray.updateVisible()` no longer publishes a nibble whose bytes are
+     unchanged (identity-preserving: only when the on-wire content is byte-identical).
+  5. Instrumentation: `ca.spottedleaf.starlight.common.debug.LuxProfiler`, off unless `-Dscalablelux.profile=true`.
+  6. An optional, default-off scheduling batch (`-Dscalablelux.batchLimit`) kept for A/B experiments only;
+     measured neutral, not enabled.
+  7. The light computation itself is unchanged. The main repository's differential probe measures this build as
+     bit-identical to vanilla on a 599,040-cell box once the engine has settled.

@@ -7,20 +7,29 @@ showAsResourcePack = false
 showAsDataPack = false
 
 [[mods]]
-modId="scalablelux"
+modId="lucistarlink"
 version="${version}"
-displayName="ScalableLux"
+displayName="LuciStarlink"
 logoFile="assets/scalablelux/icon.png"
-authors="Spottedleaf, ishland"
-description='''Rewrites the light engine to fix lighting performance and lighting errors'''
+authors="Lonmo (LuciStarlink); light engine by Spottedleaf and ishland (ScalableLux)"
+description='''LuciStarlink 2.0: ScalableLux's light engine with LuciStarlink's telemetry, in-game tools and correctness work. LGPL-3.0-only - see NOTICE for attribution and the change list.'''
 displayURL = "https://github.com/RelativityMC/ScalableLux"
+credits="The light engine is ScalableLux by Spottedleaf and ishland (RelativityMC), licensed LGPL-3.0-only; this build is a derivative work carrying LuciStarlink's additions. The previous LuciStarlink 1.x line was derived from Lucis (Team Argentum, DenisMasterHerobrine). See NOTICE."
 
-[[dependencies.scalablelux]]
+[[dependencies.lucistarlink]]
 modId = "minecraft"
 type = "required"
 versionRange = "[${minecraft_version},)"
 ordering = "NONE"
 side = "BOTH"
 
+[[dependencies.lucistarlink]]
+modId = "scalablelux"
+type = "incompatible"
+reason = "LuciStarlink 2.0 already is the ScalableLux light engine; install only one."
+versionRange = "[0,)"
+ordering = "NONE"
+side = "BOTH"
+
 [[mixins]]
-config="scalablelux.mixins.json"
+config="lucistarlink.mixins.json"

@@ -50,7 +50,8 @@ String getVersionSuffix() {
 
 base {
     archivesName = project.archives_base_name
-    version = project.mod_version + "." + getVersionSuffix()
+    // LuciStarlink 2.0: the declared version stands alone; the ScalableLux build-counter suffix is not ours.
+    version = project.mod_version
     group = project.maven_group
 }
 
