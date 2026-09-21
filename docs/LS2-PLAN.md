@@ -37,9 +37,11 @@
   `lucistarlink-1.21.1-2.0.0-alpha.1-all.jar`（md5 `51fe5d7f8e54e63561ef0d6cf1878863`），jar 内元数据已核对。
   **冒烟实测**：启动行 `LuciStarlink 2.0 active (ScalableLux base)`、`Registered /lucistarlink (stats, light, relight)`、
   `SLTELEM dim=minecraft:overworld tasks=1 dirty=1 poolSky=0 poolBlock=0` 都出现 —— 身份、遥测、命令的接线都对。
-* **M1 功能迁移**：配置面（1.x 的 ModConfigSpec 键 → 新配置，逐键给迁移说明）、Sable 兼容守卫（1.x 会退让给
-  Sable 的分区光照引擎，SL 底座上要重做同等守卫）、1.x 的保存/重启保证逐条对到 SL 的两条钩子
-  （本分支文档 §10 已完成核对：等效或更强）。
+* **M1 功能迁移** —— **已完成 2026-09-21**：配置面（`fc91b49`）把开关搬进 `config/lucistarlink.properties`
+  并给了 `docs/CONFIG-MIGRATION.md`（1.x 的 25 个键里只有 `enabled` 有对应物，其余 24 个是异步/区域引擎专属，
+  属"不适用"而非"待迁移"）；Sable 守卫（`46fe822`）按存在性判据 + 访问器 + 五个延迟点移植，
+  **实测有/无 Sable 各一次**（无 Sable：结构方块 7.91 ms、err=0；有 Sable 2.0.3：服务器起、基准跑完、无异常；
+  诚实边界：plot 延迟路径本身未被触发——基准区域不是 Sable 的 plot）。保存/重启保证的核对见 §10。
 * **M2 量具支持 2.0** —— **已完成 2026-09-21**（提交 `M2: 2.0 becomes measurable through the standard rig`）。
   阻塞点根因：harness（主项目）与 2.0 都声明 modId `lucistarlink`，FML 只加载其一，基准的 prepare 从未开始。
   解法**不动出厂身份**，只加一个 rig 变体：`-Pmod_id=lucistarlinkrig` 让 toml id、mixin 配置名
