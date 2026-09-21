@@ -67,6 +67,12 @@ It is **not** a scheduler over vanilla light tasks and **not** a Starlight fork:
 > (589 vs 573 µs) and lead on the two heavy ones; on a **machine under heavy load** the small-edit workload
 > falls behind, because the whole server tick is scheduled slower - that was measured across five variants
 > of our design and of theirs, and the conclusion is recorded in `docs/ARCH-V3-SYNC-STORAGE.md` §6.
+> The heaviest-weight workload is now settled rather than undecided: a border-only replication at
+> **n=12+12** reads `block_toggle_border` **1.2954x ScalableLux (U=113/31, p=0.0173)** - the six-round
+> table's "not significant" was under-powered, not an absence of difference, and Lucis upstream is behind
+> on it too (1.3007). So the honest per-workload picture of the weighted 0.9339 is **one decisive win
+> against three losses**, carried by the win's larger absolute gap at 35% weight
+> (`docs/TASK-PERF-SKY.md` §18.5).
 > Benchmarked against **vanilla** and **ScalableLux** in same-session interleaved runs (the engines alternate
 > round by round, ≥5 reps each; statistic = the median of per-pass minima over a run; every comparison carries an
 > exact two-sided Mann-Whitney p). All numbers use the settled-world protocol

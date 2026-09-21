@@ -5,7 +5,8 @@
  compute 内。40 个单测全绿（0 失败 0 错误）；发布件互斥声明已核（starlight/scalablelux/lucis = incompatible、
  sable = optional）。性能记录：第三方 `threeway.ps1 -Rounds 6`（默认协议，脚本未改）加权 **0.9339× ScalableLux /
  0.929× 上游 Lucis**，本项目最好的一次；逐档中位数与精确 p 值见 docs/TASK-PERF-SKY.md §18，同一脚本在脏环境下的
- 对照（我们加权退化 2.07×）见 §16。
+ 对照（我们加权退化 2.07×）见 §16；其中权重最大的一档 `block_toggle_border` 已用单档 12+12 轮复现确认落后
+ （1.2954，U=113/31，p=0.0173，见 §18.5），故逐档口径是 1 胜 3 负、加权由 `structure_cube` 的 0.819 带过去。
  上一版 1.2.9 的 md5 = 3e3be3945c8bc1d7e1bbb0133dc3fa09
 （1.2.9 = 社区 PR #2（`fix/crossregion-clear`，lbw14514，提交 `2a2bb9e`，合并 `65d0d32`）：一次批量写触发的
  多个区域**串行**（组内只允许一个在飞；占用标记而非计数器，任何早退都释放所以不会死锁；门槛 ≥64 条改动，

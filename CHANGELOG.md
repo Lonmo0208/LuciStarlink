@@ -18,6 +18,15 @@ while ScalableLux slows 1.19x, because our pass ends on engine scheduling and Sc
 independent groups from n=5 to n=12+12: the 5-round "+25.6%" was noise, twelve rounds read 41% *slower*, p=0.079),
 and the rule that follows from it - this workload needs ten rounds or an independent replication group.
 
+**And the border workload turned out to be settled, not undecided**: the six-round table read its
+`block_toggle_border` as not significant (p=0.0931), so the same script, unmodified, was re-run on that
+workload alone at n=12+12 - **1.2954x ScalableLux, U=113/31, p=0.0173**. Lucis upstream is behind on it too
+(1.3007, and 1.3007 vs ScalableLux reads p<0.0001) while ours versus upstream is 0.9960, p=0.5137, i.e.
+level. The weighted result does not change; what changes is the reading of it, which is now explicit:
+**one decisive win against three losses**, carried to 0.9339 by the win's larger absolute gap at 35% weight.
+§18.5 also folds the general rule into §17: on the cheap workloads a six-round p between 0.05 and 0.35 means
+under-powered, not "no difference".
+
 **Also here**: V2's and own-engine's records moved onto the main branch before their branches were deleted
 (`docs/V2-CONTINUATION.md`, `docs/REVIEW-V2-STAGE1.md`, `docs/OWN-ENGINE.md`), and the rig scripts we own now
 carry a 180-second per-run timeout plus a stray-server kill, because the known occasional `prepare` stall had
