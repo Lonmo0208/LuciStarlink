@@ -64,7 +64,10 @@ It is **not** a scheduler over vanilla light tasks and **not** a Starlight fork:
 > this project has recorded (`docs/TASK-PERF-SKY.md` §18; the loaded-machine picture is §16).**
 >
 > **Honest standing summary**: in a **healthy** window we match ScalableLux on the small-edit workload
-> (589 vs 573 µs) and lead on the two heavy ones; on a **machine under heavy load** the small-edit workload
+> (589 vs 573 µs) and lead on the two heavy ones **in engine compute** - the metric deliberately excludes
+> the tick crossings the light work has to cross, and on `structure_cube` those decide the number a player
+> feels: **66.5 ms per pass for ScalableLux against our 99.1 ms** (same harness, interleaved,
+> `docs/TASK-PERF-SKY.md` §19); on a **machine under heavy load** the small-edit workload
 > falls behind, because the whole server tick is scheduled slower - that was measured across five variants
 > of our design and of theirs, and the conclusion is recorded in `docs/ARCH-V3-SYNC-STORAGE.md` §6.
 > The heaviest-weight workload is now settled rather than undecided: a border-only replication at

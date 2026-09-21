@@ -124,6 +124,13 @@ neoForge {
             runConfig.systemProperty 'lucistarlink.haloChunks', '0'
             // ScalableLux-side instrumentation (ScalableLux branch `lucis-ideas`); a no-op for any other jar
             runConfig.systemProperty 'scalablelux.profile', providers.gradleProperty('slProfile').getOrElse('false')
+            // generic ScalableLux knobs for the rig, e.g. -PslArgs="-Dscalablelux.batchLimit=1 -Dx=y"
+            providers.gradleProperty('slArgs').orNull?.trim()?.split('\\s+')?.each { arg ->
+                if (arg.startsWith('-D') && arg.contains('=')) {
+                    def kv = arg.substring(2).split('=', 2)
+                    runConfig.systemProperty kv[0], kv[1]
+                }
+            }
             runConfig.systemProperty 'lucistarlink.maxBatchChunks', providers.gradleProperty('lucistarlinkMaxBatchChunks').getOrElse('64')
             runConfig.systemProperty 'lucistarlink.maxCachedRegions', providers.gradleProperty('lucistarlinkMaxCachedRegions').getOrElse('128')
             runConfig.systemProperty 'lucistarlink.worldgenWorkers', providers.gradleProperty('lucistarlinkWorldgenWorkers').getOrElse('0')
