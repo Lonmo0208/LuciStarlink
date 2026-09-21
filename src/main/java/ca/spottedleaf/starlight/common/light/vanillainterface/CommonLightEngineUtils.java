@@ -1,6 +1,7 @@
 package ca.spottedleaf.starlight.common.light.vanillainterface;
 
 import ca.spottedleaf.starlight.common.debug.LuxProfiler;
+import ca.spottedleaf.starlight.common.debug.LuxTelemetry;
 import ca.spottedleaf.starlight.common.light.StarLightLightingProvider;
 import ca.spottedleaf.starlight.common.util.CoordinateUtils;
 import net.minecraft.core.BlockPos;
@@ -26,6 +27,8 @@ public class CommonLightEngineUtils {
 
     public static int runLightUpdates(StarLightLightingProvider instance) {
         final boolean hadUpdates = hasLightWork(instance);
+        // engine-side telemetry driver: one nanoTime-gated check per call, prints only on the interval
+        LuxTelemetry.maybePrint(instance.scalablelux$getLightEngine().getWorld());
         if (!LuxProfiler.enabled()) {
             instance.scalablelux$getLightEngine().propagateChanges();
             return hadUpdates ? 1 : 0;

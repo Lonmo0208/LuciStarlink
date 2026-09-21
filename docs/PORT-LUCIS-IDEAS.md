@@ -30,7 +30,11 @@
 | **C** | **内存有界 + 遥测**：字节预算、合并表清理、批量 scope 泄漏回收 | Lucis 内存审计五条（见主项目 `LUCIS-NOTES.md`）| 按区块持 nibble，天然有界；**完全没有遥测** | 长挂服的可见性 |
 | **D** | 懒材质 / 懒 halo（初始化 435.3 → 0.87 ms） | 1.x 实测 | 无区域映像 → 天然没有这块 | 不适用（记为"不需要"） |
 | **E** | 游戏内自省命令 + 诊断计数 | `/lucistarlink relight`、`dumplight`、内存遥测 | **无任何命令** | 运维/排障 |
-| **F** | 保存/重启正确性钩子 | 1.1.5（重启截断）、1.2.7（世界生成自然光逐位一致）、1.2.9（跨区去光收敛） | **已有两条**（`force light incorrect before save`、`append unsaved lighting`） | 需逐条核对是否等效 |
+| **F** | 保存/重启正确性钩子 | 1.1.5（重启截断）、1.2.7（世界生成自然光逐位一致）、1.2.9（跨区去光收敛） | **已有两条**（`force light incorrect before save`、`append unsaved lighting`） | 见 §10 |
+
+**候选状态（2026-09-21 更新，逐条都有记录）**：**A** 关闭（§8，传播无冗余可合）、**B** 关闭（§9，发包路径已是最小集）、
+**D** 不适用（§1）、**F** 逐条核对完成（§10，两条钩子等效或更强；1.2.7 的实证探针未跑，成本已标）、
+**C+E** 已实现并验证（§11）。
 
 ## 2. 先做哪一条：**A**，因为它对着我们唯一赢的那一档
 
@@ -240,7 +244,37 @@ SL 的两条钩子（历史提交 `11bb0ad` append unsaved lighting、`16826e6` 
 **结论**：F 关闭 —— 两条钩子在语义上覆盖（且部分强于）我们的保存/重启保证，没有要移植的代码；唯一待实证项
 是 1.2.7 的世界生成逐位一致，成本已标在上面。
 
-## 11. 边界与不做的事
+## 11. 候选 C+E（遥测 + 自省命令）：SL 完全没有的那一块，已实现并验证（2026-09-21）
+
+**C 遥测**：`LuxTelemetry`，每 `-Dscalablelux.telemetrySeconds` 秒（默认 30，0 关闭）一行
+`SLTELEM dim=… tasks=… dirty=… poolSky=… poolBlock=…`，由**两条路**驱动：服务器 tick（空闲时也有心跳）+
+光照引擎自己的更新入口（`runLightUpdates`，即使 tick 钩子失效也有输出）。数据来自 `StarLightInterface.lucisStats()`
+（队列任务数 / 脏位置数 / 两个池化引擎池的大小），全部是"不阻塞引擎的近似读"，对健康线足够。
+
+**E 命令**：`/scalablelux`（需要 op，权限等级 2）
+* `stats` —— 与遥测同一行的状态，外加 `batchLimit` 与 profiler 开关；
+* `light <pos>` —— 该位置 block/sky/raw 光照 + 所在区块是否自称光照正确（判断"这块黑是引擎的问题还是地图本来如此"）；
+* `relight <radius 1..8>` —— 已坏存档的修复路径：把半径内已加载且自称正确的区块标成"光照不正确"，
+  交给 `lightChunk(chunk, false)`（**就是 vanilla 生成时的 LIGHT 步骤本身**），完成后回报区块数。
+  半径上限 8（=289 区块）防止误输入拖住服务器；修边界要留 2 圈余量，因为边缘光照靠邻居。
+
+**实现期发现的坑（值得记）**：本仓库的 `IEventBus`（bus 8.x）**只有 `register(Object)`，没有 `register(Class)` 重载**，
+所以 `NeoForge.EVENT_BUS.register(LuxTelemetry.class)` 会**编译通过**（绑定到 `register(Object)`）却只扫实例方法，
+**静默什么都不注册、没有任何报错**——第一轮实现就是这样，SLTELEM 一行不出。改用 `@EventBusSubscriber(modid=…)`
+后正常。改这种钩子后一定要看输出里有没有东西，别只看编译过了。
+
+**验证**（jar `01f691d2`，`structure_cube` 跑的基准服，`-Dscalablelux.telemetrySeconds=2`）：
+* 启动行出现：`ScalableLux active: telemetry every 2s (0 disables), /scalablelux for stats and relight`；
+* `SLTELEM dim=minecraft:overworld tasks=1 dirty=1 poolSky=0 poolBlock=0`、`… tasks=0 dirty=0 poolSky=2 poolBlock=2`
+  —— 两次采样一次在跑光、一次已静默，数字与基准进程的状态对得上；
+* 注册行出现：`Registered /scalablelux (stats, light, relight)`。
+
+**诚实点（必须一起读）**：注册与遥测是**实测**；三个子命令**没有在真实控制台里执行过**——基准跑的 gradle
+不转发 stdin（试了 `help` 也没回显），所以"命令能注册、能建图"已被证明，"点下去会发生什么"只有代码级把握
+（`stats` 的数据源就是遥测同款；`light` 只用 `getBrightness`/`isLightCorrect`；`relight` 只用 vanilla 自己的
+`lightChunk` 入口）。要坐实得在一个能接控制台的服务器上敲三条命令，成本 = 一次启动。
+
+## 12. 边界与不做的事
 
 * **不动主项目**：`E:\LuciStarlin\LuciStarlink`（1.2.10 发布线）保持原样，本分支是独立产物；测量时才借它当量具。
 * **许可证**：SL 是 LGPL-3.0-only，与 Lucis 血统同协议；搬进来的代码逐条记进本文件的"来源/改动"表，发布件同样带 LGPL 声明。

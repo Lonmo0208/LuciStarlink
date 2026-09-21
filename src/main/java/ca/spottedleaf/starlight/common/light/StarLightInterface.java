@@ -358,6 +358,27 @@ public final class StarLightInterface {
         return !this.lightQueue.isEmpty();
     }
 
+    /** One-line engine state for the telemetry line and {@code /scalablelux stats}. */
+    public String lucisStats() {
+        final StringBuilder ret = new StringBuilder(96);
+        if (this.lightQueue instanceof ConcurrentLightQueue queue) {
+            synchronized (queue) {
+                ret.append("tasks=").append(queue.chunkTasks.size());
+            }
+            ret.append(" dirty=").append(queue.dirtyPos.size());
+        } else if (this.lightQueue instanceof SimpleLightQueue queue) {
+            synchronized (queue) {
+                ret.append("tasks=").append(queue.chunkTasks.size());
+            }
+            ret.append(" dirty=n/a");
+        } else {
+            ret.append("tasks=n/a dirty=n/a");
+        }
+        ret.append(" poolSky=").append(this.cachedSkyPropagators == null ? -1 : this.cachedSkyPropagators.size());
+        ret.append(" poolBlock=").append(this.cachedBlockPropagators == null ? -1 : this.cachedBlockPropagators.size());
+        return ret.toString();
+    }
+
     public Level getWorld() {
         return this.world;
     }

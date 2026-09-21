@@ -11,5 +11,10 @@ public class ScalableLuxEntrypoint {
 
     public ScalableLuxEntrypoint() {
         Config.init();
+        // NOTE: /scalablelux and LuxTelemetry are wired with @EventBusSubscriber, not registered here:
+        // bus 8.x has no register(Class) overload, and register(SomeClass.class) binds to
+        // register(Object), which scans instance methods and silently registers nothing.
+        LOGGER.info("ScalableLux active: telemetry every {}s (0 disables), /scalablelux for stats and relight",
+                Long.getLong("scalablelux.telemetrySeconds", 30L));
     }
 }
