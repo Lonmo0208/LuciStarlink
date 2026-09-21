@@ -40,18 +40,16 @@
 * **M1 功能迁移**：配置面（1.x 的 ModConfigSpec 键 → 新配置，逐键给迁移说明）、Sable 兼容守卫（1.x 会退让给
   Sable 的分区光照引擎，SL 底座上要重做同等守卫）、1.x 的保存/重启保证逐条对到 SL 的两条钩子
   （本分支文档 §10 已完成核对：等效或更强）。
-* **M2 量具支持 2.0**（**当前阻塞点，已定位**）：rig 目前在 SL 模式里加载的是主项目的 harness，而 **harness 的
-  modId 也是 `lucistarlink`**，于是与 2.0 的 jar 撞 id —— 实测证据：运行日志里
-  `Found valid mod file lucistarlink-1.21.1-2.0.0-alpha.1-all.jar with {lucistarlink} mods` 与
-  `Found valid mod file main with {lucistarlink} mods - versions {1.2.10}` 并存，随后**基准的 prepare 阶段从未开始**
-  （只有遥测行在打，`min=NONE`、`rc=124` 超时）。
-  两种设计：
-  1. **（首选）把 harness 做成独立 mod**：`dev.lucistarlink.test.*` 从主项目里分出来，自己一个 modId
-     （如 `lucistarlink_bench`），任何引擎（1.x / SL / 2.0）都能配同一份量具跑 —— 这才是"量具与产物分离"的正解，
-     也让 2.0 能按其**出厂 jar** 被测量。代价：harness 现在引用了引擎类（`LuxServices`/`LuxFlags`/`LuxConfig`），
-     要做成可选依赖（反射或服务接口）。
-  2. **（备选）rig 专用变体 id**：SL 树里用构建参数把 toml **与 `@Mod` 注解**同时换成 `lucistarlink2`
-     （注解是编译期常量，要么生成入口类、要么做源集过滤），产物只用于测量、永不发布。
+* **M2 量具支持 2.0** —— **已完成 2026-09-21**（提交 `M2: 2.0 becomes measurable through the standard rig`）。
+  阻塞点根因：harness（主项目）与 2.0 都声明 modId `lucistarlink`，FML 只加载其一，基准的 prepare 从未开始。
+  解法**不动出厂身份**，只加一个 rig 变体：`-Pmod_id=lucistarlinkrig` 让 toml id、mixin 配置名
+  （`lucistarlinkrig.mixins.json`）与入口类一起跟随；并且**按构建互斥地排除入口类**——FML 对"@Mod 类 id 未声明"
+  是硬失败（`dangling_entrypoint`），不是忽略。rig 入口类改用 `EVENT_BUS.addListener` 手工挂载命令与遥测
+  （`@EventBusSubscriber` 的 modid 是编译期常量，跟不了构建），mixin 也改成自带日志器（第一版就是它引用了被排除的
+  入口类而崩）。
+  实测：md5 `01026968ead25c1479399842fef92bf3` 经 `sl-jar.sh` 跑 `structure_cube`，`err=0`，
+  minPass 7.46 / 7.75 ms（中位 **7.61 ms**）—— 与官方 SL 同档（符合预期：我们的新增不碰计算路径）。
+  **发布时用默认 id 重建**（不带 `-Pmod_id`）。rig 变体与出厂件的差别只在：modId、mixin 配置名、入口类。
 * **M3 验收与发布**：见 §5；通过后打 tag、写 verify-baseline、双语 README/CHANGELOG。
 
 ## 4. 迁什么 / 不迁什么
