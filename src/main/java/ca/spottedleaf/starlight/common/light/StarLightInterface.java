@@ -1,6 +1,7 @@
 package ca.spottedleaf.starlight.common.light;
 
 import ca.spottedleaf.starlight.common.chunk.ExtendedChunk;
+import ca.spottedleaf.starlight.common.compat.SableCompat;
 import ca.spottedleaf.starlight.common.debug.LuxProfiler;
 import ca.spottedleaf.starlight.common.thread.GlobalExecutors;
 import ca.spottedleaf.starlight.common.thread.SchedulingUtil;
@@ -451,6 +452,10 @@ public final class StarLightInterface {
         if (this.world == null || pos.getY() < WorldUtil.getMinBlockY(this.world) || pos.getY() > WorldUtil.getMaxBlockY(this.world)) { // empty world
             return null;
         }
+        if (SableCompat.isSablePlotChunk(this.world, pos.getX() >> 4, pos.getZ() >> 4)) {
+            // Sable's plots carry their own per-plot light engine; leave them alone (see SableCompat)
+            return null;
+        }
 
         return this.lightQueue.queueBlockChange(pos);
     }
@@ -459,11 +464,17 @@ public final class StarLightInterface {
         if (this.world == null) { // empty world
             return null;
         }
+        if (SableCompat.isSablePlotChunk(this.world, pos.x(), pos.z())) {
+            return null;
+        }
 
         return this.lightQueue.queueSectionChange(pos, newEmptyValue);
     }
 
     public void forceLoadInChunk(final ChunkAccess chunk, final Boolean[] emptySections) {
+        if (SableCompat.isSablePlotChunk(this.world, chunk.getPos().x, chunk.getPos().z)) { // Sable plots carry their own engine
+            return;
+        }
         final SkyStarLightEngine skyEngine = this.getSkyLightEngine();
         final BlockStarLightEngine blockEngine = this.getBlockLightEngine();
 
@@ -481,6 +492,9 @@ public final class StarLightInterface {
     }
 
     public void loadInChunk(final int chunkX, final int chunkZ, final Boolean[] emptySections) {
+        if (SableCompat.isSablePlotChunk(this.world, chunkX, chunkZ)) { // Sable plots carry their own engine
+            return;
+        }
         final SkyStarLightEngine skyEngine = this.getSkyLightEngine();
         final BlockStarLightEngine blockEngine = this.getBlockLightEngine();
 
@@ -498,6 +512,9 @@ public final class StarLightInterface {
     }
 
     public void lightChunk(final ChunkAccess chunk, final Boolean[] emptySections) {
+        if (SableCompat.isSablePlotChunk(this.world, chunk.getPos().x, chunk.getPos().z)) { // Sable plots carry their own engine
+            return;
+        }
         final SkyStarLightEngine skyEngine = this.getSkyLightEngine();
         final BlockStarLightEngine blockEngine = this.getBlockLightEngine();
 

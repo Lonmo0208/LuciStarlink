@@ -57,9 +57,14 @@ base {
 
 repositories {
     maven { url "https://maven.neoforged.net/releases/" }
+    // Sable is an optional interop target: we compile against it to find its per-plot light engines and
+    // defer to them, and nothing is bundled (compileOnly + a presence check at runtime).
+    maven { url "https://cursemaven.com" }
 }
 
 dependencies {
+    compileOnly("curse.maven:sable-1312371:8263584") { transitive = false }
+
     //to change the versions see the gradle.properties file
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     mappings loom.officialMojangMappings()

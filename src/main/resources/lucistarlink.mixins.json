@@ -3,6 +3,7 @@
   "minVersion": "0.8",
   "package": "ca.spottedleaf.starlight.mixin",
   "compatibilityLevel": "JAVA_17",
+  "plugin": "ca.spottedleaf.starlight.mixin.LuciStarlinkMixinPlugin",
   "mixins": [
     "common.blockstate.BlockStateBaseMixin",
     "common.chunk.ChunkAccessMixin",
@@ -16,7 +17,8 @@
     "common.world.LevelMixin",
     "common.world.SerializableChunkDataMixin",
     "common.world.ServerWorldMixin",
-    "common.world.WorldGenRegionMixin"
+    "common.world.WorldGenRegionMixin",
+    "compat.sable.SableServerLevelAccessor"
   ],
   "client": [
     "client.multiplayer.ClientPacketListenerMixin",
