@@ -1,6 +1,7 @@
 package ca.spottedleaf.starlight.mixin.common.blockstate;
 
-import ca.spottedleaf.starlight.common.LuciStarlinkEntrypoint;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import ca.spottedleaf.starlight.common.blockstate.ExtendedAbstractBlockState;
 import com.mojang.serialization.MapCodec;
 import it.unimi.dsi.fastutil.objects.Reference2ObjectArrayMap;
@@ -23,6 +24,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(BlockBehaviour.BlockStateBase.class)
 public abstract class BlockStateBaseMixin extends StateHolder<Block, BlockState> implements ExtendedAbstractBlockState {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("LuciStarlink");
 
     @Shadow
     @Final
@@ -68,7 +71,7 @@ public abstract class BlockStateBaseMixin extends StateHolder<Block, BlockState>
                 this.scalablelux$actuallyDynamicLightEmission = true;
             }
         } catch (Throwable t) {
-            LuciStarlinkEntrypoint.LOGGER.error("Failed to analyze class \"{}\" for dynamic lighting, this will impact performance.", this.getClass().toString(), t);
+            LOGGER.error("Failed to analyze class \"{}\" for dynamic lighting, this will impact performance.", this.getClass().toString(), t);
             this.opacityIfCached = -1;
             this.scalablelux$actuallyDynamicLightEmission = true;
         }

@@ -7,7 +7,7 @@ showAsResourcePack = false
 showAsDataPack = false
 
 [[mods]]
-modId="lucistarlink"
+modId="${mod_id}"
 version="${version}"
 displayName="LuciStarlink"
 logoFile="assets/scalablelux/icon.png"
@@ -32,4 +32,4 @@ ordering = "NONE"
 side = "BOTH"
 
 [[mixins]]
-config="lucistarlink.mixins.json"
+config="${mod_id}.mixins.json"

@@ -76,14 +76,17 @@ dependencies {
     }
     implementation("com.ishland.flowsched:flowsched")
 }
-
 processResources {
     inputs.property "version", project.version + "+" + project.minecraft_version
     inputs.property "minecraft_version", project.minecraft_version
+    inputs.property "mod_id", project.mod_id
 
     filesMatching("META-INF/neoforge.mods.toml") {
-        expand "version": project.version + "+" + project.minecraft_version, "minecraft_version": project.minecraft_version
+        expand "version": project.version + "+" + project.minecraft_version, "minecraft_version": project.minecraft_version, "mod_id": project.mod_id
     }
+    // rig builds (-Pmod_id=lucistarlinkrig) must not collide with the 1.x harness mod, whose mixin config is
+    // lucistarlink.mixins.json: Mixin keys configs by name and rejects duplicates across mods.
+    rename "lucistarlink.mixins.json", project.mod_id + ".mixins.json"
 }
 
 // ensure that the encoding is set to UTF-8, no matter what the system default is
@@ -95,6 +98,7 @@ tasks.withType(JavaCompile) {
 
 loom {
     accessWidenerPath = file("src/main/resources/scalablelux.accesswidener")
+
 }
 
 // Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
@@ -135,6 +139,17 @@ clean.dependsOn gradle.includedBuild('FlowSched').task(':clean')
 tasks.withType(AbstractArchiveTask) {
     preserveFileTimestamps = false
     reproducibleFileOrder = true
+}
+
+// Only the entrypoint that matches the built mod id may ship: FML rejects a @Mod class whose id is not declared
+// in the toml ("dangling_entrypoint"), so the rig build (-Pmod_id=lucistarlinkrig) must not carry the published
+// entrypoint and the published build must not carry the rig one.
+tasks.withType(AbstractArchiveTask).configureEach {
+    if (project.mod_id == "lucistarlinkrig") {
+        exclude "ca/spottedleaf/starlight/common/LuciStarlinkEntrypoint.class"
+    } else {
+        exclude "ca/spottedleaf/starlight/common/LuciStarlinkRigEntrypoint.class"
+    }
 }
 
 // configure the maven publication
