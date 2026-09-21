@@ -97,7 +97,41 @@
 **下一步（M2）**：先做"批次簿记"这一条，代码只动 `ThreadedLevelLightEngineVanillaInterface`（+ 必要时
 `StarLightInterface` 的入队入口），然后按 §3 的协议做同会话 A/B，并跑正确性探针（refill / nether / 差分）。
 
-## 6. 边界与不做的事
+## 6. M2-1：把逐改动的簿记按批合并 —— 机制成立、指标中性（2026-09-21）
+
+**改动**（`ThreadedLevelLightEngineVanillaInterface`；开关 `-Dscalablelux.batchLimit=N`，**默认 1 = 关**）：
+`checkBlock` 把位置缓冲到"当前 section"，section 变了或缓冲到 N 就先 flush；flush 时只有**第一个**位置走完整调度
+（chunk 查找 / lit 检查 / 票据 / `ChunkTasks`），其余只调 `lightEngine.blockChange(pos)`；顺序保持 FIFO；
+所有可能观察或排空队列的方法（`hasLightWork` / `runLightUpdates` / `updateSectionStatus` / `lightChunk` /
+`waitForPendingTasks` / `close`）在入口**先 flush** —— 传播只可能发生在 `runLightUpdates`，所以不存在"看见半批"的窗口。
+`scalablelux$queueTaskForSection` 改为返回 `ENQUEUED / DROPPED / DEFERRED`，flush 据此决定其余位置怎么入队
+（`DEFERRED` 时逐个重走，避免绕过线程检查）。
+
+**测量**（**同一个 jar**，只有 `-Dscalablelux.batchLimit` 不同；`structure_cube`；3+3 交错）：
+
+| 侧 | minPass 中位数 | applyNanos 中位数 | waitNanos 中位数 | `queueTask` 调用 | 每改动钩子耗时 |
+| --- | --- | --- | --- | --- | --- |
+| 关（1） | 7,915,100 | 14.59 ms | 17.20 ms | 17,924 | 666 ns（旧构建实测） |
+| 开（256） | 7,951,600 | **12.98 ms** | 24.27 ms | **204** | **~91 ns** |
+
+**三条结论**
+
+1. **机制完全成立**：`queueTask` 17,924 → **204**（每批只走一次调度），每改动钩子 666 → ~91 ns，
+   **apply 相位实测降了约 11%（14.59 → 12.98 ms）**。
+2. **指标没动**（minPass 7.92 vs 7.95 ms）：省下的时间在 **wait 相位重新出现**（17.2 → 24.3 ms）——
+   说明**瓶颈不是"每改动的簿记"，而是光照引擎为这批改动真正要做的工作**；按批合并入队只是把工作从
+   服务端线程挪到了光照线程、挪到了更晚。
+3. **默认因此保持关闭**（`batchLimit=1`，与上游行为一致），但开关留着，下一条改进能在**同一个 jar** 上直接 A/B。
+
+**下一条要试的**：不再动"入队"，而动**这批改动在光照线程上要做的工作量** —— 也就是候选 A 的本体：
+一批改动**合成一次区域级重算**，而不是每个位置各自触发一次传播/重新点亮。SL 侧对应入口是
+`StarLightEngine` / `SkyStarLightEngine` 的传播循环与 section 变脏后的处理（`increaseQueue` / `decreaseQueue`）。
+动手前先用 profiler 量出"一趟里每个位置平均被传播触及几次"。
+
+**诚实点（必须一起引用）**：n=3 的 A/B 只能算"未判定"，不是"无差别"（§3 的规矩：≥6 轮，便宜档 ≥12 轮）。
+上面第 2 条敢说"指标没动"，是因为差值只有 0.5% —— **远小于这个量具 6 轮噪声带**，不是因为 n=3 有把握。
+
+## 7. 边界与不做的事
 
 * **不动主项目**：`E:\LuciStarlin\LuciStarlink`（1.2.10 发布线）保持原样，本分支是独立产物；测量时才借它当量具。
 * **许可证**：SL 是 LGPL-3.0-only，与 Lucis 血统同协议；搬进来的代码逐条记进本文件的"来源/改动"表，发布件同样带 LGPL 声明。

@@ -10,6 +10,7 @@ import ca.spottedleaf.starlight.common.util.CoordinateUtils;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ChunkMap;
@@ -46,6 +47,24 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
 
     private final Long2IntOpenHashMap scalablelux$chunksBeingWorkedOn = new Long2IntOpenHashMap();
 
+    // --- Lucis idea A: batch a bulk edit's per-change bookkeeping -------------
+    // A bulk write (structure paste, /fill, worldedit) calls checkBlock once per block, but nearly all
+    // of those calls share one section and repeat the same work: a chunk lookup, the "is this chunk lit"
+    // checks, a lambda allocation, and the per-chunk ticket path. Measured on structure_cube: 666 ns per
+    // call, 2.7 ms of an 8.7 ms pass, while the actual propagation is only ~0.9 ms (docs/PORT-LUCIS-IDEAS.md §5).
+    //
+    // Light results cannot be observed between enqueue and flush: the queue only *records* positions, the
+    // propagation happens in runLightUpdates/propagateChanges, and every method that can observe or drain
+    // the queue flushes first (see lucis$flushBatch call sites). Order is preserved - a batch for a new
+    // section is flushed before the new section's first position is buffered.
+    // Default OFF: the first cut (batch the scheduling checks) measured neutral - 0.9954 at n=3+3 on
+    // structure_cube, and the counters show why (the queue insert itself dominates, not the checks).
+    // The switch stays so the next iteration can be A/B'd against it without a rebuild.
+    private static final int LUCIS_BATCH_LIMIT = Integer.getInteger("scalablelux.batchLimit", 1);
+
+    private long lucis$batchSection = Long.MIN_VALUE;
+    private final ObjectArrayList<BlockPos> lucis$batchPositions = new ObjectArrayList<>();
+
     public ThreadedLevelLightEngineVanillaInterface(
             final LightChunkGetter lightChunkGetter,
             final ChunkMap chunkMap,
@@ -63,7 +82,11 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
         }
     }
 
-    private void scalablelux$queueTaskForSection(final int chunkX, final int chunkY, final int chunkZ,
+    private static final int LUCIS_QUEUE_DROPPED = 0;
+    private static final int LUCIS_QUEUE_ENQUEUED = 1;
+    private static final int LUCIS_QUEUE_DEFERRED = 2;
+
+    private int scalablelux$queueTaskForSection(final int chunkX, final int chunkY, final int chunkZ,
                                                  final Supplier<StarLightInterface.LightQueue.ChunkTasks> runnable) {
         if (LuxProfiler.enabled()) {
             LuxProfiler.queueTaskCalls++;
@@ -77,7 +100,7 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
             if (LuxProfiler.enabled()) {
                 LuxProfiler.queueTaskNotReady++;
             }
-            return;
+            return LUCIS_QUEUE_DROPPED;
         }
 
         if (!ChunkSystemHooks.isNonFullTicket() && center.getPersistedStatus() != ChunkStatus.FULL) { // TODO check if getHighestGeneratedStatus() is a better idea
@@ -87,7 +110,7 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
                 LuxProfiler.queueTaskInline++;
             }
             runnable.get();
-            return;
+            return LUCIS_QUEUE_ENQUEUED;
         }
 
         if (!ChunkSystemHooks.isTicketThreadSafe() && !world.getChunkSource().chunkMap.mainThreadExecutor.isSameThread()) {
@@ -98,7 +121,7 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
             world.getChunkSource().chunkMap.mainThreadExecutor.execute(() -> {
                 this.scalablelux$queueTaskForSection(chunkX, chunkY, chunkZ, runnable);
             });
-            return;
+            return LUCIS_QUEUE_DEFERRED;
         }
 
         final long key = CoordinateUtils.getChunkKey(chunkX, chunkZ);
@@ -110,7 +133,7 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
             if (LuxProfiler.enabled()) {
                 LuxProfiler.queueTaskNotScheduled++;
             }
-            return;
+            return LUCIS_QUEUE_DROPPED;
         }
 
         if (updateFuture.isTicketAdded) {
@@ -118,7 +141,7 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
             if (LuxProfiler.enabled()) {
                 LuxProfiler.queueTaskAlreadyAdded++;
             }
-            return;
+            return LUCIS_QUEUE_ENQUEUED;
         }
         updateFuture.isTicketAdded = true;
         if (LuxProfiler.enabled()) {
@@ -157,6 +180,7 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
                 LOGGER.error("Failed to remove ticket level for post chunk task " + new ChunkPos(chunkX, chunkZ), thr);
             }
         });
+        return LUCIS_QUEUE_ENQUEUED;
     }
 
     @Override
@@ -164,36 +188,85 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
         // Redirect scheduling call away from the vanilla light engine, as well as enforce
         // that chunk neighbors are loaded before the processing can occur
 
+        if (LUCIS_BATCH_LIMIT <= 1) { // batching off: one change, one full scheduling pass
+            this.lucis$queueOne(pos);
+            return;
+        }
+        if (LuxProfiler.enabled() && LuxProfiler.sample()) {
+            LuxProfiler.checkBlockCalls++;
+            final long t0 = System.nanoTime();
+            this.lucis$buffer(pos);
+            LuxProfiler.checkBlockSampled++;
+            LuxProfiler.checkBlockSampledNanos += System.nanoTime() - t0;
+            LuxProfiler.maybePrint();
+            return;
+        }
+        if (LuxProfiler.enabled()) {
+            LuxProfiler.checkBlockCalls++;
+        }
+        this.lucis$buffer(pos);
+    }
+
+    private void lucis$queueOne(final BlockPos pos) {
         final BlockPos posCopy = pos.immutable();
-        if (!LuxProfiler.enabled()) {
-            this.scalablelux$queueTaskForSection(posCopy.getX() >> 4, posCopy.getY() >> 4, posCopy.getZ() >> 4, () -> {
-                return this.lightEngine.blockChange(posCopy);
-            });
-            return;
-        }
-        LuxProfiler.checkBlockCalls++;
-        if (!LuxProfiler.sample()) {
-            this.scalablelux$queueTaskForSection(posCopy.getX() >> 4, posCopy.getY() >> 4, posCopy.getZ() >> 4, () -> {
-                return this.lightEngine.blockChange(posCopy);
-            });
-            return;
-        }
-        final long t0 = System.nanoTime();
         this.scalablelux$queueTaskForSection(posCopy.getX() >> 4, posCopy.getY() >> 4, posCopy.getZ() >> 4, () -> {
             return this.lightEngine.blockChange(posCopy);
         });
-        LuxProfiler.checkBlockSampled++;
-        LuxProfiler.checkBlockSampledNanos += System.nanoTime() - t0;
-        LuxProfiler.maybePrint();
+    }
+
+    private void lucis$buffer(final BlockPos pos) {
+        final long section = SectionPos.asLong(pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4);
+        if (section != this.lucis$batchSection) {
+            // a new section: everything buffered so far is older, so it goes first (order preserved)
+            this.lucis$flushBatch();
+            this.lucis$batchSection = section;
+        }
+        this.lucis$batchPositions.add(pos.immutable());
+        if (this.lucis$batchPositions.size() >= LUCIS_BATCH_LIMIT) {
+            this.lucis$flushBatch();
+        }
+    }
+
+    /**
+     * Enqueues every buffered position. The first one takes the full scheduling path (chunk lookup, lit
+     * checks, ticket bookkeeping, queue call); the rest are in the same section - and therefore the same
+     * chunk column with the same answer to those checks - so they only need the queue call, which is where
+     * the per-change cost collapses.
+     */
+    private void lucis$flushBatch() {
+        final int size = this.lucis$batchPositions.size();
+        if (size == 0) {
+            return;
+        }
+        final BlockPos first = this.lucis$batchPositions.get(0);
+        final int result = this.scalablelux$queueTaskForSection(first.getX() >> 4, first.getY() >> 4, first.getZ() >> 4, () -> {
+            return this.lightEngine.blockChange(first);
+        });
+        if (result == LUCIS_QUEUE_ENQUEUED) {
+            for (int i = 1; i < size; i++) {
+                this.lightEngine.blockChange(this.lucis$batchPositions.get(i));
+            }
+        } else if (result == LUCIS_QUEUE_DEFERRED) {
+            // the first change had to bounce to another thread, so the rest must not be enqueued here
+            for (int i = 1; i < size; i++) {
+                final BlockPos pos = this.lucis$batchPositions.get(i);
+                this.scalablelux$queueTaskForSection(pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4, () -> {
+                    return this.lightEngine.blockChange(pos);
+                });
+            }
+        }
+        this.lucis$batchPositions.clear();
     }
 
     @Override
     public boolean hasLightWork() {
+        this.lucis$flushBatch();
         return CommonLightEngineUtils.hasLightWork(this);
     }
 
     @Override
     public int runLightUpdates() {
+        this.lucis$flushBatch();
         return CommonLightEngineUtils.runLightUpdates(this);
     }
 
@@ -205,6 +278,7 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
         if (LuxProfiler.enabled()) {
             LuxProfiler.sectionStatusCalls++;
         }
+        this.lucis$flushBatch();
         this.scalablelux$queueTaskForSection(pos.getX(), pos.getY(), pos.getZ(), () -> {
             return this.lightEngine.sectionChange(pos, sectionEmpty);
         });
@@ -214,6 +288,7 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
     public void setLightEnabled(ChunkPos pos, boolean enable) {
         // Avoid messing with the vanilla light engine state
         // light impl does not need to do this
+        this.lucis$flushBatch();
     }
 
     @Override
@@ -305,6 +380,7 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
 
     @Override
     public void close() {
+        this.lucis$flushBatch();
         LuxProfiler.print();
         super.close();
     }
@@ -324,6 +400,7 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
     @Override
     public CompletableFuture<ChunkAccess> lightChunk(ChunkAccess chunk, boolean lit) {
         // Route to new logic to either light or just load the data
+        this.lucis$flushBatch();
 
         final ChunkPos chunkPos = chunk.getPos();
 
@@ -360,6 +437,7 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
 
     @Override
     public CompletableFuture<?> waitForPendingTasks(int chunkX, int chunkZ) {
+        this.lucis$flushBatch();
         return this.lightEngine.syncFuture(chunkX, chunkZ);
     }
 }
