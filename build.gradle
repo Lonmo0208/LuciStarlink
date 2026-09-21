@@ -100,7 +100,9 @@ neoForge {
             runConfig.systemProperty 'lucistarlink.benchmark', 'true'
             runConfig.systemProperty 'lucistarlink.debug', 'true'
             runConfig.systemProperty 'lucistarlink.benchmark.mode', mode
-            runConfig.systemProperty 'lucistarlink.benchmark.expectedMod', expectedMod
+            // Overridable so a differently-identified engine (e.g. LuciStarlink 2.0, modId lucistarlink, running the
+            // ScalableLux base) can be measured in this mode without touching the mode table.
+            runConfig.systemProperty 'lucistarlink.benchmark.expectedMod', providers.gradleProperty('benchmarkExpectedMod').getOrElse(expectedMod)
             runConfig.systemProperty 'lucistarlink.benchmark.workload', providers.gradleProperty('benchmarkWorkload').getOrElse('block_toggle_dense')
             runConfig.systemProperty 'lucistarlink.benchmark.output', providers.gradleProperty('benchmarkOutput').getOrElse(benchmarkDefaultOutput)
             runConfig.systemProperty 'lucistarlink.benchmark.radiusChunks', providers.gradleProperty('benchmarkRadiusChunks').getOrElse('3')
