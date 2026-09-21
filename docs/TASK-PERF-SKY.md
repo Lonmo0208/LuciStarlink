@@ -832,3 +832,5 @@ RTS=0，落定后；详见 `ScalableLux-Patched/docs/PORT-LUCIS-IDEAS.md` §12�
 在此之前不要对外声称"与 vanilla 逐位一致"是无条件的。探针与两条命令已可复用：
 `RTS=0 bash vanilla-dump.sh structure_cube "-40,32,-40,55,96,55" 1 ref` 拿到参考，
 再对我们侧加 `-PbenchmarkLightDiff=<ref.sky>`。
+
+**后续已独立成文**：`docs/BUG-SKY-BOUNDARY-DEFICIT.md` —— 80 格已收窄到"世界生成阶段、区块最西列、天光少 1~5 级"（纯 prepare 运行即存在，与编辑无关），并附剖面与复现命令。
