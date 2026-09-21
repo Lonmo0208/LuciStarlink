@@ -2,16 +2,21 @@
 
 Project: `E:\LuciStarlin\LuciStarlink` (mod id `lucistarlink`, MC 1.21.1 / NeoForge 21.1.234-235).
 
-## 现在的状态（2026-09-19，新窗口从这里看起）
+## 现在的状态（2026-09-21，新窗口从这里看起）
 
-* 发布线 `master` = **1.0.3**（`dist/lucistarlink-1.21.1-1.0.3.jar`）；git 已存在，每个改动都是可回退的提交。
+* 发布线 `master` = **1.2.10**（`dist/lucistarlink-1.21.1-1.2.10.jar`，md5 `36418d8500615bbff68263f1b35b5512`，
+  tag `v1.2.10`）；git 已存在，每个改动都是可回退的提交。
+* **三方口径的最后一项未判定已判定**：社区三方脚本（`E:\LuciStarlin\threeway.ps1`，未改）默认协议下
+  `block_toggle_border` 单档 **12+12 轮读 1.2954**（U=113/31，**p=0.0173**，上游 Lucis 同样落后 1.3007）——
+  所以逐档是 **1 胜 3 负**，加权 0.9339 由 `structure_cube` 的 0.819 带过去。**读 `docs/TASK-PERF-SKY.md` §18 / §18.5。**
 * **V2 全局存储**已完整实现并**收线**在 `v2-storage` 分支：阶段 0/1/2 落地并逐格验证（storage-parity），
   性能中性（0.815 vs 0.819 ms，p=0.69），阶段 3 因前提错误而取消。默认仍是 `lightEngineMode = region`，
   storage 是一条可切换、经 parity 验证的替代路径。**读 `docs/V2-CONTINUATION.md`。**
 * **dense 档差距（本次诊断）**：不在光照引擎，而在我们自己的改方块拦截路径（每方块 ~256 ns 的守卫与仪表开销）。
   已修（守卫只问一次、背压不看时钟、世界生成抑制抽成 `WorldgenWriteScope` 快路径、Sable 先查存在性）。
   **读 `docs/TASK-PERF-DENSE.md`** —— 里面也有「progress 总计不能当每轮归因」和「14~15.6 ms 调度饥饿特征」两条教训。
-* 测试 **29 通过 / 0 失败 / 1 继承跳过**（`WorldgenWriteScopeTest` 5 条是新的）。
+* 测试 **40 通过 / 0 失败**（1.2.10；`RuntimeUpdateQueue.enqueueFullRelight` 的记账泄漏窗口已修，
+  未解决项 3 见 `docs/BUG-WORLDGEN-NATURAL-LIGHT.md`）。
 * 本文件下面的正文来自更早的会话，**测量数字已被新的 ≥5 轮交错表取代**：读的时候以
   `docs/TASK-PERF-SKY.md`、`docs/TASK-PERF-DENSE.md` 和 `docs/verify-baseline.txt` 为准；
   仍然有效的部分是**构建/运行规则、测量机制（怎么测才有效）、以及未解决项的清单**。
