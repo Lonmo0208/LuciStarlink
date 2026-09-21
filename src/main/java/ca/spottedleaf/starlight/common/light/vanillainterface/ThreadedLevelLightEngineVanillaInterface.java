@@ -1,5 +1,6 @@
 package ca.spottedleaf.starlight.common.light.vanillainterface;
 
+import ca.spottedleaf.starlight.common.debug.LuxProfiler;
 import ca.spottedleaf.starlight.common.integration.v0.ChunkSystemHooks;
 import ca.spottedleaf.starlight.common.light.SWMRNibbleArray;
 import ca.spottedleaf.starlight.common.light.StarLightEngine;
@@ -64,24 +65,36 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
 
     private void scalablelux$queueTaskForSection(final int chunkX, final int chunkY, final int chunkZ,
                                                  final Supplier<StarLightInterface.LightQueue.ChunkTasks> runnable) {
+        if (LuxProfiler.enabled()) {
+            LuxProfiler.queueTaskCalls++;
+        }
         final ServerLevel world = (ServerLevel)this.scalablelux$getLightEngine().getWorld();
 
         final ChunkAccess center = this.scalablelux$getLightEngine().getAnyChunkNow(chunkX, chunkZ);
         if (center == null || !center.getPersistedStatus().isOrAfter(ChunkStatus.LIGHT)) {
             // do not accept updates in unlit chunks, unless we might be generating a chunk. thanks to the amazing
             // chunk scheduling, we could be lighting and generating a chunk at the same time
+            if (LuxProfiler.enabled()) {
+                LuxProfiler.queueTaskNotReady++;
+            }
             return;
         }
 
         if (!ChunkSystemHooks.isNonFullTicket() && center.getPersistedStatus() != ChunkStatus.FULL) { // TODO check if getHighestGeneratedStatus() is a better idea
             // do not keep chunk loaded, we are probably in a gen thread
             // if we proceed to add a ticket the chunk will be loaded, which is not what we want (avoid cascading gen)
+            if (LuxProfiler.enabled()) {
+                LuxProfiler.queueTaskInline++;
+            }
             runnable.get();
             return;
         }
 
         if (!ChunkSystemHooks.isTicketThreadSafe() && !world.getChunkSource().chunkMap.mainThreadExecutor.isSameThread()) {
             // ticket logic is not safe to run off-main, re-schedule
+            if (LuxProfiler.enabled()) {
+                LuxProfiler.queueTaskRescheduled++;
+            }
             world.getChunkSource().chunkMap.mainThreadExecutor.execute(() -> {
                 this.scalablelux$queueTaskForSection(chunkX, chunkY, chunkZ, runnable);
             });
@@ -94,14 +107,23 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
 
         if (updateFuture == null) {
             // not scheduled
+            if (LuxProfiler.enabled()) {
+                LuxProfiler.queueTaskNotScheduled++;
+            }
             return;
         }
 
         if (updateFuture.isTicketAdded) {
             // ticket already added
+            if (LuxProfiler.enabled()) {
+                LuxProfiler.queueTaskAlreadyAdded++;
+            }
             return;
         }
         updateFuture.isTicketAdded = true;
+        if (LuxProfiler.enabled()) {
+            LuxProfiler.queueTaskTicketAdds++;
+        }
 
         final int references;
         synchronized (this.scalablelux$chunksBeingWorkedOn) {
@@ -143,9 +165,26 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
         // that chunk neighbors are loaded before the processing can occur
 
         final BlockPos posCopy = pos.immutable();
+        if (!LuxProfiler.enabled()) {
+            this.scalablelux$queueTaskForSection(posCopy.getX() >> 4, posCopy.getY() >> 4, posCopy.getZ() >> 4, () -> {
+                return this.lightEngine.blockChange(posCopy);
+            });
+            return;
+        }
+        LuxProfiler.checkBlockCalls++;
+        if (!LuxProfiler.sample()) {
+            this.scalablelux$queueTaskForSection(posCopy.getX() >> 4, posCopy.getY() >> 4, posCopy.getZ() >> 4, () -> {
+                return this.lightEngine.blockChange(posCopy);
+            });
+            return;
+        }
+        final long t0 = System.nanoTime();
         this.scalablelux$queueTaskForSection(posCopy.getX() >> 4, posCopy.getY() >> 4, posCopy.getZ() >> 4, () -> {
             return this.lightEngine.blockChange(posCopy);
         });
+        LuxProfiler.checkBlockSampled++;
+        LuxProfiler.checkBlockSampledNanos += System.nanoTime() - t0;
+        LuxProfiler.maybePrint();
     }
 
     @Override
@@ -163,6 +202,9 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
         // Redirect to schedule for our own logic, as well as ensure 1 radius neighbors are loaded
         // Note: Our scheduling logic will discard this call if the chunk is not lit, unloaded, or not at LIGHT stage yet.
 
+        if (LuxProfiler.enabled()) {
+            LuxProfiler.sectionStatusCalls++;
+        }
         this.scalablelux$queueTaskForSection(pos.getX(), pos.getY(), pos.getZ(), () -> {
             return this.lightEngine.sectionChange(pos, sectionEmpty);
         });
@@ -263,6 +305,7 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
 
     @Override
     public void close() {
+        LuxProfiler.print();
         super.close();
     }
 

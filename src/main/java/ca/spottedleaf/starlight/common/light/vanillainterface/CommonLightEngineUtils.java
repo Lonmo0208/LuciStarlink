@@ -1,5 +1,6 @@
 package ca.spottedleaf.starlight.common.light.vanillainterface;
 
+import ca.spottedleaf.starlight.common.debug.LuxProfiler;
 import ca.spottedleaf.starlight.common.light.StarLightLightingProvider;
 import ca.spottedleaf.starlight.common.util.CoordinateUtils;
 import net.minecraft.core.BlockPos;
@@ -25,7 +26,18 @@ public class CommonLightEngineUtils {
 
     public static int runLightUpdates(StarLightLightingProvider instance) {
         final boolean hadUpdates = hasLightWork(instance);
+        if (!LuxProfiler.enabled()) {
+            instance.scalablelux$getLightEngine().propagateChanges();
+            return hadUpdates ? 1 : 0;
+        }
+        final long t0 = System.nanoTime();
         instance.scalablelux$getLightEngine().propagateChanges();
+        LuxProfiler.runLightUpdateNanos += System.nanoTime() - t0;
+        LuxProfiler.runLightUpdateCalls++;
+        if (hadUpdates) {
+            LuxProfiler.runLightUpdateHadWork++;
+        }
+        LuxProfiler.maybePrint();
         return hadUpdates ? 1 : 0;
     }
 
