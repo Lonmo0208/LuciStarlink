@@ -1,5 +1,6 @@
 package ca.spottedleaf.starlight.common.light.vanillainterface;
 
+import ca.spottedleaf.starlight.common.config.Config;
 import ca.spottedleaf.starlight.common.debug.LuxProfiler;
 import ca.spottedleaf.starlight.common.integration.v0.ChunkSystemHooks;
 import ca.spottedleaf.starlight.common.light.SWMRNibbleArray;
@@ -60,7 +61,7 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
     // Default OFF: the first cut (batch the scheduling checks) measured neutral - 0.9954 at n=3+3 on
     // structure_cube, and the counters show why (the queue insert itself dominates, not the checks).
     // The switch stays so the next iteration can be A/B'd against it without a rebuild.
-    private static final int LUCIS_BATCH_LIMIT = Integer.getInteger("scalablelux.batchLimit", 1);
+    private static final int LUCIS_BATCH_LIMIT = Config.BATCH_LIMIT;
 
     private long lucis$batchSection = Long.MIN_VALUE;
     private final ObjectArrayList<BlockPos> lucis$batchPositions = new ObjectArrayList<>();

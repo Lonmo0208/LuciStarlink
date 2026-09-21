@@ -1,5 +1,6 @@
 package ca.spottedleaf.starlight.common.debug;
 
+import ca.spottedleaf.starlight.common.config.Config;
 import ca.spottedleaf.starlight.common.light.StarLightInterface;
 import ca.spottedleaf.starlight.common.light.StarLightLightingProvider;
 import net.minecraft.server.MinecraftServer;
@@ -26,7 +27,7 @@ import net.neoforged.neoforge.event.tick.ServerTickEvent;
 public final class LuxTelemetry {
 
     private static final long INTERVAL_NANOS =
-            Math.max(0L, Long.getLong("scalablelux.telemetrySeconds", 30L)) * 1_000_000_000L;
+            Math.max(0L, Config.TELEMETRY_SECONDS) * 1_000_000_000L;
 
     private static volatile long lastPrint = System.nanoTime();
 

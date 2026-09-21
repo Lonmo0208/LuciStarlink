@@ -1,5 +1,7 @@
 package ca.spottedleaf.starlight.common.debug;
 
+import ca.spottedleaf.starlight.common.config.Config;
+
 import java.util.concurrent.atomic.LongAdder;
 
 /**
@@ -22,9 +24,9 @@ public final class LuxProfiler {
     public static final int SAMPLE_SIZE = 16;
     private static final int SAMPLE_MASK = SAMPLE_SIZE - 1;
 
-    private static final boolean ENABLED = Boolean.getBoolean("scalablelux.profile");
+    private static final boolean ENABLED = Config.PROFILE;
     private static final long PRINT_INTERVAL_NANOS =
-            Long.getLong("scalablelux.profileIntervalNanos", 2_000_000_000L);
+            Config.PROFILE_INTERVAL_NANOS;
 
     // --- counters -----------------------------------------------------------
     public static long checkBlockCalls;
