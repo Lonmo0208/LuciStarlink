@@ -1,5 +1,8 @@
 # 在 ScalableLux 上叠加 Lucis/LuciStarlink 的优化理念 —— 立项说明与计划
 
+> **2026-09-21 起本分支的定位升级：它是 LuciStarlink 2.0 的起点。** 用户选定「做成"LS 2.0 = 换 SL 底座"」，
+> 2.0 的立项、身份、里程碑、验收与风险见 **`docs/LS2-PLAN.md`**；本文件继续作为"哪些理念搬得动、搬不动的证据记录"。
+
 * 分支：`lucis-ideas`（基线 `master` = ScalableLux for NeoForge 1.21.1，`0.3.0-alpha.0.8`，**LGPL-3.0-only**）
 * 日期：2026-09-21
 * 决定人：用户（「这次我们不再从 Lucis 开始搭建，而是直接从 ScalableLux 上加上 Lucis 的优化理念」）
