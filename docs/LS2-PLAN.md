@@ -29,12 +29,29 @@
 
 ## 3. 里程碑
 
-* **M0 身份切换**（本分支）：modId `lucistarlink`、显示名/版本/署名、NOTICE、`gradle.properties`、
-  `@Mod` 注解与 mixin 配置名对齐；构建产物 = `lucistarlink-1.21.1-2.0.0-alpha.1.jar`。
-* **M1 功能迁移**：C+E（遥测行 + `/scalablelux`→`/lucistarlink` 命令）、配置面（1.x 的 ModConfigSpec 键 → 新配置，
-  逐键给迁移说明）、Sable 兼容守卫（1.x 会退让给 Sable 的分区光照引擎，SL 底座上要重做同等守卫）、
-  1.x 的保存/重启保证逐条对到 SL 的两条钩子（本分支文档 §10 已完成核对：等效或更强）。
-* **M2 量具支持 2.0**：rig 能跑 2.0 的 jar（`expectedMod` 需可覆盖或用新 run config），并把差分探针接到 2.0。
+* **M0 身份切换**（本分支）—— **已完成 2026-09-21**（提交 `M0: LuciStarlink 2.0 identity on the ScalableLux base`）：
+  modId `lucistarlink`、显示名 `LuciStarlink`、版本 `2.0.0-alpha.1`（继承来的 build-counter 后缀已去掉）、
+  entrypoint/命令/mixin 配置改名、配置文件 `lucistarlink.properties`、与独立 ScalableLux 互斥、
+  LICENSE 保留 + NOTICE 写清署名链与变更清单；内部 `scalablelux$` mixin 成员前缀与 `ca.spottedleaf.starlight`
+  包名**有意保留**（每个文件的出处一目了然）。构建产物
+  `lucistarlink-1.21.1-2.0.0-alpha.1-all.jar`（md5 `51fe5d7f8e54e63561ef0d6cf1878863`），jar 内元数据已核对。
+  **冒烟实测**：启动行 `LuciStarlink 2.0 active (ScalableLux base)`、`Registered /lucistarlink (stats, light, relight)`、
+  `SLTELEM dim=minecraft:overworld tasks=1 dirty=1 poolSky=0 poolBlock=0` 都出现 —— 身份、遥测、命令的接线都对。
+* **M1 功能迁移**：配置面（1.x 的 ModConfigSpec 键 → 新配置，逐键给迁移说明）、Sable 兼容守卫（1.x 会退让给
+  Sable 的分区光照引擎，SL 底座上要重做同等守卫）、1.x 的保存/重启保证逐条对到 SL 的两条钩子
+  （本分支文档 §10 已完成核对：等效或更强）。
+* **M2 量具支持 2.0**（**当前阻塞点，已定位**）：rig 目前在 SL 模式里加载的是主项目的 harness，而 **harness 的
+  modId 也是 `lucistarlink`**，于是与 2.0 的 jar 撞 id —— 实测证据：运行日志里
+  `Found valid mod file lucistarlink-1.21.1-2.0.0-alpha.1-all.jar with {lucistarlink} mods` 与
+  `Found valid mod file main with {lucistarlink} mods - versions {1.2.10}` 并存，随后**基准的 prepare 阶段从未开始**
+  （只有遥测行在打，`min=NONE`、`rc=124` 超时）。
+  两种设计：
+  1. **（首选）把 harness 做成独立 mod**：`dev.lucistarlink.test.*` 从主项目里分出来，自己一个 modId
+     （如 `lucistarlink_bench`），任何引擎（1.x / SL / 2.0）都能配同一份量具跑 —— 这才是"量具与产物分离"的正解，
+     也让 2.0 能按其**出厂 jar** 被测量。代价：harness 现在引用了引擎类（`LuxServices`/`LuxFlags`/`LuxConfig`），
+     要做成可选依赖（反射或服务接口）。
+  2. **（备选）rig 专用变体 id**：SL 树里用构建参数把 toml **与 `@Mod` 注解**同时换成 `lucistarlink2`
+     （注解是编译期常量，要么生成入口类、要么做源集过滤），产物只用于测量、永不发布。
 * **M3 验收与发布**：见 §5；通过后打 tag、写 verify-baseline、双语 README/CHANGELOG。
 
 ## 4. 迁什么 / 不迁什么
