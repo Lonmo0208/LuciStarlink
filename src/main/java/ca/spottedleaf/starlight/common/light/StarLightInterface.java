@@ -1,6 +1,7 @@
 package ca.spottedleaf.starlight.common.light;
 
 import ca.spottedleaf.starlight.common.chunk.ExtendedChunk;
+import ca.spottedleaf.starlight.common.debug.LuxProfiler;
 import ca.spottedleaf.starlight.common.thread.GlobalExecutors;
 import ca.spottedleaf.starlight.common.thread.SchedulingUtil;
 import ca.spottedleaf.starlight.common.util.CoordinateUtils;
@@ -381,6 +382,12 @@ public final class StarLightInterface {
     }
 
     protected final void releaseSkyLightEngine(final SkyStarLightEngine engine) {
+        if (engine == null) {
+            return;
+        }
+        if (LuxProfiler.enabled()) {
+            engine.lucisFlushToProfiler();
+        }
         if (this.cachedSkyPropagators == null) {
             return;
         }
@@ -405,6 +412,12 @@ public final class StarLightInterface {
     }
 
     protected final void releaseBlockLightEngine(final BlockStarLightEngine engine) {
+        if (engine == null) {
+            return;
+        }
+        if (LuxProfiler.enabled()) {
+            engine.lucisFlushToProfiler();
+        }
         if (this.cachedBlockPropagators == null) {
             return;
         }

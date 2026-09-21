@@ -1,5 +1,7 @@
 package ca.spottedleaf.starlight.common.debug;
 
+import java.util.concurrent.atomic.LongAdder;
+
 /**
  * Benchmark-side counters and timers for the "Lucis ideas on ScalableLux" branch.
  *
@@ -46,6 +48,29 @@ public final class LuxProfiler {
 
     public static long lightChunkCalls;
     public static long lightChunkNanos;
+
+    // --- M2-2a: propagation work, flushed from the pooled engine instances on release ---
+    // "how much work does one batch of changes actually generate": tasks = per-chunk propagations,
+    // positions = changed positions processed, writes = nibble cells actually written by setLightLevel.
+    // writes/changes is the per-change propagation touch count the M2-2 decision rests on.
+    public static final LongAdder skyTasks = new LongAdder();
+    public static final LongAdder blockTasks = new LongAdder();
+    public static final LongAdder skyPositions = new LongAdder();
+    public static final LongAdder blockPositions = new LongAdder();
+    public static final LongAdder skyWrites = new LongAdder();
+    public static final LongAdder blockWrites = new LongAdder();
+    public static final LongAdder skyQueueAdds = new LongAdder();
+    public static final LongAdder blockQueueAdds = new LongAdder();
+
+    public static void flushPropagation(final boolean sky, final long tasks, final long positions, final long writes, final long queueAdds) {
+        if (!ENABLED || (tasks | positions | writes | queueAdds) == 0L) {
+            return;
+        }
+        (sky ? skyTasks : blockTasks).add(tasks);
+        (sky ? skyPositions : blockPositions).add(positions);
+        (sky ? skyWrites : blockWrites).add(writes);
+        (sky ? skyQueueAdds : blockQueueAdds).add(queueAdds);
+    }
 
     public static long sampleCounter;
 
@@ -97,6 +122,14 @@ public final class LuxProfiler {
                 + " runUpdHadWork=" + runLightUpdateHadWork
                 + " runUpdNanos=" + runLightUpdateNanos
                 + " lightChunk=" + lightChunkCalls
-                + " lightChunkNanos=" + lightChunkNanos);
+                + " lightChunkNanos=" + lightChunkNanos
+                + " skyTasks=" + skyTasks.sum()
+                + " skyPos=" + skyPositions.sum()
+                + " skyWrites=" + skyWrites.sum()
+                + " skyQAdds=" + skyQueueAdds.sum()
+                + " blkTasks=" + blockTasks.sum()
+                + " blkPos=" + blockPositions.sum()
+                + " blkWrites=" + blockWrites.sum()
+                + " blkQAdds=" + blockQueueAdds.sum());
     }
 }
