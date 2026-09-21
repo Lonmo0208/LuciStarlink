@@ -1,4 +1,12 @@
-3e3be3945c8bc1d7e1bbb0133dc3fa09 *lucistarlink-1.21.1-1.2.9.jar
+36418d8500615bbff68263f1b35b5512 *lucistarlink-1.21.1-1.2.10.jar
+（1.2.10 = 队列记账修复：`RuntimeUpdateQueue.enqueueFullRelight` 把入队放进 `pendingByRegion.compute`（bin 锁内），
+ 却把 `pendingCount` 的加数留在锁外。`drainTo` 走同一把 bin 锁，若它恰好落在这两步之间，就会先把该条目那份预留数
+ 减掉，而之后的加数再无对应的减法 —— 计数只涨不落，久了把队列判满，之后所有方块改动都不再被接管。加数已挪进
+ compute 内。40 个单测全绿（0 失败 0 错误）；发布件互斥声明已核（starlight/scalablelux/lucis = incompatible、
+ sable = optional）。性能记录：第三方 `threeway.ps1 -Rounds 6`（默认协议，脚本未改）加权 **0.9339× ScalableLux /
+ 0.929× 上游 Lucis**，本项目最好的一次；逐档中位数与精确 p 值见 docs/TASK-PERF-SKY.md §18，同一脚本在脏环境下的
+ 对照（我们加权退化 2.07×）见 §16。
+ 上一版 1.2.9 的 md5 = 3e3be3945c8bc1d7e1bbb0133dc3fa09
 （1.2.9 = 社区 PR #2（`fix/crossregion-clear`，lbw14514，提交 `2a2bb9e`，合并 `65d0d32`）：一次批量写触发的
  多个区域**串行**（组内只允许一个在飞；占用标记而非计数器，任何早退都释放所以不会死锁；门槛 ≥64 条改动，
  单点编辑不命中）。**本仓库用可复现探针独立验证通过**：荧石→空气→荧石→空气 两个循环的空气态都等于

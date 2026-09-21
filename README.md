@@ -54,10 +54,14 @@ that is the machine, not the mod.
 It is **not** a scheduler over vanilla light tasks and **not** a Starlight fork: it owns the computation
 (material image + propagation) per region and publishes only dirty sections back into the vanilla engine.
 
-> Status: **1.2.9 — server-side engine, correct across region borders, memory-bounded, saves safe, the
+> Status: **1.2.10 — server-side engine, correct across region borders, memory-bounded, saves safe, the
 > restart-truncation defect fixed (1.1.5), the light traffic a client receives cut by half (1.2.5), the
-> light around naturally generated sources bit-identical to vanilla (1.2.7), and the large-fill
-> residual-light defect fixed (1.2.9, community PR #2, verified with the reproducible probe).**
+> light around naturally generated sources bit-identical to vanilla (1.2.7), the large-fill
+> residual-light defect fixed (1.2.9, community PR #2, verified with the reproducible probe), and a
+> queue-accounting fix in 1.2.10. Weighted against ScalableLux on the four workloads and the weights the
+> community three-way script defines (border 0.45 / cube 0.35 / dense 0.15 / sky_hole 0.05), six
+> interleaved rounds read **0.9339x ScalableLux and 0.929x Lucis upstream** — the best weighted result
+> this project has recorded (`docs/TASK-PERF-SKY.md` §18; the loaded-machine picture is §16).**
 >
 > **Honest standing summary**: in a **healthy** window we match ScalableLux on the small-edit workload
 > (589 vs 573 µs) and lead on the two heavy ones; on a **machine under heavy load** the small-edit workload

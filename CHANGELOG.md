@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.2.10 — a queue-accounting fix, and the measurements behind three written conclusions
+
+**Fixed**: `RuntimeUpdateQueue.enqueueFullRelight` enqueued inside `pendingByRegion.compute` but added to
+`pendingCount` after it. `drainTo` takes the same bin lock, so a drain landing between those two steps had already
+subtracted that entry's reservations and the later addition was never matched by a subtraction: the count crept
+upwards and could eventually report the queue as full, after which every block change stops being taken over. The
+addition now happens inside the compute. 40 tests, 0 failures.
+
+**Measured, and written up**: the six-round three-way against ScalableLux and against Lucis upstream reads
+**ours 0.9339 / upstream 1.0057 / ScalableLux 1.0000** on the weights the community three-way script defines
+(`block_toggle_border` 0.45 / `structure_cube` 0.35 / `dense_chunk_patch` 0.15 / `sky_hole` 0.05) - the best
+weighted result this project has recorded (a same-session, land-of-the-script table with the exact tests is in
+`docs/TASK-PERF-SKY.md` §18). Under load the picture is different and is recorded in §16: our engine slows 2.07x
+while ScalableLux slows 1.19x, because our pass ends on engine scheduling and ScalableLux completes inside
+`setBlock`. §17 records `syncSmallEdits` being refuted a second time with the largest sample run on it (two
+independent groups from n=5 to n=12+12: the 5-round "+25.6%" was noise, twelve rounds read 41% *slower*, p=0.079),
+and the rule that follows from it - this workload needs ten rounds or an independent replication group.
+
+**Also here**: V2's and own-engine's records moved onto the main branch before their branches were deleted
+(`docs/V2-CONTINUATION.md`, `docs/REVIEW-V2-STAGE1.md`, `docs/OWN-ENGINE.md`), and the rig scripts we own now
+carry a 180-second per-run timeout plus a stray-server kill, because the known occasional `prepare` stall had
+eaten two replications and a jar A/B.
+
 ## 1.2.9 — the cross-region clear converges (community PR #2), verified here with the reproducible probe
 
 **The defect** (reported from play): looping a large `/fill` between glowstone and air and stopping on the air
