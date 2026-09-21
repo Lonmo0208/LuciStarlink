@@ -11,10 +11,13 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.TicketType;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkSource;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
+import net.minecraft.world.level.lighting.LayerLightEventListener;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.ModList;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -186,6 +189,288 @@ public final class LuxServerBenchmark {
             }
         }
         return changes;
+    }
+
+    /**
+     * Optional differential-correctness probe: an inclusive box whose light (and block-state) content is hashed
+     * once the measured passes are done. Two runs of different engines over the same fixed seed and the same edit
+     * sequence must produce identical hashes; a mismatch is a correctness divergence, not a performance reading.
+     *
+     * <p>{@code -Dlucistarlink.benchmark.lightFingerprint="x1,y1,z1,x2,y2,z2"}. The block-state hash is the
+     * control: if it differs the terrain differs (feature placement), and the light hashes are not comparable.</p>
+     */
+    private static final String LIGHT_FINGERPRINT_BOX =
+            System.getProperty("lucistarlink.benchmark.lightFingerprint", "").trim();
+
+    /** Optional full dump of the same box (sky bytes then block bytes, one byte per cell, y/z/x order)
+     *  so two runs can be diffed cell by cell offline - a hash localises nothing, a dump does. */
+    private static final String LIGHT_DUMP_PATH =
+            System.getProperty("lucistarlink.benchmark.lightDump", "").trim();
+
+    /** Optional reference dump to diff against in-run: reports where light differs AND whether the blocks
+     *  differ there too, which is what separates an engine divergence from worldgen/terrain noise. */
+    private static final String LIGHT_DIFF_PATH =
+            System.getProperty("lucistarlink.benchmark.lightDiff", "").trim();
+
+    /**
+     * Takes the fingerprint only once two consecutive full passes over the box agree.
+     *
+     * <p>A single pass is not trustworthy: the engine can still have light in flight (its queue may drain
+     * before its worker threads finish), which shows up as cells that are lit in the first read and dark in
+     * the next. That is exactly how an earlier version of this probe reported a "+15 per chunk" sky-light
+     * difference against vanilla that no dump could reproduce - an artefact of reading a moving target.
+     * Two agreeing passes are the settle criterion; the pass count is logged so a slow settle is visible.</p>
+     */
+    private static void logLightFingerprint(final ServerLevel level) {
+        // reference dump for the in-run diff, when one was given
+        byte[] refSky = null;
+        byte[] refBlock = null;
+        int[] refStates = null;
+        if (!LIGHT_DIFF_PATH.isEmpty()) {
+            try {
+                final Path refPath = Path.of(LIGHT_DIFF_PATH);
+                refSky = Files.readAllBytes(refPath);
+                refBlock = Files.readAllBytes(refPath.resolveSibling(refPath.getFileName() + ".block"));
+                refStates = readIntArray(refPath.resolveSibling(refPath.getFileName() + ".states"));
+                LOGGER.info("Lux light diff reference loaded from {} ({} cells)", LIGHT_DIFF_PATH, refSky.length);
+            } catch (IOException exception) {
+                LOGGER.error("Lux light diff reference could not be loaded from {}", LIGHT_DIFF_PATH, exception);
+                refSky = null;
+            }
+        }
+        String previous = null;
+        for (int attempt = 1; attempt <= FINGERPRINT_MAX_PASSES; attempt++) {
+            final String current = fingerprintOnce(level, false, refSky, refBlock, refStates);
+            if (current == null) {
+                return;
+            }
+            if (current.equals(previous)) {
+                fingerprintOnce(level, true, refSky, refBlock, refStates); // settled: dump and diff from a stable read
+                LOGGER.info("Lux light fingerprint settled after {} passes: {}", attempt, current);
+                return;
+            }
+            previous = current;
+            level.getChunkSource().getLightEngine().tryScheduleUpdate();
+        }
+        LOGGER.warn("Lux light fingerprint did not settle after {} passes, last: {}", FINGERPRINT_MAX_PASSES, previous);
+    }
+
+    private static final int FINGERPRINT_MAX_PASSES = 24;
+
+    /** One full read of the box; returns the summary line, or null when the box is not configured. */
+    private static String fingerprintOnce(final ServerLevel level, final boolean writeDump,
+                                          final byte[] refSky, final byte[] refBlock, final int[] refStates) {
+        if (LIGHT_FINGERPRINT_BOX.isEmpty()) {
+            return null;
+        }
+        final String[] parts = LIGHT_FINGERPRINT_BOX.split(",");
+        if (parts.length != 6) {
+            LOGGER.error("Lux light fingerprint box must be x1,y1,z1,x2,y2,z2, got '{}'", LIGHT_FINGERPRINT_BOX);
+            return null;
+        }
+        final int[] v = new int[6];
+        for (int i = 0; i < 6; i++) {
+            try {
+                v[i] = Integer.parseInt(parts[i].trim());
+            } catch (NumberFormatException exception) {
+                LOGGER.error("Lux light fingerprint box has a non-integer component: '{}'", LIGHT_FINGERPRINT_BOX);
+                return null;
+            }
+        }
+        final int minX = Math.min(v[0], v[3]);
+        final int minY = Math.min(v[1], v[4]);
+        final int minZ = Math.min(v[2], v[5]);
+        final int maxX = Math.max(v[0], v[3]);
+        final int maxY = Math.max(v[1], v[4]);
+        final int maxZ = Math.max(v[2], v[5]);
+
+        final LayerLightEventListener sky = level.getLightEngine().getLayerListener(LightLayer.SKY);
+        final LayerLightEventListener block = level.getLightEngine().getLayerListener(LightLayer.BLOCK);
+        // per-chunk sky-light sums, so a cross-engine difference can be localised instead of only detected
+        final int chunkCols = (maxX >> 4) - (minX >> 4) + 1;
+        final int chunkRows = (maxZ >> 4) - (minZ >> 4) + 1;
+        final long[] skySumPerChunk = new long[chunkCols * chunkRows];
+        long skyHash = FNV_OFFSET;
+        long blockHash = FNV_OFFSET;
+        long stateHash = FNV_OFFSET;
+        long cells = 0L;
+        long skyNonZero = 0L;
+        long skySum = 0L;
+        long blockNonZero = 0L;
+        long blockSum = 0L;
+        long airCells = 0L;
+        final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+        for (int y = minY; y <= maxY; y++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                for (int x = minX; x <= maxX; x++) {
+                    pos.set(x, y, z);
+                    final int skyValue = sky.getLightValue(pos);
+                    final int blockValue = block.getLightValue(pos);
+                    final BlockState state = level.getBlockState(pos);
+                    skyHash = fnv(skyHash, skyValue);
+                    blockHash = fnv(blockHash, blockValue);
+                    stateHash = fnv(stateHash, Block.getId(state));
+                    if (skyValue != 0) {
+                        skyNonZero++;
+                        skySum += skyValue;
+                        skySumPerChunk[((z >> 4) - (minZ >> 4)) * chunkCols + ((x >> 4) - (minX >> 4))] += skyValue;
+                    }
+                    if (blockValue != 0) {
+                        blockNonZero++;
+                        blockSum += blockValue;
+                    }
+                    if (state.isAir()) {
+                        airCells++;
+                    }
+                    cells++;
+                }
+            }
+        }
+        int chunks = 0;
+        int chunksNotLightCorrect = 0;
+        for (int chunkZ = minZ >> 4; chunkZ <= (maxZ >> 4); chunkZ++) {
+            for (int chunkX = minX >> 4; chunkX <= (maxX >> 4); chunkX++) {
+                final var chunk = level.getChunkSource().getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
+                if (chunk == null) {
+                    continue;
+                }
+                chunks++;
+                if (!chunk.isLightCorrect()) {
+                    chunksNotLightCorrect++;
+                }
+            }
+        }
+        final String summary = "box=" + minX + "," + minY + "," + minZ + ".." + maxX + "," + maxY + "," + maxZ
+                + " cells=" + cells
+                + " sky=" + Long.toHexString(skyHash)
+                + " block=" + Long.toHexString(blockHash)
+                + " states=" + Long.toHexString(stateHash)
+                + " chunks=" + chunks
+                + " chunksNotLightCorrect=" + chunksNotLightCorrect
+                + " skyNonZero=" + skyNonZero
+                + " skySum=" + skySum
+                + " blockNonZero=" + blockNonZero
+                + " blockSum=" + blockSum
+                + " airCells=" + airCells;
+        if (!writeDump) {
+            return summary;
+        }
+        LOGGER.info("Lux light fingerprint {}", summary);
+        final StringBuilder perChunk = new StringBuilder(chunkCols * chunkRows * 7);
+        for (int i = 0; i < skySumPerChunk.length; i++) {
+            if (i != 0) {
+                perChunk.append(',');
+            }
+            perChunk.append(skySumPerChunk[i]);
+        }
+        LOGGER.info("Lux light fingerprint per-chunk skySum (z rows of {} x cols, chunk {},{} .. {},{}): {}",
+                chunkCols, minX >> 4, minZ >> 4, maxX >> 4, maxZ >> 4, perChunk);
+
+        final int sizeX = maxX - minX + 1;
+        final int sizeZ = maxZ - minZ + 1;
+        final int sizeY = maxY - minY + 1;
+        final byte[] skyBytes = new byte[sizeX * sizeZ * sizeY];
+        final byte[] blockBytes = new byte[skyBytes.length];
+        int cursor = 0;
+        for (int y = minY; y <= maxY; y++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                for (int x = minX; x <= maxX; x++) {
+                    pos.set(x, y, z);
+                    skyBytes[cursor] = (byte) sky.getLightValue(pos);
+                    blockBytes[cursor] = (byte) block.getLightValue(pos);
+                    cursor++;
+                }
+            }
+        }
+        if (!LIGHT_DUMP_PATH.isEmpty()) {
+            try {
+                final Path path = Path.of(LIGHT_DUMP_PATH);
+                Files.write(path, skyBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                Files.write(path.resolveSibling(path.getFileName() + ".block"), blockBytes,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                final java.nio.ByteBuffer states = java.nio.ByteBuffer.allocate(skyBytes.length * 4);
+                cursor = 0;
+                for (int y = minY; y <= maxY; y++) {
+                    for (int z = minZ; z <= maxZ; z++) {
+                        for (int x = minX; x <= maxX; x++) {
+                            pos.set(x, y, z);
+                            states.putInt(Block.getId(level.getBlockState(pos)));
+                            cursor++;
+                        }
+                    }
+                }
+                Files.write(path.resolveSibling(path.getFileName() + ".states"), states.array(),
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                LOGGER.info("Lux light dump written: {} (sky/block/states), {} cells, box {} {} {} {} {} {}",
+                        LIGHT_DUMP_PATH, skyBytes.length, minX, minY, minZ, maxX, maxY, maxZ);
+            } catch (IOException exception) {
+                LOGGER.error("Lux light dump failed for {}", LIGHT_DUMP_PATH, exception);
+            }
+        }
+        if (refSky != null && refSky.length == skyBytes.length) {
+            int skyDiff = 0;
+            int blockDiff = 0;
+            int stateDiff = 0;
+            int lightDiffWithStateSame = 0;
+            int shown = 0;
+            final StringBuilder examples = new StringBuilder(512);
+            cursor = 0;
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    for (int x = minX; x <= maxX; x++) {
+                        pos.set(x, y, z);
+                        final int refSkyValue = refSky[cursor] & 0xFF;
+                        final int skyValue = skyBytes[cursor] & 0xFF;
+                        final int refBlockValue = refBlock != null && cursor < refBlock.length ? refBlock[cursor] & 0xFF : -1;
+                        final int blockValue = blockBytes[cursor] & 0xFF;
+                        final int refState = refStates != null && cursor < refStates.length ? refStates[cursor] : Integer.MIN_VALUE;
+                        final boolean stateDifferent = refState != Integer.MIN_VALUE && Block.getId(level.getBlockState(pos)) != refState;
+                        final boolean skyDifferent = skyValue != refSkyValue;
+                        final boolean blockDifferent = refBlockValue >= 0 && blockValue != refBlockValue;
+                        if (skyDifferent) {
+                            skyDiff++;
+                        }
+                        if (blockDifferent) {
+                            blockDiff++;
+                        }
+                        if (stateDifferent) {
+                            stateDiff++;
+                        }
+                        if ((skyDifferent || blockDifferent) && !stateDifferent) {
+                            lightDiffWithStateSame++;
+                        }
+                        if ((skyDifferent || blockDifferent) && shown < 16) {
+                            examples.append(" [(").append(x).append(',').append(y).append(',').append(z).append(") sky ")
+                                    .append(refSkyValue).append("->").append(skyValue).append(" block ")
+                                    .append(refBlockValue).append("->").append(blockValue)
+                                    .append(stateDifferent ? " STATE-DIFFERS" : " state-same").append(']');
+                            shown++;
+                        }
+                        cursor++;
+                    }
+                }
+            }
+            LOGGER.info("Lux light diff vs {}: skyDiff={} blockDiff={} stateDiff={} lightDiffWithStateSame={}{}",
+                    LIGHT_DIFF_PATH, skyDiff, blockDiff, stateDiff, lightDiffWithStateSame, examples);
+        }
+        return summary;
+    }
+
+    private static int[] readIntArray(final Path path) throws IOException {
+        final byte[] bytes = Files.readAllBytes(path);
+        final java.nio.ByteBuffer buffer = java.nio.ByteBuffer.wrap(bytes);
+        final int[] ret = new int[bytes.length / 4];
+        for (int i = 0; i < ret.length; i++) {
+            ret[i] = buffer.getInt();
+        }
+        return ret;
+    }
+
+    private static final long FNV_OFFSET = 0xcbf29ce484222325L;
+    private static final long FNV_PRIME = 0x100000001b3L;
+
+    private static long fnv(final long hash, final int value) {
+        return (hash ^ (value & 0xFFFFL)) * FNV_PRIME;
     }
 
     private static int applyBorderPattern(ServerLevel level, BenchmarkConfig config, BlockState state, int flags) {
@@ -416,8 +701,20 @@ public final class LuxServerBenchmark {
         QUIESCE_BEFORE_MEASURE,
         START_PASS,
         WAIT_LIGHT,
+        SETTLE_BEFORE_FINGERPRINT,
         COMPLETE
     }
+
+    /**
+     * Ticks to keep the world quiet before the differential fingerprint is taken.
+     *
+     * <p>"The light queue is empty" is not "the engine has settled": the threaded engines hand their
+     * propagation to worker threads, so the queue can drain while the work is still in flight. The first
+     * version of this probe took the fingerprint on the pass barrier and reported a +15-per-chunk sky-light
+     * difference against vanilla that vanished (byte-identical dumps) once the world was given time to settle -
+     * a measurement artefact, not an engine difference. Do not remove this settle window.</p>
+     */
+    private static final int FINGERPRINT_SETTLE_TICKS = 40;
 
     private enum WaitMode {
         FULL_DRAIN(true, true),
@@ -543,6 +840,19 @@ public final class LuxServerBenchmark {
                     this.minChunkX, this.maxChunkX, this.minChunkZ, this.maxChunkZ);
         }
 
+        /** Countdown for {@link #FINGERPRINT_SETTLE_TICKS}. */
+        private int fingerprintSettleTicks;
+
+        private void settleBeforeFingerprint() {
+            // keep nudging the engine while we wait: a threaded engine may still have work in flight
+            this.level.getChunkSource().getLightEngine().tryScheduleUpdate();
+            if (--this.fingerprintSettleTicks > 0) {
+                return;
+            }
+            logLightFingerprint(this.level);
+            this.finish();
+        }
+
         private void tick() {
             try {
                 switch (this.phase) {
@@ -551,6 +861,7 @@ public final class LuxServerBenchmark {
                     case QUIESCE_BEFORE_MEASURE -> this.waitPreMeasureQuiesce();
                     case START_PASS -> this.startPass();
                     case WAIT_LIGHT -> this.waitLight();
+                    case SETTLE_BEFORE_FINGERPRINT -> this.settleBeforeFingerprint();
                     case COMPLETE -> {
                     }
                 }
@@ -805,6 +1116,14 @@ public final class LuxServerBenchmark {
                             stats.measuredChanges() == 0 ? 0L : stats.measuredNanos() / stats.measuredChanges());
                     LuxBenchmarkSupport.logResult("server_light_" + this.config.workload(),
                             (int) Math.min(Integer.MAX_VALUE, stats.measuredChanges()), 0L, stats.measuredNanos());
+                    if (LIGHT_FINGERPRINT_BOX.isEmpty()) {
+                        logLightFingerprint(this.level);
+                    } else {
+                        // let the light engine settle before hashing: a drained queue is not a finished engine
+                        this.fingerprintSettleTicks = FINGERPRINT_SETTLE_TICKS;
+                        this.phase = Phase.SETTLE_BEFORE_FINGERPRINT;
+                        return;
+                    }
                 } catch (IOException exception) {
                     LOGGER.error("Failed to write Lux light benchmark result", exception);
                 }

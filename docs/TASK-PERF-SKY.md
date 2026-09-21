@@ -788,3 +788,47 @@ wall 的重复性好到反常（三次 spread <0.5%），因为它被 tick 量�
 也正是"底座换成 ScalableLux"在体感上更优的直接证据。
 **口径限制**：`pass_wall_actual` 两侧都含量具自己的 barrier / tick 对齐，所以它是"光照何时落地"的**同口径比较**，
 不是纯引擎测量；单会话成立，跨会话不可比（规则 6）。
+
+## 20. 差分正确性探针：SL 与 vanilla 逐位一致；**我们自己在同一盒子上有 80 格天空光差异**（2026-09-21）
+
+**工具**（做在量具 `LuxServerBenchmark` 里，三种模式通用，不进发布件；gradle 侧新增
+`benchmarkLightFingerprint` / `benchmarkLightDump` / `benchmarkLightDiff` / `benchmarkRandomTickSpeed`，
+后者默认 3 = 不改变任何既有协议）：
+
+* `-PbenchmarkLightFingerprint="x1,y1,z1,x2,y2,z2"`：该盒子的光照/方块指纹 + 按区块的天空光小计；
+* `-PbenchmarkLightDump=<path>`：写 `.sky` / `.block` / `.states` 三份整盒转储；
+* `-PbenchmarkLightDiff=<ref.sky>`：运行时与参考转储逐格差分，输出
+  `skyDiff` / `blockDiff` / `stateDiff` / **`lightDiffWithStateSame`** —— 最后一列才是归因：
+  **方块相同而光照不同 = 引擎差异**；方块不同 = 地形/时序噪声，不能算账。
+* `-PbenchmarkRandomTickSpeed=0` + `mc-smoketest/vanilla-dump.sh`（vanilla 参考）与 `sl-jar.sh`（其它引擎）。
+
+**两个量具教训**（各花了一轮才看清）：**① "队列空"不等于"算完"** —— 第一版在趟末 barrier 上取指纹，
+报出"SL 每区块多 15 级光照"，而同轮转储逐字节相同；线程化引擎把传播交给工作线程，队列先空、光照后落。
+现在**连续两次全量读取一致才算落定**（本树 3 趟稳定，日志打 `settled after N passes`）。**② 哈希定位不了任何东西**，
+必须逐格转储 + 带 states 一起比。
+
+**结果 A — ScalableLux 与 vanilla 逐位一致**（`structure_cube`，599,040 格盒子 x -40..55 / y 32..96 / z -40..55，
+RTS=0，落定后；详见 `ScalableLux-Patched/docs/PORT-LUCIS-IDEAS.md` §12）：
+
+| 引擎 | sky | block | skyNonZero / skySum | blockNonZero / blockSum |
+| --- | --- | --- | --- | --- |
+| vanilla（两次跑相同） | `905931078dfc5ace` | `59e2252f732ce67b` | 396,436 / 5,178,541 | 273 / 584 |
+| ScalableLux | `905931078dfc5ace` | `59e2252f732ce67b` | 396,436 / 5,178,541 | 273 / 584 |
+
+边界：是**主世界**盒子（不是下界顶棚带），且比的是光照；两次跑之间地形本身有噪声（states 哈希不稳定）。
+
+**结果 B — 我们自己（1.2.10 引擎）在同一盒子上差 80 格，且全部落在方块相同的格子上**
+（`skyDiff=80 blockDiff=0 stateDiff=11 lightDiffWithStateSame=80`；两次独立运行同样 80 格）：
+
+```
+(32,50,-7)  sky 1->0   (-32,51,-16) sky 1->0   (-32,52,-16) sky 2->0   (-32,53,-16) sky 3->0
+(-32,54,-16) sky 4->0  (32,53,-7)   sky 4->3   (-32,55,-16) sky 5->0   ...
+```
+
+两处贴区块边界的**竖向暗带**：(x -32..-28, z -16..-14) 与 (x 32..33, z -16..-7)，y≥50，我们比 vanilla 暗 1~5 级。
+坐标特征（都落在区块的**首列**、紧邻西侧边界）与我们历史上打过的跨区块传播类缺陷（1.1.5 / 1.2.9）同族。
+
+**待办（本项目）**：最小复现（固定方块布局 + 单次编辑），定性"是我们的 bug 还是 vanilla 自身在该处的怪癖"；
+在此之前不要对外声称"与 vanilla 逐位一致"是无条件的。探针与两条命令已可复用：
+`RTS=0 bash vanilla-dump.sh structure_cube "-40,32,-40,55,96,55" 1 ref` 拿到参考，
+再对我们侧加 `-PbenchmarkLightDiff=<ref.sky>`。
