@@ -135,3 +135,20 @@
 
 **读法**：两项口径都**不可区分**——正是预期的结果（我们的新增不碰计算路径：遥测每 30 s 一行、内容相同的发布跳过、
 默认关的批处理、一次缓存布尔的 Sable 判断）。**"不劣化"这一条成立。**
+
+### 7.4 客户端探针：通过（2026-09-21，端到端真实会话）
+
+**2.0 的客户端半边此前从未被跑过**（量具全是服务端）。这一轮补上：2.0 的 dev **服务端** + 2.0 的 dev **客户端**（`runClientProbe` / `runClientMultiplayer`，两个 run 配置加在 2.0 树里，Loom DSL），客户端连 `127.0.0.1:25565`。
+
+**实测（客户端窗口里的真实会话）**
+
+* 服务端日志：`Dev[/127.0.0.1:50142] logged in with entity id 115 at (-193.5, 70.0, 37.5)`、`Dev joined the game`；
+* 客户端画面：正常进入世界（标题变成 `… - Multiplayer (3rd-party Server)`），沙漠/水面/天空**光照渲染正确**，无黑块；
+* **在游戏里真的执行了命令**（此前只验证到"注册成功"）：
+  * `/lucistarlink stats` → 聊天里回 `LuciStarlink tasks=0 dirty=0 poolSky=8 poolBlock=8 batchLimit=1 profile=false`；
+  * `/lucistarlink light ~ ~ ~` → `LuciStarlink light -194, 70, 37 block=0 sky=15 raw=15 lightCorrect=true`（脚下白天 sky=15，正确）；
+* 客户端日志无与本模组相关的异常（只有 logrotate 的两条"无法删除日志文件"）。
+
+**过程中发现并修掉的**：stats 的聊天前缀漏改（仍是 `ScalableLux `）—— 已改为 `LuciStarlink `。
+
+**两个操作要点（写下来省下一次踩坑）**：① 1.21 的 quick-play 需要 `--quickPlayPath`，且**首次启动的无障碍提示会挡住它**——点掉 `Continue` 之后 quickPlay 就会自动连接，之后每次启动都自动进服；② 2.0 的 dev run 不能同时容纳两个入口类，所以入口类要按 `mod_id` **在源集层面互斥**（只排除 jar 里的 class 不够，dev 运行读的是 `build/classes`）。

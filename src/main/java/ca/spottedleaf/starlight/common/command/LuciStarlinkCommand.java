@@ -65,7 +65,7 @@ public final class LuciStarlinkCommand {
                         source.sendFailure(Component.literal("LuciStarlink: this level does not run the ScalableLux light engine"));
                         return 0;
                     }
-                    source.sendSuccess(() -> Component.literal("ScalableLux " + engine.lucisStats()
+                    source.sendSuccess(() -> Component.literal("LuciStarlink " + engine.lucisStats()
                             + " batchLimit=" + Integer.getInteger("scalablelux.batchLimit", 1)
                             + " profile=" + LuxProfiler.enabled()), false);
                     return 1;

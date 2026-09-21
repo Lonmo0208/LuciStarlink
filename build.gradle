@@ -100,10 +100,30 @@ processResources {
 tasks.withType(JavaCompile) {
     options.encoding = "UTF-8"
 }
-
 loom {
     accessWidenerPath = file("src/main/resources/scalablelux.accesswidener")
 
+    // Client probe: the client half of this engine had never been exercised (the rig is all server-side).
+    // Loom DSL, mirroring the 1.x project clientMeasure / clientMultiplayer configurations.
+    runs {
+        clientProbe {
+            client()
+            runDir "run"
+            programArgs "--quickPlayPath", project.file("run/quickplay.json").absolutePath
+            programArgs "--quickPlaySingleplayer", providers.gradleProperty("clientProbeWorld").getOrElse("bench")
+            property "scalablelux.telemetrySeconds", providers.gradleProperty("probeTelemetrySeconds").getOrElse("5")
+            property "scalablelux.profile", providers.gradleProperty("probeProfile").getOrElse("false")
+            vmArg "-Xmx3G"
+        }
+        clientMultiplayer {
+            client()
+            runDir "run"
+            programArgs "--quickPlayPath", project.file("run/quickplay.json").absolutePath
+            programArgs "--quickPlayMultiplayer", providers.gradleProperty("clientServer").getOrElse("127.0.0.1:25565")
+            property "scalablelux.telemetrySeconds", providers.gradleProperty("probeTelemetrySeconds").getOrElse("5")
+            vmArg "-Xmx3G"
+        }
+    }
 }
 
 // Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
@@ -146,15 +166,13 @@ tasks.withType(AbstractArchiveTask) {
     reproducibleFileOrder = true
 }
 
-// Only the entrypoint that matches the built mod id may ship: FML rejects a @Mod class whose id is not declared
-// in the toml ("dangling_entrypoint"), so the rig build (-Pmod_id=lucistarlinkrig) must not carry the published
-// entrypoint and the published build must not carry the rig one.
-tasks.withType(AbstractArchiveTask).configureEach {
-    if (project.mod_id == "lucistarlinkrig") {
-        exclude "ca/spottedleaf/starlight/common/LuciStarlinkEntrypoint.class"
-    } else {
-        exclude "ca/spottedleaf/starlight/common/LuciStarlinkRigEntrypoint.class"
-    }
+// Only the entrypoint that matches the built mod id may exist at all: FML rejects a @Mod class whose id is not
+// declared in the toml ("dangling_entrypoint"), and a dev run loads build/classes, not a jar - so excluding the
+// class from archives is not enough, the source itself has to be excluded from the compilation.
+if (project.mod_id == "lucistarlinkrig") {
+    sourceSets.main.java.exclude "ca/spottedleaf/starlight/common/LuciStarlinkEntrypoint.java"
+} else {
+    sourceSets.main.java.exclude "ca/spottedleaf/starlight/common/LuciStarlinkRigEntrypoint.java"
 }
 
 // configure the maven publication
