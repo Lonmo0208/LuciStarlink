@@ -1243,7 +1243,19 @@ public abstract class StarLightEngine {
                         continue; // already at the level we want or unloaded
                     }
 
-                    final BlockState blockState = this.getBlockState(sectionIndex, localIndex);
+                    // R5-2 targeting: a neighbour cell that passed the level test needs its block state (a palette
+                    // walk) before its opacity is known. Sampled 1-in-16 so the timer's own cost stays out of the
+                    // reading - this is the term the flat-field touch benchmark (OwnFlatField.selfTest) could not
+                    // explain, since an isolated nibble read is only ~3 ns against ~30 ns per touch in this loop.
+                    final BlockState blockState;
+                    if (LuxProfiler.sample()) {
+                        final long lucisStateT0 = System.nanoTime();
+                        blockState = this.getBlockState(sectionIndex, localIndex);
+                        LuxProfiler.bfsStateSampledNanos += System.nanoTime() - lucisStateT0;
+                        LuxProfiler.bfsStateSampled++;
+                    } else {
+                        blockState = this.getBlockState(sectionIndex, localIndex);
+                    }
                     if (blockState == null) {
                         continue;
                     }

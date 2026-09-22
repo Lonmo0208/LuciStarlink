@@ -30,5 +30,10 @@ public class LuciStarlinkRigEntrypoint {
             // because the rig variant replaces the published one, so a hook in only one of them does nothing here.
             ca.spottedleaf.starlight.common.light.own.OwnLightField.selfTest();
         }
+        if (Boolean.getBoolean("scalablelux.ownFlatSelfTest")) {
+            // R5-1: the flat byte-per-cell field (docs/NEW-ENGINE-TEARDOWN.md §13). Its touch cost against the base's
+            // two-hop nibble layout is what decides whether the R5 rewrite is worth building at all.
+            ca.spottedleaf.starlight.common.light.own.OwnFlatField.selfTest();
+        }
     }
 }

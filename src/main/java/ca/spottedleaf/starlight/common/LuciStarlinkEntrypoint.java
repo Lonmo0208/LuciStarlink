@@ -25,5 +25,10 @@ public class LuciStarlinkEntrypoint {
             // between a section's vanilla light layers and the self-owned field, verified cell by cell and timed.
             ca.spottedleaf.starlight.common.light.own.OwnLightField.selfTest();
         }
+        if (Boolean.getBoolean("scalablelux.ownFlatSelfTest")) {
+            // R5-1: the flat byte-per-cell field (docs/NEW-ENGINE-TEARDOWN.md §13), timed against the base's nibble
+            // layout over the structure_cube touch pattern - the number that decides whether R5 is worth building.
+            ca.spottedleaf.starlight.common.light.own.OwnFlatField.selfTest();
+        }
     }
 }

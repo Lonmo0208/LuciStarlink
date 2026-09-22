@@ -43,6 +43,9 @@ public final class LuxProfiler {
     public static long bfsNeighbours;
     public static long bfsLevelSkip;
     public static long skyColumnCells;
+    /** Sampled (1-in-{@link #SAMPLE_SIZE}) cost of the block-state lookup a passing neighbour cell needs. */
+    public static long bfsStateSampled;
+    public static long bfsStateSampledNanos;
 
     public static long queueTaskCalls;
     public static long queueTaskSampled;
@@ -208,6 +211,8 @@ public final class LuxProfiler {
         bfsNeighbours = 0;
         bfsLevelSkip = 0;
         skyColumnCells = 0;
+        bfsStateSampled = 0;
+        bfsStateSampledNanos = 0;
     }
 
     public static String windowSummary() {
@@ -219,6 +224,8 @@ public final class LuxProfiler {
                 + " bfsNeighbours=" + bfsNeighbours
                 + " bfsLevelSkip=" + bfsLevelSkip
                 + " skyColumnCells=" + skyColumnCells
+                + " bfsStateSampled=" + bfsStateSampled
+                + " bfsStatePerCallNanos=" + (bfsStateSampled == 0L ? 0L : bfsStateSampledNanos / bfsStateSampled)
                 + " queueTask=" + queueTaskCalls
                 + " queueTaskNanosEst=" + scale(queueTaskSampledNanos)
                 + " ownEditInline=" + ownEditInline
