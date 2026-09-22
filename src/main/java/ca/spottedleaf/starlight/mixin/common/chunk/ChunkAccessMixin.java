@@ -36,6 +36,16 @@ public abstract class ChunkAccessMixin implements ExtendedChunk {
     @Unique
     private volatile SWMRNibbleArray[] scalablelux$skyNibbles;
 
+    /**
+     * R5: the flat byte-per-cell mirror of the light arrays above. Allocated and dropped together with them, so its
+     * lifetime is exactly the light data's - see ExtendedChunk#scalablelux$getSkyFlat for why the ownership matters.
+     */
+    @Unique
+    private volatile byte[][] scalablelux$skyFlat;
+
+    @Unique
+    private volatile byte[][] scalablelux$blockFlat;
+
     @Unique
     private volatile boolean[] scalablelux$skyEmptinessMap;
 
@@ -50,6 +60,7 @@ public abstract class ChunkAccessMixin implements ExtendedChunk {
     @Override
     public void scalablelux$setBlockNibbles(final SWMRNibbleArray[] nibbles) {
         this.scalablelux$blockNibbles = nibbles;
+        this.scalablelux$blockFlat = nibbles == null ? null : new byte[nibbles.length][];
     }
 
     @Override
@@ -60,6 +71,27 @@ public abstract class ChunkAccessMixin implements ExtendedChunk {
     @Override
     public void scalablelux$setSkyNibbles(final SWMRNibbleArray[] nibbles) {
         this.scalablelux$skyNibbles = nibbles;
+        this.scalablelux$skyFlat = nibbles == null ? null : new byte[nibbles.length][];
+    }
+
+    @Override
+    public byte[][] scalablelux$getSkyFlat() {
+        return this.scalablelux$skyFlat;
+    }
+
+    @Override
+    public void scalablelux$setSkyFlat(final byte[][] flat) {
+        this.scalablelux$skyFlat = flat;
+    }
+
+    @Override
+    public byte[][] scalablelux$getBlockFlat() {
+        return this.scalablelux$blockFlat;
+    }
+
+    @Override
+    public void scalablelux$setBlockFlat(final byte[][] flat) {
+        this.scalablelux$blockFlat = flat;
     }
 
     @Override

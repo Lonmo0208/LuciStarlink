@@ -53,4 +53,29 @@ public interface ExtendedChunk {
     default void setBlockEmptinessMap(final boolean[] emptinessMap) {
         scalablelux$setBlockEmptinessMap(emptinessMap);
     }
+
+    /**
+     * R5: the flat byte-per-cell mirror of this chunk's light, one {@code byte[4096]} per light section, indexed exactly
+     * like {@link #scalablelux$getSkyNibbles()} / {@link #scalablelux$getBlockNibbles()}.
+     *
+     * <p><b>Why it lives here.</b> The first attempt kept the mirror in the engine's cache slots and measured 27.8 s and
+     * then 322 s for a pass that takes 4.6 ms: those slots are recycled across chunks, so the mirror was rebuilt on
+     * nearly every access. Ownership has to follow the light data - allocated with the nibble array, dropped when that
+     * array is replaced (chunk reload), one entry built on first touch and reused for the chunk's lifetime. Entries are
+     * {@code null} until built, and a {@code null} array or entry means "no mirror", in which case callers use the
+     * nibble path. That is why this can only change the cost, never the semantics.</p>
+     */
+    default byte[][] scalablelux$getSkyFlat() {
+        return null;
+    }
+
+    default void scalablelux$setSkyFlat(final byte[][] flat) {
+    }
+
+    default byte[][] scalablelux$getBlockFlat() {
+        return null;
+    }
+
+    default void scalablelux$setBlockFlat(final byte[][] flat) {
+    }
 }

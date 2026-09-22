@@ -18,6 +18,7 @@ import net.minecraft.world.level.LevelHeightAccessor;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import ca.spottedleaf.starlight.common.chunk.ExtendedChunk;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.LightChunkGetter;
@@ -152,11 +153,10 @@ public abstract class StarLightEngine {
         if (FLAT_LIGHT) {
             // R5: one flat byte per cell, indexed exactly like the nibble slots, so the propagation loops stop chasing
             // nibbleCache[sectionIndex] -> SWMRNibbleArray -> storageUpdating[] on every touched cell (52,669 of them
-            // per pass on structure_cube, ~32 ns each, against ~3 ns for the same read out of a flat array). Validity
-            // is by nibble identity: a slot whose nibble object changed is rebuilt on next use. Deliberately NOT
-            // cleared in destroyCaches() - rebuilding a section costs 4.5 us and a pass touches ~25 sections 20 times.
+            // per pass on structure_cube, ~32 ns each, against ~3 ns for the same read out of a flat array). These are
+            // per-slot *references* to mirrors the chunk owns (see flatBound), so binding them is a copy and the
+            // lifetime question is answered by the chunk, not by this cache.
             this.flatCells = new byte[this.nibbleCache.length][];
-            this.flatSource = new SWMRNibbleArray[this.nibbleCache.length];
         }
     }
 
@@ -303,6 +303,9 @@ public abstract class StarLightEngine {
     protected final void destroyCaches() {
         Arrays.fill(this.sectionCache, null);
         Arrays.fill(this.nibbleCache, null);
+        if (this.flatCells != null) {
+            Arrays.fill(this.flatCells, null); // the mirrors themselves stay on their chunks; only the bindings drop
+        }
         Arrays.fill(this.chunkCache, null);
         Arrays.fill(this.emptinessMapCache, null);
         if (this.isClientSide) {
@@ -337,7 +340,7 @@ public abstract class StarLightEngine {
     }
 
     protected final int getLightLevel(final int sectionIndex, final int localIndex) {
-        final byte[] flat = this.flatBuilt(sectionIndex);
+        final byte[] flat = this.flatBound(sectionIndex);
 
         if (flat != null) {
             return flat[localIndex] & 0xFF;
@@ -348,41 +351,65 @@ public abstract class StarLightEngine {
     }
 
     /**
-     * R5: the flat byte mirror of a section's updating layer, built on first use in this engine instance and rebuilt
-     * whenever the slot's nibble object changes. {@code null} means "no mirror" (feature off, no nibble, or a section
-     * with no per-cell data) - every caller then takes the original nibble path, so the flag can only ever change the
-     * cost, never the semantics ... provided the mirror stays in step, which is what the fingerprint gate checks.
+     * R5: the flat byte mirror for a cache slot, taken from the chunk that owns the light. Building happens at most once
+     * per chunk section (into the chunk's own array), never per access - that was the measured failure of the first
+     * form. Returns {@code null} when the feature is off, the slot has no nibble, or the chunk has no mirror to give,
+     * and every caller then takes the original nibble path.
      */
-    protected final byte[] flatBuilt(final int sectionIndex) {
-        final byte[][] cache = this.flatCells;
+    protected final byte[] flatBound(final int sectionIndex) {
+        final byte[][] bound = this.flatCells;
 
-        if (cache == null) {
+        if (bound == null) {
             return null;
+        }
+        final byte[] cached = bound[sectionIndex];
+
+        if (cached != null) {
+            return cached;
         }
         final SWMRNibbleArray nibble = this.nibbleCache[sectionIndex];
 
-        if (nibble == null) {
+        if (nibble == null || nibble.storageUpdating == null) {
             return null;
         }
-        byte[] cells = cache[sectionIndex];
+        // slot -> chunk coordinates, the same mapping updateVisible() uses
+        final int chunkX = (sectionIndex % 5) - this.chunkOffsetX;
+        final int chunkZ = ((sectionIndex / 5) % 5) - this.chunkOffsetZ;
+        final int ySections = this.maxSection - this.minSection + 1;
+        final int chunkY = ((sectionIndex / (5 * 5)) % (ySections + 2 + 2)) - this.chunkOffsetY;
+        final ChunkAccess chunk = this.getChunkInCache(chunkX, chunkZ);
 
-        if (cells != null && this.flatSource[sectionIndex] == nibble) {
-            return cells;
-        }
-        final byte[] packed = nibble.storageUpdating;
-
-        if (packed == null) {
+        if (chunk == null) {
             return null;
         }
-        cells = new byte[4096];
-        for (int i = 0; i < 2048; i++) {
-            final int b = packed[i] & 0xFF;
-            cells[i << 1] = (byte) (b & 0x0F);
-            cells[(i << 1) | 1] = (byte) (b >>> 4);
+        final byte[][] chunkFlat = this.chunkFlat(chunk);
+        final int index = chunkY - this.minSection;
+
+        if (chunkFlat == null || index < 0 || index >= chunkFlat.length) {
+            return null;
         }
-        cache[sectionIndex] = cells;
-        this.flatSource[sectionIndex] = nibble;
+        byte[] cells = chunkFlat[index];
+
+        if (cells == null) {
+            final byte[] packed = nibble.storageUpdating;
+
+            cells = new byte[4096];
+            for (int i = 0; i < 2048; i++) {
+                final int b = packed[i] & 0xFF;
+                cells[i << 1] = (byte) (b & 0x0F);
+                cells[(i << 1) | 1] = (byte) (b >>> 4);
+            }
+            chunkFlat[index] = cells; // owned by the chunk from here on: built once for its lifetime
+        }
+        bound[sectionIndex] = cells;
         return cells;
+    }
+
+    /** The flat array of the chunk that owns a slot's light, for the layer this engine propagates. */
+    private byte[][] chunkFlat(final ChunkAccess chunk) {
+        final ExtendedChunk extended = (ExtendedChunk) chunk;
+
+        return this.skylightPropagator ? extended.scalablelux$getSkyFlat() : extended.scalablelux$getBlockFlat();
     }
 
     protected final void setLightLevel(final int worldX, final int worldY, final int worldZ, final int level) {
@@ -438,7 +465,7 @@ public abstract class StarLightEngine {
                 this.lucisWrites++;
             }
             nibble.set(localIndex, level);
-            final byte[] flat = this.flatBuilt(sectionIndex);
+            final byte[] flat = this.flatBound(sectionIndex);
 
             if (flat != null) {
                 flat[localIndex] = (byte) level; // write-through: the mirror is a cache of this array, never its owner
@@ -1200,21 +1227,18 @@ public abstract class StarLightEngine {
     protected int decreaseQueueInitialLength;
 
     /**
-     * R5: flat byte mirror of the updating layers (see {@link #flatBuilt(int)}).
+     * R5: the flat byte-per-cell mirror of the light arrays, bound per cache slot from the chunk that owns the light
+     * (see {@link #flatBound(int)}).
      *
-     * <p><b>Measured, and closed: do not enable this.</b> With {@code -Dscalablelux.flatLight=true} one measured pass
-     * on {@code structure_cube} took <b>27.8 s and then 322 s</b> instead of 4.6 ms ("Can't keep up! Running 27778ms
-     * behind" in the log), and the run had to be killed by its timeout. The cause is this field's ownership: the mirror
-     * is keyed to the engine's <i>cache slot</i>, and those slots are recycled across chunks and flushes, so the
-     * identity check failed on nearly every access and each miss rebuilt a 4 KB section (4.5 µs) plus allocated - a
-     * rebuild storm, not a correctness fault. The design therefore has to own the mirror where the light lives (per
-     * chunk section, beside the nibble holder), not in a recycled cache slot; that binding is the R5 storage move, and
-     * this flag stays off until it exists. The mechanism is kept because it is the half that was written, and because
-     * turning it on again is the fastest way to reproduce the measurement.</p>
+     * <p><b>The first form of this measured 27.8 s and then 322 s for a pass that takes 4.6 ms</b> ("Can't keep up!
+     * Running 27778ms behind"), because the mirror was keyed to the engine's cache slot and rebuilt a 4 KB section on
+     * nearly every access - those slots are recycled across chunks and flushes. Ownership now follows the light data:
+     * the mirror lives on the chunk beside its nibble array and is built once per section for the chunk's lifetime, so
+     * a slot only ever copies a reference. A {@code null} entry means "no mirror" and the caller uses the nibble path,
+     * which is why the flag can only change cost, never semantics - the fingerprint gate checks that claim.</p>
      */
     private static final boolean FLAT_LIGHT = Boolean.getBoolean("scalablelux.flatLight");
     private byte[][] flatCells;
-    private SWMRNibbleArray[] flatSource;
 
     protected final long[] resizeIncreaseQueue() {
         return this.increaseQueue = Arrays.copyOf(this.increaseQueue, this.increaseQueue.length * 2);
@@ -1315,7 +1339,7 @@ public abstract class StarLightEngine {
                     final int localIndex = (offX & 15) | ((offZ & 15) << 4) | ((offY & 15) << 8);
 
                     final SWMRNibbleArray currentNibble = this.nibbleCache[sectionIndex];
-                    final byte[] currentFlat = this.flatBuilt(sectionIndex);
+                    final byte[] currentFlat = this.flatBound(sectionIndex);
                     // R5 targeting: how many neighbour cells are examined at all, and how many of those already hold
                     // the level this propagation wants to write - the second number is the work a column rule could
                     // skip outright (this loop is the whole structure_cube deficit: 24240 pops per pass).
@@ -1425,7 +1449,7 @@ public abstract class StarLightEngine {
                     final int localIndex = (offX & 15) | ((offZ & 15) << 4) | ((offY & 15) << 8);
 
                     final SWMRNibbleArray currentNibble = this.nibbleCache[sectionIndex];
-                    final byte[] currentFlat = this.flatBuilt(sectionIndex);
+                    final byte[] currentFlat = this.flatBound(sectionIndex);
                     final int currentLevel;
 
                     if (currentFlat != null) {
@@ -1537,7 +1561,7 @@ public abstract class StarLightEngine {
                     final int localIndex = (offX & 15) | ((offZ & 15) << 4) | ((offY & 15) << 8);
 
                     final SWMRNibbleArray currentNibble = this.nibbleCache[sectionIndex];
-                    final byte[] currentFlat = this.flatBuilt(sectionIndex);
+                    final byte[] currentFlat = this.flatBound(sectionIndex);
                     final int lightLevel;
 
                     if (currentFlat != null) {
@@ -1678,7 +1702,7 @@ public abstract class StarLightEngine {
                     }
 
                     final SWMRNibbleArray currentNibble = this.nibbleCache[sectionIndex];
-                    final byte[] currentFlat = this.flatBuilt(sectionIndex);
+                    final byte[] currentFlat = this.flatBound(sectionIndex);
                     final int lightLevel;
 
                     if (currentFlat != null) {
