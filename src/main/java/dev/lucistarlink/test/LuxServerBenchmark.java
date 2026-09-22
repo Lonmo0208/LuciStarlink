@@ -144,6 +144,56 @@ public final class LuxServerBenchmark {
         return Math.max(0, Math.min(8, Integer.getInteger("lucistarlink.benchmark.skyHoleRadius", 2)));
     }
 
+    /*
+     * Per-pass window for the ScalableLux-side profiler. Reflection on purpose: the profiler lives in the other
+     * mod's jar, which is not on this project's compile classpath, and in a run without it these calls must be
+     * no-ops. Without per-pass scoping the engine counters are cumulative over the whole run, and a 484-chunk
+     * worldgen phase (millions of sky writes) buries a measured window of a few milliseconds - which is what made
+     * `block_toggle_border` unattributable.
+     */
+    private static java.lang.reflect.Method ENGINE_BEGIN_WINDOW;
+    private static java.lang.reflect.Method ENGINE_WINDOW_SUMMARY;
+    private static boolean ENGINE_HOOK_RESOLVED;
+
+    private static void resolveEngineHook() {
+        if (ENGINE_HOOK_RESOLVED) {
+            return;
+        }
+        ENGINE_HOOK_RESOLVED = true;
+        try {
+            final Class<?> profiler = Class.forName("ca.spottedleaf.starlight.common.debug.LuxProfiler");
+            ENGINE_BEGIN_WINDOW = profiler.getMethod("beginWindow");
+            ENGINE_WINDOW_SUMMARY = profiler.getMethod("windowSummary");
+        } catch (Throwable ignored) {
+            ENGINE_BEGIN_WINDOW = null;
+            ENGINE_WINDOW_SUMMARY = null;
+        }
+    }
+
+    private static void engineWindowBegin() {
+        resolveEngineHook();
+        if (ENGINE_BEGIN_WINDOW == null) {
+            return;
+        }
+        try {
+            ENGINE_BEGIN_WINDOW.invoke(null);
+        } catch (Throwable ignored) {
+            // a profiler that cannot be driven must never fail the benchmark
+        }
+    }
+
+    private static String engineWindowSummary() {
+        resolveEngineHook();
+        if (ENGINE_WINDOW_SUMMARY == null) {
+            return null;
+        }
+        try {
+            return (String) ENGINE_WINDOW_SUMMARY.invoke(null);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     private static int applySkyHolePreparationPattern(ServerLevel level, BenchmarkConfig config, BlockState state, int flags) {
         int changes = 0;
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
@@ -1179,6 +1229,7 @@ public final class LuxServerBenchmark {
             }
             BlockState state = stateForPass(this.config, this.pass);
             this.passStartSnapshot = LuxBenchmarkSupport.snapshot();
+            engineWindowBegin(); // per-pass scope for the ScalableLux-side profiler (no-op without that mod)
             this.currentStartNanos = System.nanoTime();            this.currentChanges = applyPattern(this.level, this.config, state);
             this.currentApplyNanos = System.nanoTime() - this.currentStartNanos;
             LuxBenchmarkSupport.record("bench.apply_pattern", this.currentApplyNanos);
@@ -1227,6 +1278,11 @@ public final class LuxServerBenchmark {
             // real wall of the pass (apply -> first barrier that passed), which unlike the future timestamp
             // above includes the server tick boundaries the light work had to cross
             LuxBenchmarkSupport.record("bench.pass_wall_actual", Math.max(0L, System.nanoTime() - this.currentStartNanos));
+            final String engineWindow = engineWindowSummary();
+            if (engineWindow != null) {
+                LOGGER.info("LUCIS_BENCH_ENGINE pass={} measured={} {}", this.pass,
+                        this.pass >= this.config.warmupPasses(), engineWindow);
+            }
             LuxBenchmarkSupport.count("bench.pass_ticks", this.waitTicks);
             if (this.pass >= this.config.warmupPasses()) {
                 this.measuredNanos += elapsed;
