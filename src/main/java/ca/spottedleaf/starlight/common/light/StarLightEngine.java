@@ -457,9 +457,13 @@ public abstract class StarLightEngine {
                     this.lucisTasks++;
                     this.lucisPositions += positions.size();
                 }
+                final long lucisPropT0 = System.nanoTime();
                 this.propagateBlockChanges(lightAccess, chunk, positions);
+                LuxProfiler.ownEditPropagateNanos += System.nanoTime() - lucisPropT0;
             }
+            final long lucisVisibleT0 = System.nanoTime();
             this.updateVisible(lightAccess);
+            LuxProfiler.ownEditVisibleNanos += System.nanoTime() - lucisVisibleT0;
             LuxProfiler.ownEditWorkNanos += System.nanoTime() - lucisSetupT0;
         } finally {
             this.destroyCaches();

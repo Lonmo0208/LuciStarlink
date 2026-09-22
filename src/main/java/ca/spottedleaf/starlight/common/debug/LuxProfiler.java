@@ -36,10 +36,16 @@ public final class LuxProfiler {
     public static long queueTaskCalls;
     public static long queueTaskSampled;
     public static long ownEditInline;
+    public static long ownEditRejThread;
+    public static long ownEditRejChunk;
+    public static long ownEditRejStatus;
+    public static long ownEditCalls;
     public static long ownEditBatched;
     public static long ownEditNanos;
     public static long ownEditSetupNanos;
     public static long ownEditWorkNanos;
+    public static long ownEditPropagateNanos;
+    public static long ownEditVisibleNanos;
     public static long ownEditFallback;
     public static long queueTaskSampledNanos;
     public static long queueTaskNotReady;      // chunk missing or not at LIGHT status
@@ -137,10 +143,16 @@ public final class LuxProfiler {
         queueTaskCalls = 0;
         queueTaskSampled = 0;
         ownEditInline = 0;
+        ownEditRejThread = 0;
+        ownEditRejChunk = 0;
+        ownEditRejStatus = 0;
+        ownEditCalls = 0;
         ownEditBatched = 0;
         ownEditNanos = 0;
         ownEditSetupNanos = 0;
         ownEditWorkNanos = 0;
+        ownEditPropagateNanos = 0;
+        ownEditVisibleNanos = 0;
         ownEditFallback = 0;
         queueTaskSampledNanos = 0;
         queueTaskNotReady = 0;
@@ -181,7 +193,13 @@ public final class LuxProfiler {
                 + " ownEditNanos=" + ownEditNanos
                 + " setupNanos=" + ownEditSetupNanos
                 + " workNanos=" + ownEditWorkNanos
+                + " propNanos=" + ownEditPropagateNanos
+                + " visNanos=" + ownEditVisibleNanos
                 + " ownEditFallback=" + ownEditFallback
+                + " ownEditCalls=" + ownEditCalls
+                + " rejThread=" + ownEditRejThread
+                + " rejChunk=" + ownEditRejChunk
+                + " rejStatus=" + ownEditRejStatus
                 + " qNotReady=" + queueTaskNotReady
                 + " qInline=" + queueTaskInline
                 + " qResched=" + queueTaskRescheduled

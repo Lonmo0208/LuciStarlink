@@ -491,17 +491,23 @@ public final class StarLightInterface {
     }
 
     private boolean lucis$ownEditInline(final BlockPos pos) {
+        LuxProfiler.ownEditCalls++;
         if (!(this.world instanceof ServerLevel serverLevel)
                 || !serverLevel.getChunkSource().chunkMap.mainThreadExecutor.isSameThread()) {
             // the pooled engine instances are thread-confined: only the server thread may run this
+            LuxProfiler.ownEditRejThread++;
             return false;
         }
         final int chunkX = pos.getX() >> 4;
         final int chunkZ = pos.getZ() >> 4;
         final ChunkAccess chunk = this.getAnyChunkNow(chunkX, chunkZ);
-        if (chunk == null || !chunk.getPersistedStatus().isOrAfter(ChunkStatus.LIGHT) || !this.lucis$neighbourhoodReady(chunkX, chunkZ)) {
-            return false;
-        }
+        // Note: an earlier version also required the whole 3x3 neighbourhood to be loaded and past LIGHT. That guard is
+        // gone because its reason is gone: the crashes it was meant to prevent turned out to be a pre-existing
+        // StampedLock race in this queue's getOrCreateChunkTasks (unlocking an optimistic-read stamp), reproduced with
+        // the inline path switched OFF. The guard also proved too strict - getAnyChunkNow returns null for chunks that
+        // are only ticket-held, so it silently disabled the inline path on the border workload entirely.
+        if (chunk == null) { LuxProfiler.ownEditRejChunk++; return false; }
+        if (!chunk.getPersistedStatus().isOrAfter(ChunkStatus.LIGHT)) { LuxProfiler.ownEditRejStatus++; return false; }
         final long key = CoordinateUtils.getChunkKey(chunkX, chunkZ);
 
         // A new chunk means the previous burst is over: settle everything else first (edits usually arrive chunk by
