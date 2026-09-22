@@ -46,6 +46,10 @@ public abstract class ChunkAccessMixin implements ExtendedChunk {
     @Unique
     private volatile byte[][] scalablelux$blockFlat;
 
+    /** R5: per-cell opacity of the blocks, one byte per cell, dropped when a block in that section changes. */
+    @Unique
+    private volatile byte[][] scalablelux$material;
+
     @Unique
     private volatile boolean[] scalablelux$skyEmptinessMap;
 
@@ -92,6 +96,16 @@ public abstract class ChunkAccessMixin implements ExtendedChunk {
     @Override
     public void scalablelux$setBlockFlat(final byte[][] flat) {
         this.scalablelux$blockFlat = flat;
+    }
+
+    @Override
+    public byte[][] scalablelux$getMaterial() {
+        return this.scalablelux$material;
+    }
+
+    @Override
+    public void scalablelux$setMaterial(final byte[][] material) {
+        this.scalablelux$material = material;
     }
 
     @Override
