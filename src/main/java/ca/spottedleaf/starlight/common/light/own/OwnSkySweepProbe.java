@@ -153,11 +153,15 @@ public final class OwnSkySweepProbe {
         }
 
         // ---- the reformulation itself, validated off-engine ------------------------------------------------
-        // Does "column sweep + fix-up BFS" reproduce this engine's skylight, cell for cell? This is the whole algorithm
-        // (docs/NEW-ENGINE-TEARDOWN.md section 20): rebuild from the material, seed only the run bottoms and the wall
-        // faces, then run the engine's own increase rule. Running it here first puts the risk in a probe instead of in
-        // the update path, and a mismatch tells us the seeding is wrong before anything is wired in.
+        // Two questions, and they need different references:
+        //  (a) can a cheap seed set (run bottoms + wall faces) reproduce the engine?   -> section 20, answered: no
+        //  (b) if we were allowed to define the light ourselves, how much would change? -> this one, and it needs the
+        //      rule's own fixed point, which is what seeding EVERY run cell gives (the engine's increase rule applied
+        //      from scratch). The mismatch against the stored light is then exactly the price of dropping the
+        //      "bit-identical to vanilla" promise: those cells would take a different value than the history left them.
         final byte[] mine = new byte[cells];
+        final int[] seedQueue = new int[cells * 8]; // a cell can be pushed more than once as its level grows
+        int seedCount = 0;
         final long algorithmT0 = System.nanoTime();
         for (int z = minZ; z <= maxZ; z++) {
             for (int x = minX; x <= maxX; x++) {
@@ -167,36 +171,11 @@ public final class OwnSkySweepProbe {
                         break;
                     }
                     mine[index] = 15;
+                    seedQueue[seedCount++] = index; // every source cell: the rule's fixed point, not a heuristic subset
                 }
             }
         }
         final long sweepOnlyNanos = System.nanoTime() - algorithmT0;
-        final int[] seedQueue = new int[cells];
-        int seedCount = 0;
-        for (int z = minZ + 1; z < maxZ; z++) {
-            for (int x = minX + 1; x < maxX; x++) {
-                int runBottomY = Integer.MIN_VALUE;
-                for (int y = maxY; y >= minY; y--) {
-                    final int index = boxIndex(x, y, z, minX, minY, minZ, maxX, maxZ);
-                    if (mine[index] != 15) {
-                        continue;
-                    }
-                    if (runBottomY == Integer.MIN_VALUE) {
-                        runBottomY = y;
-                    }
-                    final boolean wall = (mine[boxIndex(x - 1, y, z, minX, minY, minZ, maxX, maxZ)] & 0xFF) != 15
-                            || (mine[boxIndex(x + 1, y, z, minX, minY, minZ, maxX, maxZ)] & 0xFF) != 15
-                            || (mine[boxIndex(x, y, z - 1, minX, minY, minZ, maxX, maxZ)] & 0xFF) != 15
-                            || (mine[boxIndex(x, y, z + 1, minX, minY, minZ, maxX, maxZ)] & 0xFF) != 15;
-                    if (wall) {
-                        seedQueue[seedCount++] = index;
-                    }
-                }
-                if (runBottomY != Integer.MIN_VALUE) {
-                    seedQueue[seedCount++] = boxIndex(x, runBottomY, z, minX, minY, minZ, maxX, maxZ); // attenuated light through what blocked the run
-                }
-            }
-        }
         int head = 0;
         int tail = seedCount;
         while (head < tail) {
