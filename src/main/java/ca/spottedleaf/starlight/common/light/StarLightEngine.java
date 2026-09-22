@@ -19,6 +19,7 @@ import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import ca.spottedleaf.starlight.common.chunk.ExtendedChunk;
+import ca.spottedleaf.starlight.common.chunk.ExtendedChunkSection;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.LightChunkGetter;
@@ -163,6 +164,7 @@ public abstract class StarLightEngine {
             // structure_cube). Unlike light it cannot change during one propagation, so it needs no write-through and no
             // versioning - only invalidation when a block in the section changes (see blocksChangedInChunk).
             this.materialCells = new byte[this.nibbleCache.length][];
+            this.materialSource = new LevelChunkSection[this.nibbleCache.length];
         }
     }
 
@@ -309,6 +311,10 @@ public abstract class StarLightEngine {
     protected final void destroyCaches() {
         Arrays.fill(this.sectionCache, null);
         Arrays.fill(this.nibbleCache, null);
+        if (this.materialCells != null) {
+            Arrays.fill(this.materialCells, null);
+            Arrays.fill(this.materialSource, null);
+        }
         if (this.flatCells != null) {
             Arrays.fill(this.flatCells, null); // the mirrors themselves stay on their chunks; only the bindings drop
         }
@@ -457,18 +463,25 @@ public abstract class StarLightEngine {
             material = new byte[ySections][];
             extended.scalablelux$setMaterial(material);
         }
+        // Validated once per slot per call, never per cell: the entry is rebuilt when the section it was built from was
+        // replaced, or when that section's own block-write funnel set the dirty bit (LevelChunkSectionMixin). That bit is
+        // the whole point - the engine does not own the block data, so worldgen and every other writer have to be able to
+        // say "these blocks changed" without going through the light engine's change hooks.
+        final ExtendedChunkSection sectionState = (ExtendedChunkSection) section;
         byte[] cells = material[index];
 
-        if (cells == null) {
+        if (cells == null || this.materialSource[sectionIndex] != section || sectionState.scalablelux$isMaterialDirty()) {
             cells = new byte[4096];
             for (int i = 0; i < 4096; i++) {
-                final BlockState state = section.hasOnlyAir() ? AIR_BLOCK_STATE : section.states.get(i); // palette read, once per section per invalidation
+                final BlockState state = section.hasOnlyAir() ? AIR_BLOCK_STATE : section.states.get(i); // palette read, once per rebuild
                 final int opacity = ((ExtendedAbstractBlockState) state).scalablelux$getOpacityIfCached();
 
                 cells[i] = (byte) (opacity >= 0 ? opacity : ExtendedChunk.MATERIAL_UNCACHED);
             }
             material[index] = cells;
+            sectionState.scalablelux$clearMaterialDirty();
         }
+        this.materialSource[sectionIndex] = section;
         bound[sectionIndex] = cells;
         return cells;
     }
@@ -590,26 +603,6 @@ public abstract class StarLightEngine {
             final ChunkAccess chunk = this.getChunkInCache(chunkX, chunkZ);
             if (chunk == null) {
                 return;
-            }
-            if (MATERIAL_TABLE) {
-                // R5: the blocks in this section just changed, so its opacity table is stale - drop the entry and
-                // its cache binding; the next propagation rebuilds it from the palette once. Material cannot change
-                // while a propagation runs, which is why this is the only invalidation point it needs.
-                final byte[][] material = ((ExtendedChunk) chunk).scalablelux$getMaterial();
-
-                if (material != null) {
-                    for (final BlockPos pos : positions) {
-                        final int index = (pos.getY() >> 4) - this.minSection;
-
-                        if (index >= 0 && index < material.length) {
-                            material[index] = null;
-                            if (this.materialCells != null) {
-                                this.materialCells[(pos.getX() >> 4) + 5 * (pos.getZ() >> 4)
-                                        + (5 * 5) * (pos.getY() >> 4) + this.chunkSectionIndexOffset] = null;
-                            }
-                        }
-                    }
-                }
             }
             if (changedSections != null) {
                 final boolean[] ret = this.handleEmptySectionChanges(lightAccess, chunk, changedSections, false);
@@ -1325,6 +1318,8 @@ public abstract class StarLightEngine {
      *  -Dscalablelux.materialTable=true}; {@code materialCells} holds per-slot references to the chunk-owned tables. */
     private static final boolean MATERIAL_TABLE = Boolean.getBoolean("scalablelux.materialTable");
     private byte[][] materialCells;
+    /** Section object each bound material table was validated against, so a replaced section forces a rebuild. */
+    private LevelChunkSection[] materialSource;
 
     protected final long[] resizeIncreaseQueue() {
         return this.increaseQueue = Arrays.copyOf(this.increaseQueue, this.increaseQueue.length * 2);
