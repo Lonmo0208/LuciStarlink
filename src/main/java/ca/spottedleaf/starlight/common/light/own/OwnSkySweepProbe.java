@@ -2,11 +2,15 @@ package ca.spottedleaf.starlight.common.light.own;
 
 import ca.spottedleaf.starlight.common.blockstate.ExtendedAbstractBlockState;
 import ca.spottedleaf.starlight.common.chunk.ExtendedChunk;
+import ca.spottedleaf.starlight.common.light.SWMRNibbleArray;
+import ca.spottedleaf.starlight.common.util.WorldUtil;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.ChunkAccess;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
 
 /**
  * R5-2 probe: can a <b>linear column sweep</b> over flat byte tables reproduce this engine's skylight, and what does it
@@ -226,6 +230,10 @@ public final class OwnSkySweepProbe {
                 }
             }
         }
+        int mineZeroTruthLit = 0;
+        int mineLitTruthZero = 0;
+        int bothLitDifferent = 0;
+        final StringBuilder examples = new StringBuilder();
         final long algorithmNanos = System.nanoTime() - algorithmT0;
         int algorithmMismatch = 0;
         int compared = 0;
@@ -233,9 +241,39 @@ public final class OwnSkySweepProbe {
             for (int x = minX + 1; x < maxX; x++) {
                 for (int y = minY; y <= maxY; y++) {
                     compared++;
-                    if ((mine[boxIndex(x, y, z, minX, minY, minZ, maxX, maxZ)] & 0xFF)
-                            != (lightCells[boxIndex(x, y, z, minX, minY, minZ, maxX, maxZ)] & 0xFF)) {
-                        algorithmMismatch++;
+                    final int index = boxIndex(x, y, z, minX, minY, minZ, maxX, maxZ);
+                    final int myValue = mine[index] & 0xFF;
+                    final int truth = lightCells[index] & 0xFF;
+
+                    if (myValue == truth) {
+                        continue;
+                    }
+                    algorithmMismatch++;
+                    if (myValue == 0) {
+                        mineZeroTruthLit++;
+                    } else if (truth == 0) {
+                        mineLitTruthZero++;
+                    } else {
+                        bothLitDifferent++;
+                    }
+                    if (examples.length() < 240) {
+                        // read the engine's INTERNAL nibble as well as the published value: part of the mismatch could be
+                        // a publish artefact rather than a different computation, and this pair tells the two apart
+                        int internal = -1;
+                        final ChunkAccess cellChunk = level.getChunkSource().getChunk(x >> 4, z >> 4, ChunkStatus.FULL, false);
+
+                        if (cellChunk != null) {
+                            final SWMRNibbleArray[] nibbles = ((ExtendedChunk) cellChunk).scalablelux$getSkyNibbles();
+                            final int section = (y >> 4) - WorldUtil.getMinLightSection(level);
+
+                            if (nibbles != null && section >= 0 && section < nibbles.length && nibbles[section] != null) {
+                                internal = nibbles[section].getUpdating(((y & 15) << 8) | ((z & 15) << 4) | (x & 15));
+                            }
+                        }
+                        examples.append("(").append(x).append(',').append(y).append(',').append(z)
+                                .append(" mine=").append(myValue).append(" vis=").append(truth)
+                                .append(" nib=").append(internal).append(" mat=").append(materialCells[index] & 0xFF)
+                                .append(") ");
                     }
                 }
             }
@@ -263,7 +301,11 @@ public final class OwnSkySweepProbe {
                 + " algorithmMismatch=" + algorithmMismatch
                 + " sweepOnlyNanos=" + sweepOnlyNanos
                 + " algorithmNanos=" + algorithmNanos
-                + " algorithmNsPerCell=" + (compared == 0 ? 0L : algorithmNanos / compared));
+                + " algorithmNsPerCell=" + (compared == 0 ? 0L : algorithmNanos / compared)
+                + " mineZeroTruthLit=" + mineZeroTruthLit
+                + " mineLitTruthZero=" + mineLitTruthZero
+                + " bothLitDifferent=" + bothLitDifferent);
+        System.out.println("SKYSWEEP-EXAMPLES " + examples);
     }
 
     /** 0 = provably transparent (opacity 0), 1 = blocks the run, 2 = opacity not cached yet. */
