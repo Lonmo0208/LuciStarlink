@@ -466,6 +466,8 @@ public final class StarLightInterface {
      * generating keeps the asynchronous path, which is what the light thread exists for.</p>
      */
     private static final boolean LUCIS_OWN_EDIT = Boolean.getBoolean("scalablelux.ownEdit");
+    /** R4-1: seed every chunk, then drain the decrease queue once (see seedBlockChangesOnly). */
+    private static final boolean LUCIS_BATCH_DECREASE = Boolean.getBoolean("scalablelux.batchDecrease");
 
     /** R3: edits wait here per chunk so one engine call handles a whole burst instead of one call per block. */
     private static final int LUCIS_PENDING_FLUSH_SIZE = 256;
@@ -560,7 +562,14 @@ public final class StarLightInterface {
                         skyEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, positions, null);
                     }
                     if (blockEngine != null) {
-                        blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, positions, null);
+                        if (LUCIS_BATCH_DECREASE) {
+                            // R4-1: seed this chunk only; the decrease queue is drained ONCE for the whole burst below,
+                            // because that drain walks the engine's global queue and repeating it per chunk is 220-430 us
+                            // per call - 98% of this cell's engine time on block_toggle_border.
+                            blockEngine.seedBlockChangesOnly(this.lightAccess, chunkX, chunkZ, positions);
+                        } else {
+                            blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, positions, null);
+                        }
                     }
                     if (LuxProfiler.enabled()) {
                         LuxProfiler.ownEditNanos += System.nanoTime() - lucisT0;
@@ -572,6 +581,12 @@ public final class StarLightInterface {
                         LuxProfiler.ownEditFallback++;
                     }
                 }
+            }
+            if (blockEngine != null && LUCIS_BATCH_DECREASE) {
+                // the single consolidated drain (seeds above); one walk of the engine's queue instead of one per chunk
+                final long lucisDecT0 = System.nanoTime();
+                blockEngine.performLightDecrease(this.lightAccess);
+                LuxProfiler.ownEditDecBatchNanos += System.nanoTime() - lucisDecT0;
             }
         } finally {
             this.releaseSkyLightEngine(skyEngine);

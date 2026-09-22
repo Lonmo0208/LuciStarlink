@@ -2,6 +2,7 @@ package ca.spottedleaf.starlight.common.light;
 
 import ca.spottedleaf.starlight.common.blockstate.ExtendedAbstractBlockState;
 import ca.spottedleaf.starlight.common.chunk.ExtendedChunk;
+import ca.spottedleaf.starlight.common.debug.LuxProfiler;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
@@ -194,11 +195,15 @@ public final class BlockStarLightEngine extends StarLightEngine {
 
     @Override
     protected void propagateBlockChanges(final LightChunkGetter lightAccess, final ChunkAccess atChunk, final Set<BlockPos> positions) {
+        final long lucisBlkT0 = System.nanoTime();
         for (final BlockPos pos : positions) {
             this.checkBlock(lightAccess, pos.getX(), pos.getY(), pos.getZ());
         }
 
+        final long lucisBlkT1 = System.nanoTime();
         this.performLightDecrease(lightAccess);
+        LuxProfiler.ownEditBlkDecreaseNanos += System.nanoTime() - lucisBlkT1;
+        LuxProfiler.ownEditBlkCheckNanos += lucisBlkT1 - lucisBlkT0;
     }
 
     protected List<BlockPos> getSources(final LightChunkGetter lightAccess, final ChunkAccess chunk) {

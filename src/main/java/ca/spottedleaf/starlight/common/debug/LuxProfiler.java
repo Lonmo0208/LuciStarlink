@@ -47,6 +47,9 @@ public final class LuxProfiler {
     public static long ownEditPropagateNanos;
     public static long ownEditSkyNanos;
     public static long ownEditBlkNanos;
+    public static long ownEditBlkCheckNanos;
+    public static long ownEditBlkDecreaseNanos;
+    public static long ownEditDecBatchNanos;
     public static long ownEditVisibleNanos;
     public static long ownEditFallback;
     public static long queueTaskSampledNanos;
@@ -156,6 +159,9 @@ public final class LuxProfiler {
         ownEditPropagateNanos = 0;
         ownEditSkyNanos = 0;
         ownEditBlkNanos = 0;
+        ownEditBlkCheckNanos = 0;
+        ownEditBlkDecreaseNanos = 0;
+        ownEditDecBatchNanos = 0;
         ownEditVisibleNanos = 0;
         ownEditFallback = 0;
         queueTaskSampledNanos = 0;
@@ -201,6 +207,9 @@ public final class LuxProfiler {
                 + " visNanos=" + ownEditVisibleNanos
                 + " skyNanos=" + ownEditSkyNanos
                 + " blkNanos=" + ownEditBlkNanos
+                + " blkCheckNanos=" + ownEditBlkCheckNanos
+                + " blkDecNanos=" + ownEditBlkDecreaseNanos
+                + " decBatchNanos=" + ownEditDecBatchNanos
                 + " ownEditFallback=" + ownEditFallback
                 + " ownEditCalls=" + ownEditCalls
                 + " rejThread=" + ownEditRejThread
