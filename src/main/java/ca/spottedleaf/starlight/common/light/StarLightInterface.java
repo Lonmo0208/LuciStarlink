@@ -468,13 +468,29 @@ public final class StarLightInterface {
     private static final boolean LUCIS_OWN_EDIT = Boolean.getBoolean("scalablelux.ownEdit");
     /** R4-1: seed every chunk, then drain the decrease queue once (see seedBlockChangesOnly). */
     private static final boolean LUCIS_BATCH_DECREASE = Boolean.getBoolean("scalablelux.batchDecrease");
-    /** Below this many buffered changes the base asynchronous path is cheaper (see the dispatch rule in the flush). */
-    private static final int LUCIS_INLINE_MIN_BURST = Integer.getInteger("scalablelux.inlineMinBurst", 32);
+    /**
+     * Dispatch rule, CLOSED by measurement (default 0 = off). Idea: a small buffered burst is cheaper on the base's
+     * asynchronous path - on sky_hole the base settles 25 changes in 0.86 ms while this path's setup + seed + drain
+     * costs 1.00 ms. The rule cannot be made safe: applied to every burst of at most this many changes it took
+     * block_toggle_border from 0.43 ms to 4.03 ms (each tiny per-chunk piece became its own asynchronous task and paid
+     * the completion-path turnaround again), and a narrowed form (only when the whole burst sits in ONE chunk, i.e. one
+     * async task) did not help either - border measured 3.97 ms against 0.47 ms without the rule, and sky_hole measured
+     * 0.754 against 0.777, i.e. the rule has no reliable effect there at all (the earlier 0.733-vs-0.956 reading was
+     * run-to-run noise). The distinguishing factor is the per-change cost, which is only known after the work is done.
+     */
+    private static final int LUCIS_INLINE_MIN_BURST = Integer.getInteger("scalablelux.inlineMinBurst", 0);
     /** A chunk with at least this many changes in one burst is settled by ONE full relight instead of per-position seeds. */
     private static final boolean LUCIS_BULK_RELIGHT = Boolean.getBoolean("scalablelux.bulkRelight");
     private static final int LUCIS_BULK_MIN_CHANGES = Integer.getInteger("scalablelux.bulkMinChanges", 128);
 
-    /** R3: edits wait here per chunk so one engine call handles a whole burst instead of one call per block. */
+    /**
+     * R3: edits wait here per chunk so one engine call handles a whole burst instead of one call per block. Each flush
+     * pays a fixed engine cost (setupCaches + seed + consolidated drain), so the size looked like a lever for
+     * structure_cube, whose 4096 changes per pass arrive as 16 flushes of 256 - but it is not one: measured 256 vs 1024
+     * vs 4096 the structure cell read 4.60/5.03, 4.65/4.51, 5.68/4.61 ms (its own spread is larger than any difference)
+     * and dense_chunk_patch preferred 256 outright (1.32/1.29 against 1.42/1.42 and 1.46/1.46). Light fingerprints
+     * identical in all six runs, so the bigger buffer does not silently defer work either - it simply buys nothing.
+     */
     private static final int LUCIS_PENDING_FLUSH_SIZE = 256;
     private final it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos>> lucis$pendingEdits =
             new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>();
@@ -545,12 +561,13 @@ public final class StarLightInterface {
                 || !serverLevel.getChunkSource().chunkMap.mainThreadExecutor.isSameThread()) {
             return;
         }
-        // Dispatch rule (acceptance follow-up): a very small burst is cheaper on the base path. Measured on sky_hole
-        // (25 changes), the baseline's single asynchronous task settles in 0.86 ms while this path's setup + seed +
-        // consolidated drain costs 1.00 ms - so below LUCIS_INLINE_MIN_BURST the buffered edits go back to the queue
-        // instead of being seeded inline. Larger bursts keep the inline path, where it wins by a lot (border 0.43 vs
-        // 4.07, dense 1.29 vs 3.79).
-        if (LUCIS_INLINE_MIN_BURST > 0) {
+        // Dispatch rule (acceptance follow-up): a small burst is cheaper on the base path - but only when it is ONE
+        // chunk's burst. Measured on sky_hole (25 changes, one chunk) the baseline's single asynchronous task settles in
+        // 0.86 ms while this path's setup + seed + consolidated drain costs 1.00 ms. The rule must not fire when the
+        // buffered edits are spread over chunks: block_toggle_border's 95 changes arrive as many tiny per-chunk bursts,
+        // and sending those back to the queue turned that cell from 0.43 ms into 4.03 ms - each tiny piece became its own
+        // asynchronous task and paid the completion-path turnaround all over again. One chunk means one async task.
+        if (LUCIS_INLINE_MIN_BURST > 0 && this.lucis$pendingEdits.size() == 1) {
             int total = 0;
             for (final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> pending : this.lucis$pendingEdits.values()) {
                 total += pending.size();
