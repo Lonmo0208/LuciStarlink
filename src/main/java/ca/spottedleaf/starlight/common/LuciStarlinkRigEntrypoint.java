@@ -25,5 +25,10 @@ public class LuciStarlinkRigEntrypoint {
         NeoForge.EVENT_BUS.addListener(LuciStarlinkCommand::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener(LuxTelemetry::onServerTick);
         LOGGER.info("LuciStarlink 2.0 (rig entrypoint, modId lucistarlinkrig) active on the ScalableLux base");
+        if (Boolean.getBoolean("scalablelux.ownFieldSelfTest")) {
+            // R1 acceptance for the new engine's foundation (docs/NEW-ENGINE-TEARDOWN.md); wired into BOTH entrypoints
+            // because the rig variant replaces the published one, so a hook in only one of them does nothing here.
+            ca.spottedleaf.starlight.common.light.own.OwnLightField.selfTest();
+        }
     }
 }

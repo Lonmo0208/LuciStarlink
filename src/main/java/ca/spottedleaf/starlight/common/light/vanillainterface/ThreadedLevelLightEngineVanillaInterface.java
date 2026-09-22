@@ -87,7 +87,18 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
     private static final int LUCIS_QUEUE_ENQUEUED = 1;
     private static final int LUCIS_QUEUE_DEFERRED = 2;
 
-    private int scalablelux$queueTaskForSection(final int chunkX, final int chunkY, final int chunkZ,
+    private int scalablelux$queueTaskForSection(final int chunkX, final int chunkY, final int chunkZ, final Supplier<StarLightInterface.LightQueue.ChunkTasks> runnable) {
+        if (LuxProfiler.enabled() && LuxProfiler.sample()) {
+            final long t0 = System.nanoTime();
+            final int ret = this.scalablelux$queueTaskForSectionImpl(chunkX, chunkY, chunkZ, runnable);
+            LuxProfiler.queueTaskSampled++;
+            LuxProfiler.queueTaskSampledNanos += System.nanoTime() - t0;
+            return ret;
+        }
+        return this.scalablelux$queueTaskForSectionImpl(chunkX, chunkY, chunkZ, runnable);
+    }
+
+    private int scalablelux$queueTaskForSectionImpl(final int chunkX, final int chunkY, final int chunkZ,
                                                  final Supplier<StarLightInterface.LightQueue.ChunkTasks> runnable) {
         if (LuxProfiler.enabled()) {
             LuxProfiler.queueTaskCalls++;

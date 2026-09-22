@@ -34,6 +34,8 @@ public final class LuxProfiler {
     public static long checkBlockSampledNanos;
 
     public static long queueTaskCalls;
+    public static long queueTaskSampled;
+    public static long queueTaskSampledNanos;
     public static long queueTaskNotReady;      // chunk missing or not at LIGHT status
     public static long queueTaskInline;        // ran inline (non-full ticket / gen thread)
     public static long queueTaskRescheduled;   // bounced to the main thread
@@ -113,11 +115,55 @@ public final class LuxProfiler {
         if (!ENABLED) {
             return;
         }
-        System.out.println("SLPROF"
+        System.out.println(windowSummary());
+    }
+
+    /**
+     * Zeroes every counter, so the next {@link #windowSummary()} describes one measurement window instead of the
+     * whole run. The harness calls it at each measured pass boundary (reflectively, so a run without this mod is
+     * unaffected): without it a measured window of a few ms is invisible next to a 484-chunk worldgen phase that
+     * produces millions of sky writes, which is exactly what blocked attribution on `block_toggle_border`.
+     */
+    public static void beginWindow() {
+        checkBlockCalls = 0;
+        checkBlockSampled = 0;
+        checkBlockSampledNanos = 0;
+        queueTaskCalls = 0;
+        queueTaskSampled = 0;
+        queueTaskSampledNanos = 0;
+        queueTaskNotReady = 0;
+        queueTaskInline = 0;
+        queueTaskRescheduled = 0;
+        queueTaskNotScheduled = 0;
+        queueTaskAlreadyAdded = 0;
+        queueTaskTicketAdds = 0;
+        sectionStatusCalls = 0;
+        blockChangeCalls = 0;
+        runLightUpdateCalls = 0;
+        runLightUpdateNanos = 0;
+        runLightUpdateHadWork = 0;
+        lightChunkCalls = 0;
+        lightChunkNanos = 0;
+        skyTasks.reset();
+        blockTasks.reset();
+        skyPositions.reset();
+        blockPositions.reset();
+        skyWrites.reset();
+        blockWrites.reset();
+        skyQueueAdds.reset();
+        blockQueueAdds.reset();
+        identicalSkips.reset();
+        skyNotify.reset();
+        blockNotify.reset();
+    }
+
+    public static String windowSummary() {
+        return "SLPROF"
                 + " checkBlock=" + checkBlockCalls
                 + " checkBlockSampled=" + checkBlockSampled
                 + " checkBlockNanosEst=" + scale(checkBlockSampledNanos)
                 + " queueTask=" + queueTaskCalls
+                + " queueTaskNanosEst=" + scale(queueTaskSampledNanos)
                 + " qNotReady=" + queueTaskNotReady
                 + " qInline=" + queueTaskInline
                 + " qResched=" + queueTaskRescheduled
@@ -141,6 +187,6 @@ public final class LuxProfiler {
                 + " blkQAdds=" + blockQueueAdds.sum()
                 + " idSkip=" + identicalSkips.sum()
                 + " skyNotif=" + skyNotify.sum()
-                + " blkNotif=" + blockNotify.sum());
+                + " blkNotif=" + blockNotify.sum();
     }
 }
