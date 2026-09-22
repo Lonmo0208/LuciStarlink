@@ -468,6 +468,11 @@ public final class StarLightInterface {
     private static final boolean LUCIS_OWN_EDIT = Boolean.getBoolean("scalablelux.ownEdit");
     /** R4-1: seed every chunk, then drain the decrease queue once (see seedBlockChangesOnly). */
     private static final boolean LUCIS_BATCH_DECREASE = Boolean.getBoolean("scalablelux.batchDecrease");
+    /** Below this many buffered changes the base asynchronous path is cheaper (see the dispatch rule in the flush). */
+    private static final int LUCIS_INLINE_MIN_BURST = Integer.getInteger("scalablelux.inlineMinBurst", 32);
+    /** A chunk with at least this many changes in one burst is settled by ONE full relight instead of per-position seeds. */
+    private static final boolean LUCIS_BULK_RELIGHT = Boolean.getBoolean("scalablelux.bulkRelight");
+    private static final int LUCIS_BULK_MIN_CHANGES = Integer.getInteger("scalablelux.bulkMinChanges", 128);
 
     /** R3: edits wait here per chunk so one engine call handles a whole burst instead of one call per block. */
     private static final int LUCIS_PENDING_FLUSH_SIZE = 256;
@@ -540,6 +545,33 @@ public final class StarLightInterface {
                 || !serverLevel.getChunkSource().chunkMap.mainThreadExecutor.isSameThread()) {
             return;
         }
+        // Dispatch rule (acceptance follow-up): a very small burst is cheaper on the base path. Measured on sky_hole
+        // (25 changes), the baseline's single asynchronous task settles in 0.86 ms while this path's setup + seed +
+        // consolidated drain costs 1.00 ms - so below LUCIS_INLINE_MIN_BURST the buffered edits go back to the queue
+        // instead of being seeded inline. Larger bursts keep the inline path, where it wins by a lot (border 0.43 vs
+        // 4.07, dense 1.29 vs 3.79).
+        if (LUCIS_INLINE_MIN_BURST > 0) {
+            int total = 0;
+            for (final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> pending : this.lucis$pendingEdits.values()) {
+                total += pending.size();
+            }
+            if (total <= LUCIS_INLINE_MIN_BURST) {
+                final long[] keysToQueue = this.lucis$pendingEdits.keySet().toLongArray();
+                for (final long key : keysToQueue) {
+                    final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> positions = this.lucis$pendingEdits.remove(key);
+                    if (positions == null) {
+                        continue;
+                    }
+                    for (final BlockPos change : positions) {
+                        this.lightQueue.queueBlockChange(change);
+                    }
+                }
+                if (LuxProfiler.enabled()) {
+                    LuxProfiler.ownEditSmallBursts++;
+                }
+                return;
+            }
+        }
         final SkyStarLightEngine skyEngine = this.getSkyLightEngine();
         final BlockStarLightEngine blockEngine = this.getBlockLightEngine();
         try {
@@ -558,17 +590,35 @@ public final class StarLightInterface {
                 final int chunkZ = CoordinateUtils.getChunkZ(key);
                 final long lucisT0 = System.nanoTime();
                 try {
-                    if (skyEngine != null) {
-                        skyEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, positions, null);
-                    }
-                    if (blockEngine != null) {
-                        if (LUCIS_BATCH_DECREASE) {
-                            // R4-1: seed this chunk only; the decrease queue is drained ONCE for the whole burst below,
-                            // because that drain walks the engine's global queue and repeating it per chunk is 220-430 us
-                            // per call - 98% of this cell's engine time on block_toggle_border.
-                            blockEngine.seedBlockChangesOnly(this.lightAccess, chunkX, chunkZ, positions);
-                        } else {
-                            blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, positions, null);
+                    final ChunkAccess bulkChunk = LUCIS_BULK_RELIGHT && positions.size() >= LUCIS_BULK_MIN_CHANGES
+                            ? this.getAnyChunkNow(chunkX, chunkZ) : null;
+                    if (bulkChunk != null) {
+                        // L3's batched half: a chunk with many changes in one burst is cheaper as ONE full relight than
+                        // as N per-position seeds - the same routine the chunk-load path uses, so correctness comes from
+                        // the base. structure_cube puts 4096 changes inside a single section, which is the case this
+                        // exists for; the base and our per-edit path both pay ~1.2 us per seed there.
+                        if (skyEngine != null) {
+                            skyEngine.lightChunk(this.lightAccess, bulkChunk, true);
+                        }
+                        if (blockEngine != null) {
+                            blockEngine.lightChunk(this.lightAccess, bulkChunk, true);
+                        }
+                        if (LuxProfiler.enabled()) {
+                            LuxProfiler.ownEditBulkRelights++;
+                        }
+                    } else {
+                        if (skyEngine != null) {
+                            skyEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, positions, null);
+                        }
+                        if (blockEngine != null) {
+                            if (LUCIS_BATCH_DECREASE) {
+                                // R4-1: seed this chunk only; the decrease queue is drained ONCE for the whole burst below,
+                                // because that drain walks the engine's global queue and repeating it per chunk is 220-430 us
+                                // per call - 98% of this cell's engine time on block_toggle_border.
+                                blockEngine.seedBlockChangesOnly(this.lightAccess, chunkX, chunkZ, positions);
+                            } else {
+                                blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, positions, null);
+                            }
                         }
                     }
                     if (LuxProfiler.enabled()) {
