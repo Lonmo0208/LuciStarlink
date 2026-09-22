@@ -438,7 +438,9 @@ public abstract class StarLightEngine {
 
     public final void blocksChangedInChunk(final LightChunkGetter lightAccess, final int chunkX, final int chunkZ,
                                            final Set<BlockPos> positions, final Boolean[] changedSections) {
+        final long lucisSetupT0 = System.nanoTime();
         this.setupCaches(lightAccess, chunkX * 16 + 7, 128, chunkZ * 16 + 7, true, true);
+        LuxProfiler.ownEditSetupNanos += System.nanoTime() - lucisSetupT0;
         try {
             final ChunkAccess chunk = this.getChunkInCache(chunkX, chunkZ);
             if (chunk == null) {
@@ -458,6 +460,7 @@ public abstract class StarLightEngine {
                 this.propagateBlockChanges(lightAccess, chunk, positions);
             }
             this.updateVisible(lightAccess);
+            LuxProfiler.ownEditWorkNanos += System.nanoTime() - lucisSetupT0;
         } finally {
             this.destroyCaches();
         }
@@ -721,7 +724,9 @@ public abstract class StarLightEngine {
     public final void forceHandleEmptySectionChanges(final LightChunkGetter lightAccess, final ChunkAccess chunk, final Boolean[] emptinessChanges) {
         final int chunkX = chunk.getPos().x;
         final int chunkZ = chunk.getPos().z;
+        final long lucisSetupT0 = System.nanoTime();
         this.setupCaches(lightAccess, chunkX * 16 + 7, 128, chunkZ * 16 + 7, true, true);
+        LuxProfiler.ownEditSetupNanos += System.nanoTime() - lucisSetupT0;
         try {
             // force current chunk into cache
             this.setChunkInCache(chunkX, chunkZ, chunk);
@@ -734,6 +739,7 @@ public abstract class StarLightEngine {
                 this.setEmptinessMap(chunk, ret);
             }
             this.updateVisible(lightAccess);
+            LuxProfiler.ownEditWorkNanos += System.nanoTime() - lucisSetupT0;
         } finally {
             this.destroyCaches();
         }
@@ -741,7 +747,9 @@ public abstract class StarLightEngine {
 
     public final void handleEmptySectionChanges(final LightChunkGetter lightAccess, final int chunkX, final int chunkZ,
                                                 final Boolean[] emptinessChanges) {
+        final long lucisSetupT0 = System.nanoTime();
         this.setupCaches(lightAccess, chunkX * 16 + 7, 128, chunkZ * 16 + 7, true, true);
+        LuxProfiler.ownEditSetupNanos += System.nanoTime() - lucisSetupT0;
         try {
             final ChunkAccess chunk = this.getChunkInCache(chunkX, chunkZ);
             if (chunk == null) {
@@ -752,6 +760,7 @@ public abstract class StarLightEngine {
                 this.setEmptinessMap(chunk, ret);
             }
             this.updateVisible(lightAccess);
+            LuxProfiler.ownEditWorkNanos += System.nanoTime() - lucisSetupT0;
         } finally {
             this.destroyCaches();
         }
@@ -922,7 +931,9 @@ public abstract class StarLightEngine {
     public final void light(final LightChunkGetter lightAccess, final ChunkAccess chunk, final Boolean[] emptySections) {
         final int chunkX = chunk.getPos().x;
         final int chunkZ = chunk.getPos().z;
+        final long lucisSetupT0 = System.nanoTime();
         this.setupCaches(lightAccess, chunkX * 16 + 7, 128, chunkZ * 16 + 7, true, true);
+        LuxProfiler.ownEditSetupNanos += System.nanoTime() - lucisSetupT0;
 
         try {
             final SWMRNibbleArray[] nibbles = getFilledEmptyLight(this.maxLightSection - this.minLightSection + 1);
@@ -939,6 +950,7 @@ public abstract class StarLightEngine {
             this.lightChunk(lightAccess, chunk, true);
             this.setNibbles(chunk, nibbles);
             this.updateVisible(lightAccess);
+            LuxProfiler.ownEditWorkNanos += System.nanoTime() - lucisSetupT0;
         } finally {
             this.destroyCaches();
         }

@@ -356,6 +356,9 @@ public final class StarLightInterface {
     }
 
     public boolean hasUpdates() {
+        // a guaranteed, per-tick, server-thread call site (the harness's barrier and vanilla's tryScheduleUpdate both
+        // come through here): the flush point for R3's coalesced edits, so nothing stays buffered across ticks
+        this.lucis$flushPendingEdits();
         return !this.lightQueue.isEmpty();
     }
 
@@ -448,12 +451,138 @@ public final class StarLightInterface {
         }
     }
 
+    /**
+     * R2 of the new engine (default OFF, {@code -Dscalablelux.ownEdit=true}): propagate and install an edit inside the
+     * call that made it, instead of handing it to the light thread.
+     *
+     * <p>Why this is not one of the twelve failed queue attempts: those all stayed inside the queue (or held it), so the
+     * light thread's scheduling turnaround stayed in the completion path - measured at ~4.3 ms of a 4.6 ms pass on
+     * {@code block_toggle_border}, while the pass's own work is only ~150 us. This path never touches the queue: the
+     * engine's own propagation runs on the calling (server) thread and publishes into the visible layer, so the chunk's
+     * sync futures are already complete and there is nothing to wait for. Nothing is deferred either, so there is no
+     * pending state for a blocking reader to interlock with - the interlock that hung four earlier attempts.</p>
+     *
+     * <p>Falls back to the queue on anything unexpected, and only handles chunks that are ready: a chunk still
+     * generating keeps the asynchronous path, which is what the light thread exists for.</p>
+     */
+    private static final boolean LUCIS_OWN_EDIT = Boolean.getBoolean("scalablelux.ownEdit");
+
+    /** R3: edits wait here per chunk so one engine call handles a whole burst instead of one call per block. */
+    private static final int LUCIS_PENDING_FLUSH_SIZE = 256;
+    private final it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos>> lucis$pendingEdits =
+            new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>();
+
+    /**
+     * Whether the 3x3 neighbourhood of a chunk is loaded and past LIGHT (SL's own {@code canUseChunk} semantics). The
+     * inline path propagates across chunk borders, so it must not run while a neighbour is still generating: taking it
+     * anyway surfaced a lock-protocol fault inside the base queue's {@code getOrCreateChunkTasks} during a
+     * border + profiler run (2026-09-22), i.e. the inline lane was touching a queue whose chunks were mid-generation.
+     */
+    private boolean lucis$neighbourhoodReady(final int chunkX, final int chunkZ) {
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                final ChunkAccess neighbour = this.getAnyChunkNow(chunkX + dx, chunkZ + dz);
+                if (neighbour == null || !neighbour.getPersistedStatus().isOrAfter(ChunkStatus.LIGHT)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private boolean lucis$ownEditInline(final BlockPos pos) {
+        if (!(this.world instanceof ServerLevel serverLevel)
+                || !serverLevel.getChunkSource().chunkMap.mainThreadExecutor.isSameThread()) {
+            // the pooled engine instances are thread-confined: only the server thread may run this
+            return false;
+        }
+        final int chunkX = pos.getX() >> 4;
+        final int chunkZ = pos.getZ() >> 4;
+        final ChunkAccess chunk = this.getAnyChunkNow(chunkX, chunkZ);
+        if (chunk == null || !chunk.getPersistedStatus().isOrAfter(ChunkStatus.LIGHT) || !this.lucis$neighbourhoodReady(chunkX, chunkZ)) {
+            return false;
+        }
+        final long key = CoordinateUtils.getChunkKey(chunkX, chunkZ);
+
+        // A new chunk means the previous burst is over: settle everything else first (edits usually arrive chunk by
+        // chunk, so this is the cheap case), then buffer this position under its own chunk.
+        this.lucis$flushPendingEdits(key);
+        final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> pending =
+                this.lucis$pendingEdits.computeIfAbsent(key, ignored -> new it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<>());
+        pending.add(pos.immutable());
+        if (pending.size() >= LUCIS_PENDING_FLUSH_SIZE) {
+            this.lucis$flushPendingEdits(-1L);
+        }
+        return true;
+    }
+
+    /**
+     * Applies every buffered edit burst except {@code keepKey} (pass -1 to apply all), one engine call per chunk.
+     * Server thread only; a call from any other thread is ignored (the buffer stays for the next server-thread point).
+     */
+    private void lucis$flushPendingEdits() {
+        this.lucis$flushPendingEdits(-1L);
+    }
+
+    private void lucis$flushPendingEdits(final long keepKey) {
+        if (this.lucis$pendingEdits.isEmpty()) {
+            return;
+        }
+        if (!(this.world instanceof ServerLevel serverLevel)
+                || !serverLevel.getChunkSource().chunkMap.mainThreadExecutor.isSameThread()) {
+            return;
+        }
+        final SkyStarLightEngine skyEngine = this.getSkyLightEngine();
+        final BlockStarLightEngine blockEngine = this.getBlockLightEngine();
+        try {
+            final it.unimi.dsi.fastutil.longs.LongIterator keys = this.lucis$pendingEdits.keySet().iterator();
+            while (keys.hasNext()) {
+                final long key = keys.nextLong();
+                if (key == keepKey) {
+                    continue;
+                }
+                final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> positions = this.lucis$pendingEdits.get(key);
+                keys.remove();
+                if (positions == null || positions.isEmpty()) {
+                    continue;
+                }
+                final int chunkX = CoordinateUtils.getChunkX(key);
+                final int chunkZ = CoordinateUtils.getChunkZ(key);
+                final long lucisT0 = System.nanoTime();
+                try {
+                    if (skyEngine != null) {
+                        skyEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, positions, null);
+                    }
+                    if (blockEngine != null) {
+                        blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, positions, null);
+                    }
+                    if (LuxProfiler.enabled()) {
+                        LuxProfiler.ownEditNanos += System.nanoTime() - lucisT0;
+                        LuxProfiler.ownEditInline++;
+                        LuxProfiler.ownEditBatched += positions.size();
+                    }
+                } catch (Throwable t) {
+                    if (LuxProfiler.enabled()) {
+                        LuxProfiler.ownEditFallback++;
+                    }
+                }
+            }
+        } finally {
+            this.releaseSkyLightEngine(skyEngine);
+            this.releaseBlockLightEngine(blockEngine);
+        }
+    }
+
     public LightQueue.ChunkTasks blockChange(final BlockPos pos) {
         if (this.world == null || pos.getY() < WorldUtil.getMinBlockY(this.world) || pos.getY() > WorldUtil.getMaxBlockY(this.world)) { // empty world
             return null;
         }
         if (SableCompat.isSablePlotChunk(this.world, pos.getX() >> 4, pos.getZ() >> 4)) {
             // Sable's plots carry their own per-plot light engine; leave them alone (see SableCompat)
+            return null;
+        }
+        if (LUCIS_OWN_EDIT && this.lucis$ownEditInline(pos)) {
+            // handled here: propagated, installed and published; nothing was queued
             return null;
         }
 
@@ -606,6 +735,7 @@ public final class StarLightInterface {
     }
 
     public CompletableFuture<Void> syncFuture(final int chunkX, final int chunkZ) {
+        this.lucis$flushPendingEdits();
         return this.lightQueue.getChunkSyncFuture(chunkX, chunkZ).thenApply(Function.identity());
     }
 
@@ -879,6 +1009,11 @@ public final class StarLightInterface {
             }
             long writeStamp;
             if (tryReadAgain) {
+                // THE READ LOCK THE BRANCH BELOW ASSUMES: it calls unlockRead(stamp) and tryConvertToWriteLock(stamp),
+                // both of which require a real read stamp. Before this line, `stamp` was still the value from
+                // tryOptimisticRead - which is not an ownership token - so unlockRead threw IllegalMonitorStateException
+                // whenever the optimistic read was invalidated by a concurrent writer and a task already existed
+                // (a real, intermittent race, reproduced here on block_toggle_border / chunk-generation traffic).
                 stamp = this.tasksLock.readLock();
                 try {
                     tasks = this.chunkTasks.get(key);

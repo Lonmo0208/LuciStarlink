@@ -85,3 +85,57 @@
 2. 自持场改动 → 写回 section（逐格相等，且 updating/visible 都写）；
 3. 与 SL 引擎对同一编辑的结果逐格比对（差分探针）。
 **这一件事做成，后面才有意义；做不成（例如同步成本太高），按熔断在 R1 就停。**
+
+## 7. 里程碑实况（2026-09-22 夜）
+
+**R1 ✅ PASS**：`OwnLightField` 整段往返 `cells=4096 mismatches=0 roundTripNanos=1158`（逐格、含 updating+visible、含邻格未被污染）。
+
+**R2 ✅ 机制成立 / ❌ 单独不达标**：`-Dscalablelux.ownEdit=true` 在 `blockChange` 内直接调 `blocksChangedInChunk`（不经队列）。
+* 指纹三档一致（`sky=905931078dfc5ace block=59e2252f732ce67b`）；
+* **四阶段无挂死**（12 次尝试里第一次）；
+* 但"一个改动一次调用"成本 ~20 µs/次（`setupCaches`/`destroyCaches` 主导）⇒ 建筑档 34.6 ms、拆/放 6.10 ms（基线 4.41）。**这正是 L3"传播取两家之长"的必要性。**
+
+**R3 ✅ 合并生效**：改动先攒进"该区块的待办集合"，在**换区块 / 集合满 256 / `syncFuture`（完成请求）/ `hasUpdates()`（每 tick 必到的引擎查询）**四个点刷新，一次调用处理整批。
+* **~20 次调用处理 4100 个改动**（合并比 ≈200×），`ownEditBatched` 逐 pass 可见；
+* 指缴一致、四阶段无挂死（关探针的 A/B 六轮全绿）；
+* **建筑档 minPass 4.32 ms**（基线 6.14、1.x 6.09）→ **该档已胜**；
+* 拆/放档 4.26 vs 基线 4.41 → 略胜，**未达 1.5 ms**；
+* 与队列相比少了"完成信号"这一整块（我们从不入队，`getChunkSyncFuture` 无任务时返回已完成的 future ✓ 已确认）。
+
+**一个底座侧的真实故障（待处理）**：`border + 探针开 + ownEdit 开` 的一轮里，区块生成期抛出
+`IllegalMonitorStateException @ StampedLock.unlockRead` ← `ConcurrentLightQueue.getOrCreateChunkTasks` ← `queueChunkLighting` ← `lightChunk` ← `ChunkStatusTasks.light`。
+**是底座队列自己的锁协议**，关探针的同 jar A/B（六轮）与结构档开探针都正常 ⇒ 我们的额外服务器线程引擎工作很可能只是"踩醒"了它。
+**对策（下一步）**：收紧就地通行的资格——只在**该区块与其 3×3 邻域都已加载且 ≥LIGHT / light-correct**（即 SL 自己 `canUseChunk` 的语义）时才走就地路径，其余一律交回队列。这同时满足"只有完全就绪才当场算"的设计原则。
+
+**拆/放档剩余 ~4 ms 的归因方向（下一步）**：已知它不是入队、不是完成信号、不是批量开销（三者都已排除）；接下来量 `blocksChangedInChunk` 内部的 **setupCaches / 传播 / updateVisible** 三段，判断是"边界传播算法本身贵"还是"可见层发布贵"。
+
+## 8. 归因结果 + 一个底座崩溃级 bug 被修掉（2026-09-22 深夜）
+
+**先修了一个底座的真 bug（崩溃级）。** 拆/放档 + 探针的每一轮都抛
+`IllegalMonitorStateException @ StampedLock.unlockRead ← ConcurrentLightQueue.getOrCreateChunkTasks ← queueChunkLighting ← lightChunk ← ChunkStatusTasks.light`，
+随后 "Exception generating new chunk" → 服务器停止。**对照实验证明与 R2/R3 无关**（`ownEdit` 关掉、同 jar、同参数，异常一模一样）。根因在底座队列：
+
+```java
+long stamp = this.tasksLock.tryOptimisticRead();   // 乐观读：不是持有凭证
+...
+if (tryReadAgain) {                                 // 校验失败进入此分支
+    tasks = this.chunkTasks.get(key);
+    if (tasks != null) { this.tasksLock.unlockRead(stamp); return tasks; }   // ← 用乐观 stamp 解锁
+    writeStamp = this.tasksLock.tryConvertToWriteLock(stamp);                // ← 同样需要真实读锁 stamp
+```
+**该分支从未真正获取读锁**，却调用 `unlockRead`/`tryConvertToWriteLock` ⇒ 竞态触发崩溃。修法：在该分支开头补上 `stamp = this.tasksLock.readLock();`。
+**验证：拆/放档 + 探针连续三轮 `rc=0`、零异常**（修复前每轮必挂）。生产服务器同样可能撞上这个竞态，值得单独记录/上报上游。
+
+**归因：拆/放档的 ~4 ms 是真实传播工作，队列只是把它藏进了"等待"。** 给 `StarLightEngine.blocksChangedInChunk` 加了两段常开计时（`setupNanos` / `workNanos`，成本 ~50 ns/次，不依赖探针开关）：
+
+| 拆/放档，每 pass（**异步路径**，`ownEditInline=0`） | 实测 |
+|---|---|
+| setupCaches（建缓存） | **0.11–0.17 ms**（≈5 µs/次，可忽略） |
+| **传播 + 发布（work）** | **4.2–11.9 ms** ← 真正的成本 |
+| 入队 / 锁 / 完成信号 | 已排除 |
+
+⇒ **同一批改动的传播成本在两条路径上都存在**（4–5 ms），异步路径把它记在 `wait`（4.4 ms），我们的就地路径把它记在 `apply`（4.8 ms）——所以两者读数接近不是巧合，而是**同一笔工作**。1.x 做同样的活只要 **1.26–3.4 ms** ⇒ **剩下的差距是算法：跨区块边界的传播成本**，不是调度/完成/批量（这三样都已解决）。
+
+**下一步（算法侧）**：把 `workNanos` 再拆成"传播（`propagateBlockChanges`）"与"可见层发布（`updateVisible`）"，判断 1.x 的优势来自哪一侧（它的做法是：区域重算摊销 + 只发布变脏的分区）。
+
+

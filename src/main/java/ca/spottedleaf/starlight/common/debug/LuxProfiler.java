@@ -35,6 +35,12 @@ public final class LuxProfiler {
 
     public static long queueTaskCalls;
     public static long queueTaskSampled;
+    public static long ownEditInline;
+    public static long ownEditBatched;
+    public static long ownEditNanos;
+    public static long ownEditSetupNanos;
+    public static long ownEditWorkNanos;
+    public static long ownEditFallback;
     public static long queueTaskSampledNanos;
     public static long queueTaskNotReady;      // chunk missing or not at LIGHT status
     public static long queueTaskInline;        // ran inline (non-full ticket / gen thread)
@@ -130,6 +136,12 @@ public final class LuxProfiler {
         checkBlockSampledNanos = 0;
         queueTaskCalls = 0;
         queueTaskSampled = 0;
+        ownEditInline = 0;
+        ownEditBatched = 0;
+        ownEditNanos = 0;
+        ownEditSetupNanos = 0;
+        ownEditWorkNanos = 0;
+        ownEditFallback = 0;
         queueTaskSampledNanos = 0;
         queueTaskNotReady = 0;
         queueTaskInline = 0;
@@ -164,6 +176,12 @@ public final class LuxProfiler {
                 + " checkBlockNanosEst=" + scale(checkBlockSampledNanos)
                 + " queueTask=" + queueTaskCalls
                 + " queueTaskNanosEst=" + scale(queueTaskSampledNanos)
+                + " ownEditInline=" + ownEditInline
+                + " ownEditBatched=" + ownEditBatched
+                + " ownEditNanos=" + ownEditNanos
+                + " setupNanos=" + ownEditSetupNanos
+                + " workNanos=" + ownEditWorkNanos
+                + " ownEditFallback=" + ownEditFallback
                 + " qNotReady=" + queueTaskNotReady
                 + " qInline=" + queueTaskInline
                 + " qResched=" + queueTaskRescheduled
