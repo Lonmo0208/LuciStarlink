@@ -316,11 +316,18 @@ public final class OwnSkySweepProbe {
     }
 
     /** 0 = provably transparent (opacity 0), 1 = blocks the run, 2 = opacity not cached yet. */
+    /** The cell's RAW opacity (0..15), or MATERIAL_UNCACHED. It used to return a 0/1/2 classification, which the
+     *  fix-up BFS then used AS the attenuation - so the probe let light pass through stone and reported 1,701 cells in
+     *  chunk (0,0) as "the rule is brighter", while the engine (using the real opacity) correctly left them dark. The
+     *  engine-side point print ("SKYRECOMPUTE-DEBUG ... mat=15") is what exposed it.
+     */
     private static int materialOf(final BlockGetter getter, final BlockPos pos) {
         final BlockState state = getter.getBlockState(pos);
         final int opacity = ((ExtendedAbstractBlockState) state).scalablelux$getOpacityIfCached();
-        return opacity == 0 ? 0 : (opacity > 0 ? 1 : 2);
+
+        return opacity >= 0 ? opacity : ExtendedChunk.MATERIAL_UNCACHED;
     }
+
     /** Flat index of a cell inside the probe box: y-major, then z, then x. */
     private static int boxIndex(final int x, final int y, final int z,
                                 final int minX, final int minY, final int minZ, final int maxX, final int maxZ) {

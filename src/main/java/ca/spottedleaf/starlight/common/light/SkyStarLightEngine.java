@@ -886,6 +886,30 @@ public final class SkyStarLightEngine extends StarLightEngine {
             }
         }
 
+        if (Boolean.getBoolean("scalablelux.recomputeDebug")) {
+            // Point-name the cells the probe reports as "rule is brighter", so the engine-side scratch can be compared
+            // with the off-engine prototype's value for the same cell side by side (docs section 24).
+            final int[][] probeCells = {{12, 54, 0}, {12, 63, 0}, {13, 51, 0}, {12, 40, 0}};
+
+            for (final int[] cell : probeCells) {
+                final int x = cell[0];
+                final int y = cell[1];
+                final int z = cell[2];
+                final int index = (y - minY) * 256 + ((z << 4) | x);
+
+                this.logRecomputeDebug("cell (" + x + "," + y + "," + z + ")"
+                        + " scratch=" + (light[index] & 0xFF)
+                        + " before=" + (before[index] & 0xFF)
+                        + " mat=" + (material[index] & 0xFF)
+                        + " runHere=" + runs[(z + 1) * 18 + (x + 1)]
+                        + " runW=" + runs[(z + 1) * 18 + x]
+                        + " runE=" + runs[(z + 1) * 18 + (x + 2)]
+                        + " runN=" + runs[z * 18 + (x + 1)]
+                        + " runS=" + runs[(z + 2) * 18 + (x + 1)]
+                        + " queueLen=" + tail);
+            }
+        }
+
         // ---- 6) install: raise only, and push every raised cell so neighbouring chunks receive the light as well
         final long propagateDirection = AxisDirection.POSITIVE_Y.everythingButThisDirection;
 
@@ -984,4 +1008,8 @@ public final class SkyStarLightEngine extends StarLightEngine {
         }
         return queue;
 }
+    /** One diagnostic line, prefixed so it can be grepped out of a run log. */
+    private void logRecomputeDebug(final String message) {
+        System.out.println("SKYRECOMPUTE-DEBUG chunk=" + " " + message);
+    }
 }
