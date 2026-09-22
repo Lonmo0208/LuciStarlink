@@ -317,6 +317,7 @@ public final class LuxServerBenchmark {
             if (current.equals(previous)) {
                 fingerprintOnce(level, true, refSky, refBlock, refStates); // settled: dump and diff from a stable read
                 LOGGER.info("Lux light fingerprint settled after {} passes: {}", attempt, current);
+                probeSkySweep(level);
                 return;
             }
             previous = current;
@@ -326,6 +327,41 @@ public final class LuxServerBenchmark {
     }
 
     private static final int FINGERPRINT_MAX_PASSES = 24;
+
+    /**
+     * Optional hook into the ScalableLux-side test class {@code OwnSkySweepProbe}, called right after the fingerprint
+     * settles: it asks whether a linear column sweep would reproduce this engine's skylight over the same box, and what
+     * the sweep costs per cell. Reflective on purpose - the class only exists in the LS-V2 rig jar, and the harness has
+     * to keep working with every other mod on the other sides. Enabled by
+     * {@code -Dlucistarlink.benchmark.skySweepProbe=true}; its output line starts with {@code SKYSWEEP-PROBE}.
+     */
+    private static void probeSkySweep(final ServerLevel level) {
+        if (!Boolean.getBoolean("lucistarlink.benchmark.skySweepProbe")) {
+            return;
+        }
+        final String box = LIGHT_FINGERPRINT_BOX;
+        final String[] parts = box.split(",");
+        if (parts.length != 6) {
+            LOGGER.error("Lux sky sweep probe needs the fingerprint box, got '{}'", box);
+            return;
+        }
+        try {
+            final int x1 = Integer.parseInt(parts[0].trim());
+            final int y1 = Integer.parseInt(parts[1].trim());
+            final int z1 = Integer.parseInt(parts[2].trim());
+            final int x2 = Integer.parseInt(parts[3].trim());
+            final int y2 = Integer.parseInt(parts[4].trim());
+            final int z2 = Integer.parseInt(parts[5].trim());
+            final Class<?> probe = Class.forName("ca.spottedleaf.starlight.common.light.own.OwnSkySweepProbe");
+            probe.getMethod("probeBox", net.minecraft.world.level.Level.class,
+                            int.class, int.class, int.class, int.class, int.class, int.class)
+                    .invoke(null, level, x1, y1, z1, x2, y2, z2);
+        } catch (final ClassNotFoundException absent) {
+            LOGGER.warn("Lux sky sweep probe requested but the class is not present on this side");
+        } catch (final Throwable throwable) {
+            LOGGER.error("Lux sky sweep probe failed", throwable);
+        }
+    }
 
     /** One full read of the box; returns the summary line, or null when the box is not configured. */
     private static String fingerprintOnce(final ServerLevel level, final boolean writeDump,
