@@ -464,7 +464,9 @@ public abstract class StarLightEngine {
             final long lucisVisibleT0 = System.nanoTime();
             this.updateVisible(lightAccess);
             LuxProfiler.ownEditVisibleNanos += System.nanoTime() - lucisVisibleT0;
-            LuxProfiler.ownEditWorkNanos += System.nanoTime() - lucisSetupT0;
+            final long lucisWork = System.nanoTime() - lucisSetupT0;
+            LuxProfiler.ownEditWorkNanos += lucisWork;
+            if (this instanceof SkyStarLightEngine) { LuxProfiler.ownEditSkyNanos += lucisWork; } else { LuxProfiler.ownEditBlkNanos += lucisWork; }
         } finally {
             this.destroyCaches();
         }
@@ -743,7 +745,9 @@ public abstract class StarLightEngine {
                 this.setEmptinessMap(chunk, ret);
             }
             this.updateVisible(lightAccess);
-            LuxProfiler.ownEditWorkNanos += System.nanoTime() - lucisSetupT0;
+            final long lucisWork = System.nanoTime() - lucisSetupT0;
+            LuxProfiler.ownEditWorkNanos += lucisWork;
+            if (this instanceof SkyStarLightEngine) { LuxProfiler.ownEditSkyNanos += lucisWork; } else { LuxProfiler.ownEditBlkNanos += lucisWork; }
         } finally {
             this.destroyCaches();
         }
@@ -764,7 +768,9 @@ public abstract class StarLightEngine {
                 this.setEmptinessMap(chunk, ret);
             }
             this.updateVisible(lightAccess);
-            LuxProfiler.ownEditWorkNanos += System.nanoTime() - lucisSetupT0;
+            final long lucisWork = System.nanoTime() - lucisSetupT0;
+            LuxProfiler.ownEditWorkNanos += lucisWork;
+            if (this instanceof SkyStarLightEngine) { LuxProfiler.ownEditSkyNanos += lucisWork; } else { LuxProfiler.ownEditBlkNanos += lucisWork; }
         } finally {
             this.destroyCaches();
         }
@@ -954,7 +960,9 @@ public abstract class StarLightEngine {
             this.lightChunk(lightAccess, chunk, true);
             this.setNibbles(chunk, nibbles);
             this.updateVisible(lightAccess);
-            LuxProfiler.ownEditWorkNanos += System.nanoTime() - lucisSetupT0;
+            final long lucisWork = System.nanoTime() - lucisSetupT0;
+            LuxProfiler.ownEditWorkNanos += lucisWork;
+            if (this instanceof SkyStarLightEngine) { LuxProfiler.ownEditSkyNanos += lucisWork; } else { LuxProfiler.ownEditBlkNanos += lucisWork; }
         } finally {
             this.destroyCaches();
         }
