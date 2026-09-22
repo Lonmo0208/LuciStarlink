@@ -153,15 +153,20 @@ public final class OwnSkySweepProbe {
         }
 
         // ---- the reformulation itself, validated off-engine ------------------------------------------------
-        // Two questions, and they need different references:
-        //  (a) can a cheap seed set (run bottoms + wall faces) reproduce the engine?   -> section 20, answered: no
-        //  (b) if we were allowed to define the light ourselves, how much would change? -> this one, and it needs the
-        //      rule's own fixed point, which is what seeding EVERY run cell gives (the engine's increase rule applied
-        //      from scratch). The mismatch against the stored light is then exactly the price of dropping the
-        //      "bit-identical to vanilla" promise: those cells would take a different value than the history left them.
+        //  (a) can a cheap seed set reproduce the engine?  Section 20 said no, but that probe skipped the box's EDGE
+        //      columns while comparing from minX+1 - the columns next to the unseeded edge were guaranteed dark. This
+        //      run seeds the same cheap set over EVERY column, so the question is finally fair.
+        //  (b) what does the rule itself produce? Every run cell seeded = the rule's fixed point; its difference from
+        //      the stored light is the price of dropping bit-identity (section 21 measured 6.5%, all one-directional).
+        // Both are computed here, over the same material, and reported separately.
         final byte[] mine = new byte[cells];
+        final byte[] mineFull = new byte[cells];
         final int[] seedQueue = new int[cells * 8]; // a cell can be pushed more than once as its level grows
+        final int[] seedQueueFull = new int[cells * 8];
         int seedCount = 0;
+        int seedCountFull = 0;
+        final int[] runBottoms = new int[width * depth]; // the lowest lit cell of each column, or MIN_VALUE
+        java.util.Arrays.fill(runBottoms, Integer.MIN_VALUE);
         final long algorithmT0 = System.nanoTime();
         for (int z = minZ; z <= maxZ; z++) {
             for (int x = minX; x <= maxX; x++) {
@@ -171,50 +176,61 @@ public final class OwnSkySweepProbe {
                         break;
                     }
                     mine[index] = 15;
-                    seedQueue[seedCount++] = index; // every source cell: the rule's fixed point, not a heuristic subset
+                    mineFull[index] = 15;
+                    seedQueueFull[seedCountFull++] = index; // the rule's fixed point, not a heuristic subset
+                    runBottoms[(z - minZ) * width + (x - minX)] = y;
                 }
             }
         }
-        final long sweepOnlyNanos = System.nanoTime() - algorithmT0;
-        int head = 0;
-        int tail = seedCount;
-        while (head < tail) {
-            final int index = seedQueue[head++];
-            final int seedLevel = mine[index] & 0xFF;
-            if (seedLevel <= 1) {
-                continue;
-            }
-            final int y = minY + index / (width * depth);
-            final int rem = index % (width * depth);
-            final int z = minZ + rem / width;
-            final int x = minX + rem % width;
-            for (int dir = 0; dir < 5; dir++) {
-                final int nx = x + (dir == 0 ? -1 : dir == 1 ? 1 : 0);
-                final int ny = y + (dir == 4 ? -1 : 0);
-                final int nz = z + (dir == 2 ? -1 : dir == 3 ? 1 : 0);
-                if (nx < minX || nx > maxX || ny < minY || nz < minZ || nz > maxZ) {
+        // The cheap shell: a lit cell is a source only where light can actually LEAVE its column - at the run bottom
+        // (attenuated light through whatever ended the run), or where a neighbouring column's run ends BELOW this cell's
+        // height, i.e. the neighbour is dark at this Y and light has to spill sideways. The previous attempt tested the
+        // neighbouring *cell's* material instead, which misses exactly that case: a transparent neighbour under a
+        // ceiling is dark while its own cell is air - that is why it under-propagated 86,669 cells.
+        for (int z = minZ; z <= maxZ; z++) {
+            for (int x = minX; x <= maxX; x++) {
+                final int runBottom = runBottoms[(z - minZ) * width + (x - minX)];
+
+                if (runBottom == Integer.MIN_VALUE) {
                     continue;
                 }
-                final int nIndex = boxIndex(nx, ny, nz, minX, minY, minZ, maxX, maxZ);
-                final int cellOpacity = materialCells[nIndex] & 0xFF;
-                if (cellOpacity == ExtendedChunk.MATERIAL_UNCACHED) {
-                    continue;
-                }
-                final int target = seedLevel - Math.max(1, cellOpacity);
-                if (target > (mine[nIndex] & 0xFF)) {
-                    mine[nIndex] = (byte) target;
-                    if (target > 1) {
-                        seedQueue[tail++] = nIndex;
+                for (int y = runBottom; y <= maxY; y++) {
+                    final int index = boxIndex(x, y, z, minX, minY, minZ, maxX, maxZ);
+
+                    if ((mine[index] & 0xFF) != 15) {
+                        continue;
+                    }
+                    boolean seed = y == runBottom;
+
+                    for (int dir = 0; dir < 4 && !seed; dir++) {
+                        final int nx = x + (dir == 0 ? -1 : dir == 1 ? 1 : 0);
+                        final int nz = z + (dir == 2 ? -1 : dir == 3 ? 1 : 0);
+
+                        if (nx < minX || nx > maxX || nz < minZ || nz > maxZ) {
+                            seed = true; // outside the box: the neighbour's run is unknown here, so err towards seeding
+                            break;
+                        }
+                        final int neighbourRunBottom = runBottoms[(nz - minZ) * width + (nx - minX)];
+
+                        if (neighbourRunBottom == Integer.MIN_VALUE || neighbourRunBottom > y) {
+                            seed = true;
+                        }
+                    }
+                    if (seed) {
+                        seedQueue[seedCount++] = index;
                     }
                 }
             }
         }
-        int mineZeroTruthLit = 0;
-        int mineLitTruthZero = 0;
-        int bothLitDifferent = 0;
+        final long sweepOnlyNanos = System.nanoTime() - algorithmT0;
+        solveIncrease(mine, seedQueue, seedCount, materialCells, minX, minY, minZ, maxX, maxY, maxZ);
+        final long cheapNanos = System.nanoTime() - algorithmT0;
+        final long fullNanos = cheapNanos;
+        solveIncrease(mineFull, seedQueueFull, seedCountFull, materialCells, minX, minY, minZ, maxX, maxY, maxZ);
         final StringBuilder examples = new StringBuilder();
-        final long algorithmNanos = System.nanoTime() - algorithmT0;
-        int algorithmMismatch = 0;
+        int cheapMismatch = 0;
+        int cheapDarker = 0;
+        int fullMismatch = 0;
         int compared = 0;
         for (int z = minZ + 1; z < maxZ; z++) {
             for (int x = minX + 1; x < maxX; x++) {
@@ -222,41 +238,28 @@ public final class OwnSkySweepProbe {
                     compared++;
                     final int index = boxIndex(x, y, z, minX, minY, minZ, maxX, maxZ);
                     final int myValue = mine[index] & 0xFF;
+                    final int fullValue = mineFull[index] & 0xFF;
                     final int truth = lightCells[index] & 0xFF;
 
-                    if (myValue == truth) {
-                        continue;
-                    }
-                    algorithmMismatch++;
-                    if (myValue == 0) {
-                        mineZeroTruthLit++;
-                    } else if (truth == 0) {
-                        mineLitTruthZero++;
-                    } else {
-                        bothLitDifferent++;
-                    }
-                    if (examples.length() < 240) {
-                        // read the engine's INTERNAL nibble as well as the published value: part of the mismatch could be
-                        // a publish artefact rather than a different computation, and this pair tells the two apart
-                        int internal = -1;
-                        final ChunkAccess cellChunk = level.getChunkSource().getChunk(x >> 4, z >> 4, ChunkStatus.FULL, false);
-
-                        if (cellChunk != null) {
-                            final SWMRNibbleArray[] nibbles = ((ExtendedChunk) cellChunk).scalablelux$getSkyNibbles();
-                            final int section = (y >> 4) - WorldUtil.getMinLightSection(level);
-
-                            if (nibbles != null && section >= 0 && section < nibbles.length && nibbles[section] != null) {
-                                internal = nibbles[section].getUpdating(((y & 15) << 8) | ((z & 15) << 4) | (x & 15));
-                            }
+                    if (myValue != truth) {
+                        cheapMismatch++;
+                        if (myValue < truth) {
+                            cheapDarker++;
                         }
-                        examples.append("(").append(x).append(',').append(y).append(',').append(z)
-                                .append(" mine=").append(myValue).append(" vis=").append(truth)
-                                .append(" nib=").append(internal).append(" mat=").append(materialCells[index] & 0xFF)
-                                .append(") ");
+                        if (examples.length() < 400) {
+                            examples.append("(").append(x).append(',').append(y).append(',').append(z)
+                                    .append(" cheap=").append(myValue).append(" full=").append(fullValue)
+                                    .append(" vis=").append(truth)
+                                    .append(" mat=").append(materialCells[index] & 0xFF).append(") ");
+                        }
+                    }
+                    if (fullValue != truth) {
+                        fullMismatch++;
                     }
                 }
             }
         }
+        final long algorithmNanos = System.nanoTime() - algorithmT0;
         final long flatNanos = (System.nanoTime() - flatT0) / rounds;
 
         System.out.println("SKYSWEEP-PROBE box=" + minX + "," + minY + "," + minZ + ".." + maxX + "," + maxY + "," + maxZ
@@ -275,15 +278,14 @@ public final class OwnSkySweepProbe {
                 + " flatSweepNsPerCell=" + (cells == 0 ? 0L : flatNanos / cells)
                 + " flatSweepOneChunkNanos=" + (cells == 0 ? 0L : (98304L * (flatNanos / Math.max(1L, cells))))
                 + " flatSweepSink=" + (flatSweepOut[cells - 1] + lightCells[0])
-                + " algorithmSeeds=" + seedCount
-                + " algorithmCompared=" + compared
-                + " algorithmMismatch=" + algorithmMismatch
-                + " sweepOnlyNanos=" + sweepOnlyNanos
-                + " algorithmNanos=" + algorithmNanos
-                + " algorithmNsPerCell=" + (compared == 0 ? 0L : algorithmNanos / compared)
-                + " mineZeroTruthLit=" + mineZeroTruthLit
-                + " mineLitTruthZero=" + mineLitTruthZero
-                + " bothLitDifferent=" + bothLitDifferent);
+                + " cheapSeeds=" + seedCount
+                + " cheapMismatch=" + cheapMismatch
+                + " cheapDarker=" + cheapDarker
+                + " cheapNanos=" + cheapNanos
+                + " fullSeeds=" + seedCountFull
+                + " fullMismatch=" + fullMismatch
+                + " fullNanos=" + fullNanos
+                + " compared=" + compared);
         System.out.println("SKYSWEEP-EXAMPLES " + examples);
     }
 
@@ -297,5 +299,50 @@ public final class OwnSkySweepProbe {
     private static int boxIndex(final int x, final int y, final int z,
                                 final int minX, final int minY, final int minZ, final int maxX, final int maxZ) {
         return ((y - minY) * (maxZ - minZ + 1) + (z - minZ)) * (maxX - minX + 1) + (x - minX);
+    }
+    /** The engine's own increase rule over the probe's arrays, from the given seeds, to a fixed point. */
+    private static void solveIncrease(final byte[] field, final int[] queue, final int seedCount, final byte[] material,
+                                      final int minX, final int minY, final int minZ, final int maxX, final int maxY, final int maxZ) {
+        final int width = maxX - minX + 1;
+        final int depth = maxZ - minZ + 1;
+        int head = 0;
+        int tail = seedCount;
+
+        while (head < tail) {
+            final int index = queue[head++];
+            final int level = field[index] & 0xFF;
+
+            if (level <= 1) {
+                continue;
+            }
+            final int y = minY + index / (width * depth);
+            final int rem = index % (width * depth);
+            final int z = minZ + rem / width;
+            final int x = minX + rem % width;
+
+            for (int dir = 0; dir < 5; dir++) { // four horizontals and down: skylight never propagates upward
+                final int nx = x + (dir == 0 ? -1 : dir == 1 ? 1 : 0);
+                final int ny = y + (dir == 4 ? -1 : 0);
+                final int nz = z + (dir == 2 ? -1 : dir == 3 ? 1 : 0);
+
+                if (nx < minX || nx > maxX || ny < minY || nz < minZ || nz > maxZ) {
+                    continue;
+                }
+                final int nIndex = boxIndex(nx, ny, nz, minX, minY, minZ, maxX, maxZ);
+                final int opacity = material[nIndex] & 0xFF;
+
+                if (opacity == ExtendedChunk.MATERIAL_UNCACHED) {
+                    continue;
+                }
+                final int target = level - Math.max(1, opacity);
+
+                if (target > (field[nIndex] & 0xFF)) {
+                    field[nIndex] = (byte) target;
+                    if (target > 1 && tail < queue.length) {
+                        queue[tail++] = nIndex;
+                    }
+                }
+            }
+        }
     }
 }
