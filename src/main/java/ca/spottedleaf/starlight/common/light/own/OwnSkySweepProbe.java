@@ -96,6 +96,58 @@ public final class OwnSkySweepProbe {
         }
         final long nanos = System.nanoTime() - t0;
 
+        // The decisive number for the reformulation: what does the SAME sweep cost when it runs over plain arrays
+        // instead of through getLightValue()/getBlockState()? 1.x's whole engine time on structure_cube is 0.26 ms,
+        // i.e. one 98,304-cell chunk at ~2.5 ns/cell - so if the flat sweep is not at that order, the reformulation has
+        // no path and the cell stays as it is. This is pure array work: no engine, no world, no palette.
+        final byte[] materialCells = new byte[cells];
+        final byte[] lightCells = new byte[cells];
+        final byte[] flatSweepOut = new byte[cells];
+        for (int i = 0; i < cells; i++) {
+            lightCells[i] = (byte) 0; // filled below by the same walk, so the buffer is real, not a copy of nothing
+        }
+        final int width = maxX - minX + 1;
+        final int depth = maxZ - minZ + 1;
+        {
+            int cursor = 0;
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    for (int x = minX; x <= maxX; x++) {
+                        pos.set(x, y, z);
+                        materialCells[cursor] = (byte) materialOf(getter, pos);
+                        lightCells[cursor] = (byte) sky.getLightValue(pos);
+                        cursor++;
+                    }
+                }
+            }
+        }
+        final long flatT0 = System.nanoTime();
+        final int rounds = 8;
+        final boolean[] blocked = new boolean[width * depth];
+        for (int round = 0; round < rounds; round++) {
+            java.util.Arrays.fill(flatSweepOut, (byte) 0);
+            java.util.Arrays.fill(blocked, false);
+            for (int y = maxY; y >= minY; y--) {
+                final int plane = (y - minY) * width * depth;
+                for (int z = minZ; z <= maxZ; z++) {
+                    final int row = plane + (z - minZ) * width;
+                    for (int x = 0; x < width; x++) {
+                        final int column = (z - minZ) * width + x;
+                        if (blocked[column]) {
+                            continue;
+                        }
+                        final int index = row + x;
+                        if (materialCells[index] != 0) {
+                            blocked[column] = true;
+                        } else {
+                            flatSweepOut[index] = 15;
+                        }
+                    }
+                }
+            }
+        }
+        final long flatNanos = (System.nanoTime() - flatT0) / rounds;
+
         System.out.println("SKYSWEEP-PROBE box=" + minX + "," + minY + "," + minZ + ".." + maxX + "," + maxY + "," + maxZ
                 + " columns=" + columns
                 + " cells=" + cells
@@ -107,7 +159,11 @@ public final class OwnSkySweepProbe {
                 + " nsPerCell=" + (cells == 0 ? 0L : nanos / cells)
                 + " ruleCoveragePct=" + (cells == 0 ? 0L : (100L * inRun / cells))
                 + " fixupCells=" + (cells - inRun + inRunMismatch)
-                + " fixupCostEstNanos=" + ((long) (cells - inRun + inRunMismatch) * 32L));
+                + " fixupCostEstNanos=" + ((long) (cells - inRun + inRunMismatch) * 32L)
+                + " flatSweepNanos=" + flatNanos
+                + " flatSweepNsPerCell=" + (cells == 0 ? 0L : flatNanos / cells)
+                + " flatSweepOneChunkNanos=" + (cells == 0 ? 0L : (98304L * (flatNanos / Math.max(1L, cells))))
+                + " flatSweepSink=" + (flatSweepOut[cells - 1] + lightCells[0]));
     }
 
     /** 0 = provably transparent (opacity 0), 1 = blocks the run, 2 = opacity not cached yet. */
