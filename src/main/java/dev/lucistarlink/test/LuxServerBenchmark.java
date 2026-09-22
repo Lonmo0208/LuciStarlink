@@ -60,6 +60,20 @@ public final class LuxServerBenchmark {
     private static final int PREPARE_RING_CHUNKS = Math.max(0,
             Integer.getInteger("lucistarlink.benchmark.prepareRing", 1));
 
+    /**
+     * Whether a pass also waits for the light engine's GLOBAL queue to be empty.
+     *
+     * <p>Default true keeps the historical behaviour. Set
+     * {@code -Dlucistarlink.benchmark.globalEngineBarrier=false} to settle on the measured box's own chunk futures
+     * instead. Why it matters, measured 2026-09-22: on the ScalableLux line the engine's global queue also holds the
+     * light work of chunks the server keeps generating in the background, so the barrier measures that backlog
+     * rather than the edit's latency - a single-block edit (1 change per pass) cost the same ~14 ticks as 81
+     * changes, and `bench.barrier.enginePending` was the only waiter that ever fired. 1.x is unaffected because its
+     * engine lights generated chunks synchronously, so its queue is empty during the measured passes.
+     */
+    private static final boolean GLOBAL_ENGINE_BARRIER =
+            !"false".equalsIgnoreCase(System.getProperty("lucistarlink.benchmark.globalEngineBarrier", "true"));
+
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int FLAGS = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE;
     private static final int FULL_CHUNK_TICKET_RADIUS = 1;
@@ -125,12 +139,18 @@ public final class LuxServerBenchmark {
         };
     }
 
+    /** Radius of the sky_hole patch: 0 -> 1 change, 1 -> 9, 2 -> 25 (the historical shape), n -> (2n+1)^2. */
+    private static int skyHoleRadius() {
+        return Math.max(0, Math.min(8, Integer.getInteger("lucistarlink.benchmark.skyHoleRadius", 2)));
+    }
+
     private static int applySkyHolePreparationPattern(ServerLevel level, BenchmarkConfig config, BlockState state, int flags) {
         int changes = 0;
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         int roofY = config.y() + 24;
-        for (int z = -2; z <= 2; z++) {
-            for (int x = -2; x <= 2; x++) {
+        final int radius = skyHoleRadius();
+        for (int z = -radius; z <= radius; z++) {
+            for (int x = -radius; x <= radius; x++) {
                 pos.set(config.originX() + x, roofY, config.originZ() + z);
                 if (level.setBlock(pos, state, flags)) {
                     changes++;
@@ -552,8 +572,9 @@ public final class LuxServerBenchmark {
         int changes = 0;
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         int roofY = config.y() + 24;
-        for (int z = -2; z <= 2; z++) {
-            for (int x = -2; x <= 2; x++) {
+        final int radius = skyHoleRadius();
+        for (int z = -radius; z <= radius; z++) {
+            for (int x = -radius; x <= radius; x++) {
                 pos.set(config.originX() + x, roofY, config.originZ() + z);
                 if (level.setBlock(pos, state, flags)) {
                     changes++;
@@ -892,7 +913,12 @@ public final class LuxServerBenchmark {
                         continue;
                     }
                     ChunkPos chunkPos = this.prepareChunks[pollIndex];
-                    if (chunkSource.getChunkNow(chunkPos.x, chunkPos.z) != null) {
+                    // A chunk that merely exists can still be generating: an edit landing in one pays the
+                    // ticket/load path instead of its own light work, which is what made the measured pass wall
+                    // bimodal (1..29 ticks for identical work, same engine - measured 2026-09-22). Require the
+                    // chunk to be at LIGHT before it counts as prepared.
+                    final var preparedChunk = chunkSource.getChunkNow(chunkPos.x, chunkPos.z);
+                    if (preparedChunk != null && preparedChunk.getPersistedStatus().isOrAfter(ChunkStatus.LIGHT)) {
                         this.preparedChunkLoaded[pollIndex] = true;
                         this.remainingPrepareChunks--;
                     } else if (firstPendingIndex < 0) {
@@ -998,7 +1024,7 @@ public final class LuxServerBenchmark {
             // generic barrier: also wait for the vanilla light engine to have no queued work, so a competing
             // engine (ScalableLux installs itself as the light engine) is measured with its async tasks settled
             // instead of excluding whatever spilled past the measurement window
-            boolean enginePending = this.level.getChunkSource().getLightEngine().hasLightWork();
+            boolean enginePending = GLOBAL_ENGINE_BARRIER && this.level.getChunkSource().getLightEngine().hasLightWork();
             boolean futurePending = future != null && !future.isDone();
             LuxBenchmarkSupport.count("bench.barrier.poll");
             if (futurePending) {
@@ -1201,7 +1227,7 @@ public final class LuxServerBenchmark {
             // real wall of the pass (apply -> first barrier that passed), which unlike the future timestamp
             // above includes the server tick boundaries the light work had to cross
             LuxBenchmarkSupport.record("bench.pass_wall_actual", Math.max(0L, System.nanoTime() - this.currentStartNanos));
-            LuxBenchmarkSupport.record("bench.pass_ticks", this.waitTicks);
+            LuxBenchmarkSupport.count("bench.pass_ticks", this.waitTicks);
             if (this.pass >= this.config.warmupPasses()) {
                 this.measuredNanos += elapsed;
                 this.measuredApplyNanos += this.currentApplyNanos;
