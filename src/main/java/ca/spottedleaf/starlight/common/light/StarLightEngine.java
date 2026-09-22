@@ -1316,7 +1316,10 @@ public abstract class StarLightEngine {
 
     /** R5: the per-cell opacity table (see {@link #materialBound(int)}). Off unless {@code
      *  -Dscalablelux.materialTable=true}; {@code materialCells} holds per-slot references to the chunk-owned tables. */
-    private static final boolean MATERIAL_TABLE = Boolean.getBoolean("scalablelux.materialTable");
+    // The recompute NEEDS the material table (without it every cell reads as "opacity not cached" and the whole
+    // rebuild silently becomes a no-op), so asking for one turns on the other.
+    private static final boolean MATERIAL_TABLE = Boolean.getBoolean("scalablelux.materialTable")
+            || Boolean.getBoolean("scalablelux.recomputeSky");
     private byte[][] materialCells;
     /** Section object each bound material table was validated against, so a replaced section forces a rebuild. */
     private LevelChunkSection[] materialSource;

@@ -358,7 +358,7 @@ public final class StarLightInterface {
     public boolean hasUpdates() {
         // a guaranteed, per-tick, server-thread call site (the harness's barrier and vanilla's tryScheduleUpdate both
         // come through here): the flush point for R3's coalesced edits, so nothing stays buffered across ticks
-        this.lucis$flushPendingEdits();
+        this.lucis$flushPendingEdits(-1L, true);
         return !this.lightQueue.isEmpty();
     }
 
@@ -482,6 +482,11 @@ public final class StarLightInterface {
     /** A chunk with at least this many changes in one burst is settled by ONE full relight instead of per-position seeds. */
     private static final boolean LUCIS_BULK_RELIGHT = Boolean.getBoolean("scalablelux.bulkRelight");
     private static final int LUCIS_BULK_MIN_CHANGES = Integer.getInteger("scalablelux.bulkMinChanges", 128);
+    /** R5: settle a bulk skylight change by the canonical recompute instead of the seeded BFS (see the sky engine). */
+    private static final boolean LUCIS_RECOMPUTE_SKY = Boolean.getBoolean("scalablelux.recomputeSky");
+    // 128, not 1024: the buffer flushes every 256 changes, so a bigger threshold could never be reached (the first
+    // version of this sat at 1024 and the recompute silently never ran).
+    private static final int LUCIS_RECOMPUTE_MIN = Integer.getInteger("scalablelux.recomputeMinChanges", 128);
 
     /**
      * R3: edits wait here per chunk so one engine call handles a whole burst instead of one call per block. Each flush
@@ -494,6 +499,10 @@ public final class StarLightInterface {
     private static final int LUCIS_PENDING_FLUSH_SIZE = 256;
     private final it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos>> lucis$pendingEdits =
             new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>();
+
+    /** R5: chunks whose skylight a bulk burst asked to recompute, drained at the settle points (see the flush). */
+    private final it.unimi.dsi.fastutil.longs.LongOpenHashSet lucis$pendingRecomputes =
+            new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
 
     /**
      * Whether the 3x3 neighbourhood of a chunk is loaded and past LIGHT (SL's own {@code canUseChunk} semantics). The
@@ -535,12 +544,12 @@ public final class StarLightInterface {
 
         // A new chunk means the previous burst is over: settle everything else first (edits usually arrive chunk by
         // chunk, so this is the cheap case), then buffer this position under its own chunk.
-        this.lucis$flushPendingEdits(key);
+        this.lucis$flushPendingEdits(key, false);
         final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> pending =
                 this.lucis$pendingEdits.computeIfAbsent(key, ignored -> new it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<>());
         pending.add(pos.immutable());
         if (pending.size() >= LUCIS_PENDING_FLUSH_SIZE) {
-            this.lucis$flushPendingEdits(-1L);
+            this.lucis$flushPendingEdits(-1L, false);
         }
         return true;
     }
@@ -550,11 +559,14 @@ public final class StarLightInterface {
      * Server thread only; a call from any other thread is ignored (the buffer stays for the next server-thread point).
      */
     private void lucis$flushPendingEdits() {
-        this.lucis$flushPendingEdits(-1L);
+        this.lucis$flushPendingEdits(-1L, true);
     }
 
-    private void lucis$flushPendingEdits(final long keepKey) {
-        if (this.lucis$pendingEdits.isEmpty()) {
+    private void lucis$flushPendingEdits(final long keepKey, final boolean settle) {
+        // NOTE: the recompute queue lives on after the edit buffer is drained - the 256-change flush empties it long
+        // before the settle points arrive, and returning early here silently skipped every deferred recompute (the sky
+        // half of a bulk burst was simply never done: faster, and wrong). Check both sets.
+        if (this.lucis$pendingEdits.isEmpty() && this.lucis$pendingRecomputes.isEmpty()) {
             return;
         }
         if (!(this.world instanceof ServerLevel serverLevel)
@@ -592,6 +604,7 @@ public final class StarLightInterface {
         final SkyStarLightEngine skyEngine = this.getSkyLightEngine();
         final BlockStarLightEngine blockEngine = this.getBlockLightEngine();
         try {
+            if (!this.lucis$pendingEdits.isEmpty()) {
             final it.unimi.dsi.fastutil.longs.LongIterator keys = this.lucis$pendingEdits.keySet().iterator();
             while (keys.hasNext()) {
                 final long key = keys.nextLong();
@@ -607,6 +620,25 @@ public final class StarLightInterface {
                 final int chunkZ = CoordinateUtils.getChunkZ(key);
                 final long lucisT0 = System.nanoTime();
                 try {
+                    // R5: a bulk skylight change is settled by ONE canonical recompute per chunk per burst, not per flush
+                    // (the buffer flushes every 256 changes, so a per-flush recompute would rebuild the same chunk 16
+                    // times on structure_cube). The sky half is therefore deferred to the settle points - hasUpdates()
+                    // and syncFuture(), which is where "the engine must be settled now" is asked - while the block half
+                    // runs here as always.
+                    final ChunkAccess chunkNow = this.getAnyChunkNow(chunkX, chunkZ);
+                    final boolean deferSky = LUCIS_RECOMPUTE_SKY && chunkNow != null
+                            && positions.size() >= LUCIS_RECOMPUTE_MIN;
+
+                    if (deferSky) {
+                        this.lucis$pendingRecomputes.add(key);
+                        if (blockEngine != null) {
+                            if (LUCIS_BATCH_DECREASE) {
+                                blockEngine.seedBlockChangesOnly(this.lightAccess, chunkX, chunkZ, positions);
+                            } else {
+                                blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, positions, null);
+                            }
+                        }
+                    } else {
                     final ChunkAccess bulkChunk = LUCIS_BULK_RELIGHT && positions.size() >= LUCIS_BULK_MIN_CHANGES
                             ? this.getAnyChunkNow(chunkX, chunkZ) : null;
                     if (bulkChunk != null) {
@@ -638,6 +670,7 @@ public final class StarLightInterface {
                             }
                         }
                     }
+                    }
                     if (LuxProfiler.enabled()) {
                         LuxProfiler.ownEditNanos += System.nanoTime() - lucisT0;
                         LuxProfiler.ownEditInline++;
@@ -649,11 +682,44 @@ public final class StarLightInterface {
                     }
                 }
             }
+            }
             if (blockEngine != null && LUCIS_BATCH_DECREASE) {
                 // the single consolidated drain (seeds above); one walk of the engine's queue instead of one per chunk
                 final long lucisDecT0 = System.nanoTime();
                 blockEngine.performLightDecrease(this.lightAccess);
                 LuxProfiler.ownEditDecBatchNanos += System.nanoTime() - lucisDecT0;
+            }
+            if (settle && !this.lucis$pendingRecomputes.isEmpty()) {
+                // R5: the deferred sky recomputes, one per chunk per burst (see the sky engine for what it does, and why
+                // it can only raise light). The settle points are hasUpdates()/syncFuture(), i.e. exactly the moments at
+                // which something is about to ask whether the engine has finished.
+                final it.unimi.dsi.fastutil.longs.LongIterator recomputeKeys = this.lucis$pendingRecomputes.iterator();
+
+                while (recomputeKeys.hasNext()) {
+                    final long key = recomputeKeys.nextLong();
+                    final int chunkX = CoordinateUtils.getChunkX(key);
+                    final int chunkZ = CoordinateUtils.getChunkZ(key);
+                    final ChunkAccess chunk = this.getAnyChunkNow(chunkX, chunkZ);
+
+                    if (chunk == null || skyEngine == null) {
+                        continue;
+                    }
+                    final long lucisRecT0 = System.nanoTime();
+
+                    skyEngine.setupCaches(this.lightAccess, chunkX * 16 + 7, 128, chunkZ * 16 + 7, true, true);
+                    try {
+                        skyEngine.recomputeChunkSkyLight(this.lightAccess, chunk);
+                        skyEngine.performLightIncrease(this.lightAccess);
+                        skyEngine.updateVisible(this.lightAccess);
+                    } finally {
+                        skyEngine.destroyCaches();
+                    }
+                    if (LuxProfiler.enabled()) {
+                        LuxProfiler.ownEditRecomputes++;
+                        LuxProfiler.ownEditRecomputeNanos += System.nanoTime() - lucisRecT0;
+                    }
+                }
+                this.lucis$pendingRecomputes.clear();
             }
         } finally {
             this.releaseSkyLightEngine(skyEngine);
@@ -823,7 +889,7 @@ public final class StarLightInterface {
     }
 
     public CompletableFuture<Void> syncFuture(final int chunkX, final int chunkZ) {
-        this.lucis$flushPendingEdits();
+        this.lucis$flushPendingEdits(-1L, true);
         return this.lightQueue.getChunkSyncFuture(chunkX, chunkZ).thenApply(Function.identity());
     }
 

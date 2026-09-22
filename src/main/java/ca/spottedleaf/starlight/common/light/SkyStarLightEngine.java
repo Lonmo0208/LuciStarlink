@@ -710,4 +710,257 @@ public final class SkyStarLightEngine extends StarLightEngine {
 
         return startY;
     }
+
+    // ----------------------------------------------------------------------------------------------------------------
+    // R5: the canonical skylight recompute (docs/NEW-ENGINE-TEARDOWN.md sections 20-22)
+    // ----------------------------------------------------------------------------------------------------------------
+
+    /** Scratch buffers for {@link #recomputeChunkSkyLight} - the pooled engine instances are thread-confined. */
+    private byte[] recomputeScratch;
+    private int[] recomputeRuns;
+    private int[] recomputeQueue;
+
+    /**
+     * Recomputes one chunk's skylight as the <b>fixed point of the same increase rule the update path uses</b>: a column
+     * sweep writes the 15-runs from the material, then a shell of sources - each column's run bottom, plus every lit
+     * cell whose neighbouring column's run bottom is lower (that is where light has to leave the column) - feeds the
+     * engine's own increase propagation. Section 22 measured that shell to be exactly equivalent to seeding every
+     * source cell (574,340 cells compared, identical result), at ~680 seeds per chunk instead of ~48,000.
+     *
+     * <p>Writes only where the recomputed value is <b>higher</b> than what is stored, and pushes each such cell as an
+     * increase so neighbouring chunks receive the light too. That is not a shortcut: the rule was measured to be
+     * one-directional (nothing gets darker, cross-chunk included), so a raise-only install cannot strand a neighbour
+     * with light that no longer exists.</p>
+     *
+     * <p>This is what owning the light means: with the rule as the single definition, generation, updates and save loads
+     * all produce the same answer - the property the "bit-identical to vanilla" promise forbade. The acceptance criteria
+     * change with it (self-consistency with the rule, and "nothing may get darker").</p>
+     */
+    public final void recomputeChunkSkyLight(final LightChunkGetter lightAccess, final ChunkAccess chunk) {
+        final int chunkX = chunk.getPos().x;
+        final int chunkZ = chunk.getPos().z;
+        final int worldX0 = chunkX << 4;
+        final int worldZ0 = chunkZ << 4;
+        final int minY = WorldUtil.getMinBlockY(this.world);
+        final int maxY = WorldUtil.getMaxBlockY(this.world);
+        final int height = maxY - minY + 1;
+        final int cells = 256 * height;
+
+        byte[] scratch = this.recomputeScratch;
+
+        if (scratch == null || scratch.length < cells) {
+            scratch = this.recomputeScratch = new byte[cells];
+        } else {
+            Arrays.fill(scratch, 0, cells, (byte) 0);
+        }
+        int[] runs = this.recomputeRuns;
+
+        if (runs == null) {
+            runs = this.recomputeRuns = new int[256];
+        }
+        int[] queue = this.recomputeQueue;
+
+        if (queue == null || queue.length < cells) {
+            queue = this.recomputeQueue = new int[cells];
+        }
+        final long propagateDirection = AxisDirection.POSITIVE_Y.everythingButThisDirection;
+
+        // 1) sweep every column from the material, recording where each column's lit run ends
+        for (int z = 0; z < 16; z++) {
+            for (int x = 0; x < 16; x++) {
+                final int col = (z << 4) | x;
+                final int wx = worldX0 + x;
+                final int wz = worldZ0 + z;
+                int runBottom = Integer.MIN_VALUE;
+                int slot = -1;
+                byte[] material = null;
+
+                for (int y = maxY; y >= minY; y--) {
+                    final int slotNow = (wx >> 4) + 5 * (wz >> 4) + (5 * 5) * (y >> 4) + this.chunkSectionIndexOffset;
+
+                    if (slotNow != slot) {
+                        slot = slotNow;
+                        material = this.materialBound(slotNow);
+                    }
+                    final int opacity = material == null
+                            ? ExtendedChunk.MATERIAL_UNCACHED
+                            : (material[((y & 15) << 8) | ((wz & 15) << 4) | (wx & 15)] & 0xFF);
+
+                    if (opacity != 0) {
+                        break;
+                    }
+                    scratch[(y - minY) * 256 + col] = 15;
+                    runBottom = y;
+                }
+                runs[col] = runBottom;
+            }
+        }
+
+        // 2) the shell: run bottoms, plus lit cells beside a column whose run ends lower (light has to leave the column)
+        int tail = 0;
+
+        for (int z = 0; z < 16; z++) {
+            for (int x = 0; x < 16; x++) {
+                final int col = (z << 4) | x;
+                final int runBottom = runs[col];
+
+                if (runBottom == Integer.MIN_VALUE) {
+                    continue;
+                }
+                for (int y = runBottom; y <= maxY; y++) {
+                    final int index = (y - minY) * 256 + col;
+
+                    if ((scratch[index] & 0xFF) != 15) {
+                        continue;
+                    }
+                    boolean seed = y == runBottom;
+
+                    for (int dir = 0; dir < 4 && !seed; dir++) {
+                        final int nx = x + (dir == 0 ? -1 : dir == 1 ? 1 : 0);
+                        final int nz = z + (dir == 2 ? -1 : dir == 3 ? 1 : 0);
+                        final int neighbourRun = this.runBottomFromLight(worldX0 + nx, worldZ0 + nz, minY, maxY);
+
+                        if (neighbourRun > y) {
+                            seed = true;
+                        }
+                    }
+                    if (seed) {
+                        queue[tail++] = index;
+                    }
+                }
+            }
+        }
+
+        // 2b) incoming light: a neighbouring chunk's lit cells shed light into this chunk, and the scratch only knows
+        // about this chunk's columns - without this seeding every boundary cell whose light comes from outside stays
+        // dark (measured: 1,701 cells in chunk (0,0) that the rule says are brighter than the light stored there).
+        for (int z = 0; z < 16; z++) {
+            for (int x = 0; x < 16; x++) {
+                if (x != 0 && x != 15 && z != 0 && z != 15) {
+                    continue; // interior cells have no neighbour outside the chunk on a horizontal axis
+                }
+                final int col = (z << 4) | x;
+                final int wx = worldX0 + x;
+                final int wz = worldZ0 + z;
+
+                for (int dir = 0; dir < 4; dir++) {
+                    final int nx = x + (dir == 0 ? -1 : dir == 1 ? 1 : 0);
+                    final int nz = z + (dir == 2 ? -1 : dir == 3 ? 1 : 0);
+
+                    if (nx >= 0 && nx <= 15 && nz >= 0 && nz <= 15) {
+                        continue; // inside this chunk, the scratch already covers it
+                    }
+                    final int outsideX = worldX0 + nx;
+                    final int outsideZ = worldZ0 + nz;
+
+                    for (int y = minY; y <= maxY; y++) {
+                        final int outsideLevel = this.getLightLevel(outsideX, y, outsideZ);
+
+                        if (outsideLevel <= 1) {
+                            continue;
+                        }
+                        final int index = (y - minY) * 256 + col;
+                        final int slot = wx >> 4;
+                        final byte[] material = this.materialBound(slot
+                                + 5 * (wz >> 4) + (5 * 5) * (y >> 4) + this.chunkSectionIndexOffset);
+                        final int opacity = material == null
+                                ? ExtendedChunk.MATERIAL_UNCACHED
+                                : (material[((y & 15) << 8) | ((wz & 15) << 4) | (wx & 15)] & 0xFF);
+
+                        if (opacity == ExtendedChunk.MATERIAL_UNCACHED) {
+                            continue;
+                        }
+                        final int target = outsideLevel - Math.max(1, opacity);
+
+                        if (target > (scratch[index] & 0xFF)) {
+                            scratch[index] = (byte) target;
+                            if (target > 1 && tail < queue.length) {
+                                queue[tail++] = index;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3) the engine's increase rule over the scratch, to a fixed point
+        int head = 0;
+
+        while (head < tail) {
+            final int index = queue[head++];
+            final int level = scratch[index] & 0xFF;
+
+            if (level <= 1) {
+                continue;
+            }
+            final int y = minY + index / 256;
+            final int col = index % 256;
+            final int x = col & 15;
+            final int z = col >> 4;
+
+            for (int dir = 0; dir < 5; dir++) { // four horizontals and down: skylight never propagates upward
+                final int nx = x + (dir == 0 ? -1 : dir == 1 ? 1 : 0);
+                final int ny = y + (dir == 4 ? -1 : 0);
+                final int nz = z + (dir == 2 ? -1 : dir == 3 ? 1 : 0);
+
+                if (nx < 0 || nx > 15 || ny < minY || nz < 0 || nz > 15) {
+                    continue;
+                }
+                final int nIndex = (ny - minY) * 256 + ((nz << 4) | nx);
+                final int slot = ((worldX0 + nx) >> 4) + 5 * ((worldZ0 + nz) >> 4) + (5 * 5) * (ny >> 4)
+                        + this.chunkSectionIndexOffset;
+                final byte[] material = this.materialBound(slot);
+                final int opacity = material == null
+                        ? ExtendedChunk.MATERIAL_UNCACHED
+                        : (material[((ny & 15) << 8) | ((nz & 15) << 4) | (nx & 15)] & 0xFF);
+
+                if (opacity == ExtendedChunk.MATERIAL_UNCACHED) {
+                    continue; // the shape path belongs to the engine, not to the recompute: leave that cell alone
+                }
+                final int target = level - Math.max(1, opacity);
+
+                if (target > (scratch[nIndex] & 0xFF)) {
+                    scratch[nIndex] = (byte) target;
+                    if (target > 1 && tail < queue.length) {
+                        queue[tail++] = nIndex;
+                    }
+                }
+            }
+        }
+
+        // 4) install: raise only, and push every raised cell so neighbouring chunks receive the light as well
+        for (int y = minY; y <= maxY; y++) {
+            final int plane = (y - minY) * 256;
+
+            for (int col = 0; col < 256; col++) {
+                final int target = scratch[plane + col] & 0xFF;
+
+                if (target == 0) {
+                    continue;
+                }
+                final int x = col & 15;
+                final int z = col >> 4;
+                final int wx = worldX0 + x;
+                final int wz = worldZ0 + z;
+
+                if (target > this.getLightLevel(wx, y, wz)) {
+                    this.setLightLevel(wx, y, wz, target);
+                    this.appendToIncreaseQueue(
+                            ((wx + (wz << 6) + (y << (6 + 6)) + this.coordinateOffset) & ((1L << (6 + 6 + 16)) - 1))
+                                    | ((long) target << (6 + 6 + 16))
+                                    | (propagateDirection << (6 + 6 + 16 + 4)));
+                }
+            }
+        }
+    }
+
+    /** The lowest lit cell of a column, read from the light already there; MIN_VALUE when the top cell is not lit. */
+    private int runBottomFromLight(final int wx, final int wz, final int minY, final int maxY) {
+        for (int y = maxY; y >= minY; y--) {
+            if (this.getLightLevel(wx, y, wz) != 15) {
+                return y + 1;
+            }
+        }
+        return minY;
+    }
 }

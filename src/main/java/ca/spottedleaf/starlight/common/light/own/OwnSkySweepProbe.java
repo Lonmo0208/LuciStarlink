@@ -231,6 +231,11 @@ public final class OwnSkySweepProbe {
         int cheapMismatch = 0;
         int cheapDarker = 0;
         int fullMismatch = 0;
+        int chunk00Mismatch = 0;
+        int chunk00Compared = 0;
+        int chunk00Darker = 0;
+        int chunk00Lighter = 0;
+        final StringBuilder chunk00Examples = new StringBuilder();
         int compared = 0;
         for (int z = minZ + 1; z < maxZ; z++) {
             for (int x = minX + 1; x < maxX; x++) {
@@ -251,6 +256,22 @@ public final class OwnSkySweepProbe {
                                     .append(" cheap=").append(myValue).append(" full=").append(fullValue)
                                     .append(" vis=").append(truth)
                                     .append(" mat=").append(materialCells[index] & 0xFF).append(") ");
+                        }
+                    }
+                    if (x >= 0 && x <= 15 && z >= 0 && z <= 15) {
+                        chunk00Compared++;
+                        if (myValue != truth) {
+                            if (myValue < truth) {
+                                chunk00Darker++;
+                            } else {
+                                chunk00Lighter++;
+                                if (chunk00Examples.length() < 600) {
+                                    chunk00Examples.append("(").append(x).append(",").append(y).append(",").append(z)
+                                            .append(" vis=").append(truth).append(" rule=").append(myValue)
+                                            .append(" mat=").append(materialCells[index] & 0xFF).append(") ");
+                                }
+                            }
+                            chunk00Mismatch++;
                         }
                     }
                     if (fullValue != truth) {
@@ -285,8 +306,13 @@ public final class OwnSkySweepProbe {
                 + " fullSeeds=" + seedCountFull
                 + " fullMismatch=" + fullMismatch
                 + " fullNanos=" + fullNanos
-                + " compared=" + compared);
+                + " compared=" + compared
+                + " chunk00Compared=" + chunk00Compared
+                + " chunk00Mismatch=" + chunk00Mismatch
+                + " chunk00Darker=" + chunk00Darker
+                + " chunk00Lighter=" + chunk00Lighter);
         System.out.println("SKYSWEEP-EXAMPLES " + examples);
+        System.out.println("SKYSWEEP-CHUNK00 " + chunk00Examples);
     }
 
     /** 0 = provably transparent (opacity 0), 1 = blocks the run, 2 = opacity not cached yet. */
