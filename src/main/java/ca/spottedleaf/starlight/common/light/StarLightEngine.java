@@ -1234,7 +1234,12 @@ public abstract class StarLightEngine {
 
                     final SWMRNibbleArray currentNibble = this.nibbleCache[sectionIndex];
                     final int currentLevel;
+                    // R5 targeting: how many neighbour cells are examined at all, and how many of those already hold
+                    // the level this propagation wants to write - the second number is the work a column rule could
+                    // skip outright (this loop is the whole structure_cube deficit: 24240 pops per pass).
+                    if (LuxProfiler.enabled()) { LuxProfiler.bfsNeighbours++; }
                     if (currentNibble == null || (currentLevel = currentNibble.getUpdating(localIndex)) >= (propagatedLightLevel - 1)) {
+                        if (LuxProfiler.enabled()) { LuxProfiler.bfsLevelSkip++; }
                         continue; // already at the level we want or unloaded
                     }
 

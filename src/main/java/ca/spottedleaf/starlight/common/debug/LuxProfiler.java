@@ -41,6 +41,7 @@ public final class LuxProfiler {
      */
     public static long bfsPops;
     public static long bfsNeighbours;
+    public static long bfsLevelSkip;
     public static long skyColumnCells;
 
     public static long queueTaskCalls;
@@ -205,6 +206,7 @@ public final class LuxProfiler {
         blockNotify.reset();
         bfsPops = 0;
         bfsNeighbours = 0;
+        bfsLevelSkip = 0;
         skyColumnCells = 0;
     }
 
@@ -215,6 +217,7 @@ public final class LuxProfiler {
                 + " checkBlockNanosEst=" + scale(checkBlockSampledNanos)
                 + " bfsPops=" + bfsPops
                 + " bfsNeighbours=" + bfsNeighbours
+                + " bfsLevelSkip=" + bfsLevelSkip
                 + " skyColumnCells=" + skyColumnCells
                 + " queueTask=" + queueTaskCalls
                 + " queueTaskNanosEst=" + scale(queueTaskSampledNanos)
