@@ -11,7 +11,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: true
 
       # JDK 21, not 25: this tree is the 1.21.1 / NeoForge 21.1.235 backport and its source/target compatibility is
       # Java 21 (build.gradle). JDK 25 was ScalableLux's own target and is not what this tree compiles against.

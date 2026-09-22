@@ -15,7 +15,11 @@ pluginManagement {
 
 rootProject.name = "ScalableLux"
 
-includeBuild('../FlowSched') {
+// FlowSched is committed inside this repo (a subtree of RelativityMC/FlowSched, 42 files under FlowSched/), so the
+// included build is that directory. It used to read '../FlowSched', which only resolved on the machine the tree was
+// imported on: a fresh clone has no sibling directory, and that is what failed the GitHub build with "Included build
+// '.../FlowSched' does not exist" once the wrapper's permission bit was fixed.
+includeBuild('FlowSched') {
     dependencySubstitution {
         substitute module('com.ishland.flowsched:flowsched') using project(':')
     }
