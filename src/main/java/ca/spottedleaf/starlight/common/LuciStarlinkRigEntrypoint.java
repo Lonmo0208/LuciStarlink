@@ -35,5 +35,7 @@ public class LuciStarlinkRigEntrypoint {
             // two-hop nibble layout is what decides whether the R5 rewrite is worth building at all.
             ca.spottedleaf.starlight.common.light.own.OwnFlatField.selfTest();
         }
+        // R5-2's OwnSkySweepProbe has no hook here on purpose: the harness calls it reflectively at fingerprint time,
+        // because a probe that ran inside the measured window would perturb the reading it is meant to explain.
     }
 }
