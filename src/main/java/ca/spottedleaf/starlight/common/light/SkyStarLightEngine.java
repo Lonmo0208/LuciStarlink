@@ -2,6 +2,7 @@ package ca.spottedleaf.starlight.common.light;
 
 import ca.spottedleaf.starlight.common.blockstate.ExtendedAbstractBlockState;
 import ca.spottedleaf.starlight.common.chunk.ExtendedChunk;
+import ca.spottedleaf.starlight.common.debug.LuxProfiler;
 import ca.spottedleaf.starlight.common.util.WorldUtil;
 import it.unimi.dsi.fastutil.shorts.ShortCollection;
 import it.unimi.dsi.fastutil.shorts.ShortIterator;
@@ -624,6 +625,7 @@ public final class SkyStarLightEngine extends StarLightEngine {
         BlockState above = this.getBlockState(worldX, startY + 1, worldZ);
 
         for (;startY >= (this.minLightSection << 4); --startY) {
+            if (LuxProfiler.enabled()) { LuxProfiler.skyColumnCells++; }
             if ((startY & 15) == 15) {
                 // ensure this section is always checked
                 this.checkNullSection(worldX >> 4, startY >> 4, worldZ >> 4, extrudeInitialised);

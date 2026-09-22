@@ -33,6 +33,16 @@ public final class LuxProfiler {
     public static long checkBlockSampled;
     public static long checkBlockSampledNanos;
 
+    /**
+     * R5 targeting: how many cells the propagation actually touches, so one cell of Starlight's storage can be
+     * priced against one cell of a flat byte image. {@code bfsPops} = queue entries processed, {@code bfsNeighbours}
+     * = neighbour cells examined in the increase/decrease walks, {@code skyColumnCells} = cells walked by the
+     * skylight column descent (the shape structure_cube hammers). Counted only with {@code -Dscalablelux.profile}.
+     */
+    public static long bfsPops;
+    public static long bfsNeighbours;
+    public static long skyColumnCells;
+
     public static long queueTaskCalls;
     public static long queueTaskSampled;
     public static long ownEditInline;
@@ -193,6 +203,9 @@ public final class LuxProfiler {
         identicalSkips.reset();
         skyNotify.reset();
         blockNotify.reset();
+        bfsPops = 0;
+        bfsNeighbours = 0;
+        skyColumnCells = 0;
     }
 
     public static String windowSummary() {
@@ -200,6 +213,9 @@ public final class LuxProfiler {
                 + " checkBlock=" + checkBlockCalls
                 + " checkBlockSampled=" + checkBlockSampled
                 + " checkBlockNanosEst=" + scale(checkBlockSampledNanos)
+                + " bfsPops=" + bfsPops
+                + " bfsNeighbours=" + bfsNeighbours
+                + " skyColumnCells=" + skyColumnCells
                 + " queueTask=" + queueTaskCalls
                 + " queueTaskNanosEst=" + scale(queueTaskSampledNanos)
                 + " ownEditInline=" + ownEditInline

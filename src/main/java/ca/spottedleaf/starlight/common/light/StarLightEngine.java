@@ -1209,6 +1209,7 @@ public abstract class StarLightEngine {
             final int posZ = (((int)queueValue >>> 6) & 63) + decodeOffsetZ;
             final int posY = (((int)queueValue >>> 12) & ((1 << 16) - 1)) + decodeOffsetY;
             final int propagatedLightLevel = (int)((queueValue >>> (6 + 6 + 16)) & 0xFL);
+            if (LuxProfiler.enabled()) { LuxProfiler.bfsPops++; }
             final AxisDirection[] checkDirections = OLD_CHECK_DIRECTIONS[(int)((queueValue >>> (6 + 6 + 16 + 4)) & 63L)];
 
             if ((queueValue & FLAG_RECHECK_LEVEL) != 0L) {
@@ -1402,6 +1403,7 @@ public abstract class StarLightEngine {
             final int posZ = (((int)queueValue >>> 6) & 63) + decodeOffsetZ;
             final int posY = (((int)queueValue >>> 12) & ((1 << 16) - 1)) + decodeOffsetY;
             final int propagatedLightLevel = (int)((queueValue >>> (6 + 6 + 16)) & 0xF);
+            if (LuxProfiler.enabled()) { LuxProfiler.bfsPops++; }
             final AxisDirection[] checkDirections = OLD_CHECK_DIRECTIONS[(int)((queueValue >>> (6 + 6 + 16 + 4)) & 63)];
 
             if ((queueValue & FLAG_HAS_SIDED_TRANSPARENT_BLOCKS) == 0L) {
