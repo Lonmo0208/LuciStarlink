@@ -1,6 +1,7 @@
 package ca.spottedleaf.starlight.common.light.own;
 
 import ca.spottedleaf.starlight.common.blockstate.ExtendedAbstractBlockState;
+import ca.spottedleaf.starlight.common.chunk.ExtendedChunk;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
@@ -146,6 +147,99 @@ public final class OwnSkySweepProbe {
                 }
             }
         }
+
+        // ---- the reformulation itself, validated off-engine ------------------------------------------------
+        // Does "column sweep + fix-up BFS" reproduce this engine's skylight, cell for cell? This is the whole algorithm
+        // (docs/NEW-ENGINE-TEARDOWN.md section 20): rebuild from the material, seed only the run bottoms and the wall
+        // faces, then run the engine's own increase rule. Running it here first puts the risk in a probe instead of in
+        // the update path, and a mismatch tells us the seeding is wrong before anything is wired in.
+        final byte[] mine = new byte[cells];
+        final long algorithmT0 = System.nanoTime();
+        for (int z = minZ; z <= maxZ; z++) {
+            for (int x = minX; x <= maxX; x++) {
+                for (int y = maxY; y >= minY; y--) {
+                    final int index = boxIndex(x, y, z, minX, minY, minZ, maxX, maxZ);
+                    if (materialCells[index] != 0) {
+                        break;
+                    }
+                    mine[index] = 15;
+                }
+            }
+        }
+        final long sweepOnlyNanos = System.nanoTime() - algorithmT0;
+        final int[] seedQueue = new int[cells];
+        int seedCount = 0;
+        for (int z = minZ + 1; z < maxZ; z++) {
+            for (int x = minX + 1; x < maxX; x++) {
+                int runBottomY = Integer.MIN_VALUE;
+                for (int y = maxY; y >= minY; y--) {
+                    final int index = boxIndex(x, y, z, minX, minY, minZ, maxX, maxZ);
+                    if (mine[index] != 15) {
+                        continue;
+                    }
+                    if (runBottomY == Integer.MIN_VALUE) {
+                        runBottomY = y;
+                    }
+                    final boolean wall = (mine[boxIndex(x - 1, y, z, minX, minY, minZ, maxX, maxZ)] & 0xFF) != 15
+                            || (mine[boxIndex(x + 1, y, z, minX, minY, minZ, maxX, maxZ)] & 0xFF) != 15
+                            || (mine[boxIndex(x, y, z - 1, minX, minY, minZ, maxX, maxZ)] & 0xFF) != 15
+                            || (mine[boxIndex(x, y, z + 1, minX, minY, minZ, maxX, maxZ)] & 0xFF) != 15;
+                    if (wall) {
+                        seedQueue[seedCount++] = index;
+                    }
+                }
+                if (runBottomY != Integer.MIN_VALUE) {
+                    seedQueue[seedCount++] = boxIndex(x, runBottomY, z, minX, minY, minZ, maxX, maxZ); // attenuated light through what blocked the run
+                }
+            }
+        }
+        int head = 0;
+        int tail = seedCount;
+        while (head < tail) {
+            final int index = seedQueue[head++];
+            final int seedLevel = mine[index] & 0xFF;
+            if (seedLevel <= 1) {
+                continue;
+            }
+            final int y = minY + index / (width * depth);
+            final int rem = index % (width * depth);
+            final int z = minZ + rem / width;
+            final int x = minX + rem % width;
+            for (int dir = 0; dir < 5; dir++) {
+                final int nx = x + (dir == 0 ? -1 : dir == 1 ? 1 : 0);
+                final int ny = y + (dir == 4 ? -1 : 0);
+                final int nz = z + (dir == 2 ? -1 : dir == 3 ? 1 : 0);
+                if (nx < minX || nx > maxX || ny < minY || nz < minZ || nz > maxZ) {
+                    continue;
+                }
+                final int nIndex = boxIndex(nx, ny, nz, minX, minY, minZ, maxX, maxZ);
+                final int cellOpacity = materialCells[nIndex] & 0xFF;
+                if (cellOpacity == ExtendedChunk.MATERIAL_UNCACHED) {
+                    continue;
+                }
+                final int target = seedLevel - Math.max(1, cellOpacity);
+                if (target > (mine[nIndex] & 0xFF)) {
+                    mine[nIndex] = (byte) target;
+                    if (target > 1) {
+                        seedQueue[tail++] = nIndex;
+                    }
+                }
+            }
+        }
+        final long algorithmNanos = System.nanoTime() - algorithmT0;
+        int algorithmMismatch = 0;
+        int compared = 0;
+        for (int z = minZ + 1; z < maxZ; z++) {
+            for (int x = minX + 1; x < maxX; x++) {
+                for (int y = minY; y <= maxY; y++) {
+                    compared++;
+                    if ((mine[boxIndex(x, y, z, minX, minY, minZ, maxX, maxZ)] & 0xFF)
+                            != (lightCells[boxIndex(x, y, z, minX, minY, minZ, maxX, maxZ)] & 0xFF)) {
+                        algorithmMismatch++;
+                    }
+                }
+            }
+        }
         final long flatNanos = (System.nanoTime() - flatT0) / rounds;
 
         System.out.println("SKYSWEEP-PROBE box=" + minX + "," + minY + "," + minZ + ".." + maxX + "," + maxY + "," + maxZ
@@ -163,7 +257,13 @@ public final class OwnSkySweepProbe {
                 + " flatSweepNanos=" + flatNanos
                 + " flatSweepNsPerCell=" + (cells == 0 ? 0L : flatNanos / cells)
                 + " flatSweepOneChunkNanos=" + (cells == 0 ? 0L : (98304L * (flatNanos / Math.max(1L, cells))))
-                + " flatSweepSink=" + (flatSweepOut[cells - 1] + lightCells[0]));
+                + " flatSweepSink=" + (flatSweepOut[cells - 1] + lightCells[0])
+                + " algorithmSeeds=" + seedCount
+                + " algorithmCompared=" + compared
+                + " algorithmMismatch=" + algorithmMismatch
+                + " sweepOnlyNanos=" + sweepOnlyNanos
+                + " algorithmNanos=" + algorithmNanos
+                + " algorithmNsPerCell=" + (compared == 0 ? 0L : algorithmNanos / compared));
     }
 
     /** 0 = provably transparent (opacity 0), 1 = blocks the run, 2 = opacity not cached yet. */
@@ -171,5 +271,10 @@ public final class OwnSkySweepProbe {
         final BlockState state = getter.getBlockState(pos);
         final int opacity = ((ExtendedAbstractBlockState) state).scalablelux$getOpacityIfCached();
         return opacity == 0 ? 0 : (opacity > 0 ? 1 : 2);
+    }
+    /** Flat index of a cell inside the probe box: y-major, then z, then x. */
+    private static int boxIndex(final int x, final int y, final int z,
+                                final int minX, final int minY, final int minZ, final int maxX, final int maxZ) {
+        return ((y - minY) * (maxZ - minZ + 1) + (z - minZ)) * (maxX - minX + 1) + (x - minX);
     }
 }
