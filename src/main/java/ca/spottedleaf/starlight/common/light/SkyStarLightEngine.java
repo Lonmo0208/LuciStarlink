@@ -1038,4 +1038,290 @@ public final class SkyStarLightEngine extends StarLightEngine {
     private void logRecomputeDebug(final String message) {
         System.out.println("SKYRECOMPUTE-DEBUG " + message);
     }
+
+    /**
+     * The windowed settle: recompute the skylight of one chunk over the <b>y window the edit can reach</b>, instead of
+     * over the whole chunk (docs/NEW-ENGINE-TEARDOWN.md sections 26-28).
+     *
+     * <p><b>Why a window is exact.</b> A cell's light is a level 0..15, and every propagation step costs at least one
+     * level, so a change can move the light of a cell at most 15 steps away from where it happened. The window is
+     * therefore [lowest change - 16, highest change + 16], clipped to the world: everything outside it cannot have
+     * changed, and the cells at its edge are read as sources from the light that is already there.</p>
+     *
+     * <p><b>What the timers forced.</b> The whole-chunk version measured expand 4.3 ms + install 3.9 ms against a shell
+     * of 34 us and a BFS of 98 us - the tight core was already at 1.x's per-pop price, and the cost was two full passes
+     * over 98,304 cells. Restricting both passes to the window cuts them by the ratio of window height to world height
+     * (~48 of 384 levels here), which is what this method is for.</p>
+     */
+    public final void settleSkyWindow(final LightChunkGetter lightAccess, final ChunkAccess chunk,
+                                      final int changedMinY, final int changedMaxY) {
+        final int chunkX = chunk.getPos().x;
+        final int chunkZ = chunk.getPos().z;
+        final int worldX0 = chunkX << 4;
+        final int worldZ0 = chunkZ << 4;
+        final int worldMinY = WorldUtil.getMinBlockY(this.world);
+        final int worldMaxY = WorldUtil.getMaxBlockY(this.world);
+        final int yLo = Math.max(worldMinY, changedMinY - 16);
+        final int yHi = Math.min(worldMaxY, changedMaxY + 16);
+        final int height = yHi - yLo + 1;
+        final int cells = 256 * height;
+        final int minSection = this.minSection;
+        final int maxSection = this.maxSection;
+
+        final byte[] light = this.recomputeCells(cells);
+        final byte[] material = this.recomputeMaterialCells(cells);
+        final byte[] before = this.recomputeBeforeCells(cells);
+        final int[] queue = this.recomputeQueueCells(cells);
+        final long tStart = System.nanoTime();
+
+        // ---- 1) expand the window, column-major: index = col * height + (y - yLo)
+        for (int section = minSection; section <= maxSection; section++) {
+            final int sectionY0 = section * 16;
+
+            if (sectionY0 + 15 < yLo || sectionY0 > yHi) {
+                continue; // this section does not intersect the window
+            }
+            final int slot = chunkX + 5 * chunkZ + (5 * 5) * section + this.chunkSectionIndexOffset;
+            final byte[] sectionMaterial = this.materialBound(slot);
+            final SWMRNibbleArray nibble = this.getNibbleFromCache(chunkX, section, chunkZ);
+            final byte[] packed = nibble == null ? null : nibble.storageUpdating;
+            final int lyFrom = Math.max(0, yLo - sectionY0);
+            final int lyTo = Math.min(15, yHi - sectionY0);
+
+            for (int col = 0; col < 256; col++) {
+                final int x = col & 15;
+                final int z = col >> 4;
+                final int outBase = col * height - yLo;
+
+                for (int ly = lyFrom; ly <= lyTo; ly++) {
+                    final int local = (ly << 8) | (z << 4) | x;
+
+                    material[outBase + sectionY0 + ly] = sectionMaterial != null
+                            ? sectionMaterial[local]
+                            : (byte) this.opacityOf(slot, local);
+                    if (packed != null) {
+                        final int b = packed[local >> 1] & 0xFF;
+
+                        light[outBase + sectionY0 + ly] =
+                                (byte) (((local & 1) == 0 ? b : (b >>> 4)) & 0x0F);
+                    }
+                }
+            }
+        }
+        System.arraycopy(light, 0, before, 0, cells);
+        final long tExpand = System.nanoTime();
+
+        // ---- 2) sweep: the 15-runs, from the world top down (the window's top edge may sit under a ceiling, so the run
+        // bottom has to be found from the material, not assumed to be the window top)
+        for (int z = 0; z < 16; z++) {
+            for (int x = 0; x < 16; x++) {
+                final int col = (z << 4) | x;
+                final int windowBase = col * height;
+
+                // The part above the window is UNCHANGED, and 15 requires the cell above to be 15 - so ONE light read at
+                // the window's top edge decides whether this column has a run inside the window at all. The earlier
+                // version walked the palette from the world top for every column (~250 reads x 256 columns), which was
+                // the settle's largest single cost.
+                if (this.getLightLevel(worldX0 + x, yHi + 1 > worldMaxY ? worldMaxY : yHi + 1, worldZ0 + z) != 15) {
+                    continue; // no run reaches the window from above: the BFS handles whatever the edit changed
+                }
+                int y = yHi;
+
+                while (y >= yLo) {
+                    final int i = windowBase + (y - yLo);
+
+                    if (material[i] != 0) {
+                        break;
+                    }
+                    light[i] = 15;
+                    y--;
+                }
+            }
+        }
+        final long tSweep = System.nanoTime();
+
+        // ---- 3) shell + 4) BFS, inside the window, exactly as the whole-chunk version does
+        int tail = 0;
+
+        for (int z = 0; z < 16; z++) {
+            for (int x = 0; x < 16; x++) {
+                final int col = (z << 4) | x;
+                final int base = col * height;
+                int runBottom = Integer.MIN_VALUE;
+
+                for (int i = height - 1; i >= 0; i--) {
+                    if ((light[base + i] & 0xFF) == 15) {
+                        runBottom = yLo + i;
+                        break;
+                    }
+                }
+                if (runBottom == Integer.MIN_VALUE) {
+                    continue;
+                }
+                final int runWest = this.runBottomNear(worldX0 + x - 1, worldZ0 + z, runBottom, worldMinY, worldMaxY);
+                final int runEast = this.runBottomNear(worldX0 + x + 1, worldZ0 + z, runBottom, worldMinY, worldMaxY);
+                final int runNorth = this.runBottomNear(worldX0 + x, worldZ0 + z - 1, runBottom, worldMinY, worldMaxY);
+                final int runSouth = this.runBottomNear(worldX0 + x, worldZ0 + z + 1, runBottom, worldMinY, worldMaxY);
+                final int lowestNeighbour = Math.min(Math.min(runWest, runEast), Math.min(runNorth, runSouth));
+
+                queue[tail++] = base + (runBottom - yLo);
+                for (int y = runBottom + 1; y <= lowestNeighbour && y <= yHi; y++) {
+                    final int i = base + (y - yLo);
+
+                    if ((light[i] & 0xFF) == 15) {
+                        queue[tail++] = i;
+                    }
+                }
+            }
+        }
+        int head = 0;
+
+        while (head < tail) {
+            final int index = queue[head++];
+            final int level = light[index] & 0xFF;
+
+            if (level <= 1) {
+                continue;
+            }
+            final int col = index / height;
+            final int yOff = index - col * height;
+
+            for (int dir = 0; dir < 5; dir++) {
+                final int nIndex;
+
+                if (dir == 4) {
+                    if (yOff == 0) {
+                        continue;
+                    }
+                    nIndex = index - 1;
+                } else {
+                    final int nCol = col + (dir == 0 ? -1 : dir == 1 ? 1 : dir == 2 ? -16 : 16);
+
+                    if (nCol < 0 || nCol > 255) {
+                        continue;
+                    }
+                    if (dir <= 1 && ((nCol & 15) != (col & 15) + (dir == 0 ? -1 : 1))) {
+                        continue; // crossed the chunk edge horizontally
+                    }
+                    nIndex = nCol * height + yOff;
+                }
+                final int opacity = material[nIndex] & 0xFF;
+
+                if (opacity == ExtendedChunk.MATERIAL_UNCACHED) {
+                    continue;
+                }
+                final int target = level - Math.max(1, opacity);
+
+                if (target > (light[nIndex] & 0xFF)) {
+                    light[nIndex] = (byte) target;
+                    if (target > 1) {
+                        queue[tail++] = nIndex;
+                    }
+                }
+            }
+        }
+        final long tBfs = System.nanoTime();
+
+        // ---- 5) install the differences, and push the chunk's boundary changes for the neighbouring chunks
+        final long propagateDirection = AxisDirection.POSITIVE_Y.everythingButThisDirection;
+
+        for (int section = minSection; section <= maxSection; section++) {
+            final int sectionY0 = section * 16;
+
+            if (sectionY0 + 15 < yLo || sectionY0 > yHi) {
+                continue;
+            }
+            final SWMRNibbleArray nibble = this.getNibbleFromCache(chunkX, section, chunkZ);
+            final byte[] packed = nibble == null ? null : nibble.storageUpdating;
+            final int lyFrom = Math.max(0, yLo - sectionY0);
+            final int lyTo = Math.min(15, yHi - sectionY0);
+
+            for (int col = 0; col < 256; col++) {
+                final int x = col & 15;
+                final int z = col >> 4;
+                final int windowBase = col * height - yLo;
+                final boolean boundary = x == 0 || x == 15 || z == 0 || z == 15;
+                final int wx = worldX0 + x;
+                final int wz = worldZ0 + z;
+
+                for (int ly = lyFrom; ly <= lyTo; ly++) {
+                    final int y = sectionY0 + ly;
+                    final int i = windowBase + y;
+                    final int target = light[i] & 0xFF;
+                    final int old = before[i] & 0xFF;
+
+                    if (target == old) {
+                        continue;
+                    }
+                    final int local = (ly << 8) | (z << 4) | x;
+
+                    if (packed != null) {
+                        final int half = local >> 1;
+                        final int b = packed[half] & 0xFF;
+
+                        packed[half] = (byte) ((local & 1) == 0
+                                ? ((b & 0xF0) | (target & 0x0F))
+                                : ((b & 0x0F) | ((target & 0x0F) << 4)));
+                    }
+                    if (nibble != null) {
+                        nibble.updatingDirty = true;
+                    }
+                    if (!boundary) {
+                        continue;
+                    }
+                    final long encoded = ((wx + (wz << 6) + (y << (6 + 6)) + this.coordinateOffset)
+                            & ((1L << (6 + 6 + 16)) - 1)) | (propagateDirection << (6 + 6 + 16 + 4));
+
+                    if (target > old) {
+                        this.appendToIncreaseQueue(encoded | ((long) target << (6 + 6 + 16)));
+                    } else {
+                        this.appendToDecreaseQueue(encoded | ((long) old << (6 + 6 + 16)));
+                    }
+                }
+            }
+        }
+        if (Boolean.getBoolean("scalablelux.recomputeDebug")) {
+            final long tEnd = System.nanoTime();
+
+            this.logRecomputeDebug("WINDOW yLo=" + yLo + " yHi=" + yHi
+                    + " expandUs=" + (tExpand - tStart) / 1000
+                    + " sweepUs=" + (tSweep - tExpand) / 1000
+                    + " seeds=" + tail
+                    + " bfsUs=" + (tBfs - tSweep) / 1000
+                    + " installUs=" + (tEnd - tBfs) / 1000
+                    + " totalUs=" + (tEnd - tStart) / 1000);
+        }
+    }
+
+    /** Opacity of a cell in the world (used above the window, where no buffer exists). */
+    private int opacityOfWorld(final int wx, final int wy, final int wz) {
+        final int slot = (wx >> 4) + 5 * (wz >> 4) + (5 * 5) * (wy >> 4) + this.chunkSectionIndexOffset;
+
+        return this.opacityOf(slot, ((wy & 15) << 8) | ((wz & 15) << 4) | (wx & 15));
+    }
+
+    /**
+     * A neighbouring column's run bottom, asked only where it matters: if the light at the given height (or one below) is
+     * 15, the neighbour's run reaches at least that far, which is all the shell test needs. Returning {@code runBottom}
+     * when the neighbour is lit at or below it keeps the shell's "lowest neighbour" comparison honest without scanning a
+     * whole column - that scan was 1 ms of the measured cost.
+     */
+    private int runBottomNear(final int wx, final int wz, final int runBottom, final int minY, final int maxY) {
+        if (this.getLightLevel(wx, runBottom, wz) == 15) {
+            return runBottom;
+        }
+        return Integer.MIN_VALUE;
+    }
+
+    /** Opacity of one cell, straight from the section's palette (used when no material table is enabled). */
+    private int opacityOf(final int slot, final int local) {
+        final BlockState state = this.getBlockState(slot, local);
+
+        if (state == null) {
+            return ExtendedChunk.MATERIAL_UNCACHED;
+        }
+        final int opacity = ((ExtendedAbstractBlockState) state).scalablelux$getOpacityIfCached();
+
+        return opacity >= 0 ? opacity : ExtendedChunk.MATERIAL_UNCACHED;
+    }
 }

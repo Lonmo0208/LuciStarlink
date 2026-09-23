@@ -500,10 +500,13 @@ public final class StarLightInterface {
     private final it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos>> lucis$pendingEdits =
             new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>();
 
-    /** R5: chunks whose skylight a bulk burst asked to recompute, drained at the settle points (see the flush). */
-    private final it.unimi.dsi.fastutil.longs.LongOpenHashSet lucis$pendingRecomputes =
-            new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
-
+    /**
+     * R5: chunks whose skylight a bulk burst asked to recompute, with the y range the changes touched, drained at the
+     * settle points (see the flush). The range is what makes the settle a window instead of the whole chunk: a light
+     * change cannot travel more than 15 levels/steps away from where it happened.
+     */
+    private final it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<int[]> lucis$pendingRecomputes =
+            new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>();
     /**
      * Whether the 3x3 neighbourhood of a chunk is loaded and past LIGHT (SL's own {@code canUseChunk} semantics). The
      * inline path propagates across chunk borders, so it must not run while a neighbour is still generating: taking it
@@ -630,7 +633,16 @@ public final class StarLightInterface {
                             && positions.size() >= LUCIS_RECOMPUTE_MIN;
 
                     if (deferSky) {
-                        this.lucis$pendingRecomputes.add(key);
+                        // remember the y range the burst touched: the window is built from it
+                        final int[] range = this.lucis$pendingRecomputes.computeIfAbsent(key, ignored -> new int[]{Integer.MAX_VALUE, Integer.MIN_VALUE});
+                        for (final BlockPos changed : positions) {
+                            if (changed.getY() < range[0]) {
+                                range[0] = changed.getY();
+                            }
+                            if (changed.getY() > range[1]) {
+                                range[1] = changed.getY();
+                            }
+                        }
                         if (blockEngine != null) {
                             if (LUCIS_BATCH_DECREASE) {
                                 blockEngine.seedBlockChangesOnly(this.lightAccess, chunkX, chunkZ, positions);
@@ -690,13 +702,13 @@ public final class StarLightInterface {
                 LuxProfiler.ownEditDecBatchNanos += System.nanoTime() - lucisDecT0;
             }
             if (settle && !this.lucis$pendingRecomputes.isEmpty()) {
-                // R5: the deferred sky recomputes, one per chunk per burst (see the sky engine for what it does, and why
-                // it can only raise light). The settle points are hasUpdates()/syncFuture(), i.e. exactly the moments at
-                // which something is about to ask whether the engine has finished.
-                final it.unimi.dsi.fastutil.longs.LongIterator recomputeKeys = this.lucis$pendingRecomputes.iterator();
-
-                while (recomputeKeys.hasNext()) {
-                    final long key = recomputeKeys.nextLong();
+                // R5: the deferred sky settles, one per chunk per burst, over the y window the burst touched (see the sky
+                // engine for what it does and why it can only be right there). The settle points are
+                // hasUpdates()/syncFuture(), i.e. exactly the moments at which something is about to ask whether the
+                // engine has finished.
+                for (final it.unimi.dsi.fastutil.longs.Long2ObjectMap.Entry<int[]> recomputeEntry
+                        : this.lucis$pendingRecomputes.long2ObjectEntrySet()) {
+                    final long key = recomputeEntry.getLongKey();
                     final int chunkX = CoordinateUtils.getChunkX(key);
                     final int chunkZ = CoordinateUtils.getChunkZ(key);
                     final ChunkAccess chunk = this.getAnyChunkNow(chunkX, chunkZ);
@@ -704,13 +716,18 @@ public final class StarLightInterface {
                     if (chunk == null || skyEngine == null) {
                         continue;
                     }
+                    final int[] range = recomputeEntry.getValue();
+
+                    if (range[0] > range[1]) {
+                        continue; // no y range recorded for this chunk
+                    }
                     final long lucisRecT0 = System.nanoTime();
 
                     skyEngine.setupCaches(this.lightAccess, chunkX * 16 + 7, 128, chunkZ * 16 + 7, true, true);
                     try {
-                        // the recompute pushes both directions, so both propagations have to run (decrease first, as the
+                        // the settle pushes both directions, so both propagations have to run (decrease first, as the
                         // engine does everywhere else) before the section is published
-                        skyEngine.recomputeChunkSkyLight(this.lightAccess, chunk);
+                        skyEngine.settleSkyWindow(this.lightAccess, chunk, range[0], range[1]);
                         skyEngine.performLightDecrease(this.lightAccess);
                         skyEngine.performLightIncrease(this.lightAccess);
                         skyEngine.updateVisible(this.lightAccess);
