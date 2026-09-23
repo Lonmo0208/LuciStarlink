@@ -363,7 +363,7 @@ public final class StarLightInterface {
                     + " pendingRecomputes=" + this.lucis$pendingRecomputes.size()
                     + " queueEmpty=" + this.lightQueue.isEmpty());
         }
-        this.lucis$flushPendingEdits(-1L, true);
+        this.lucis$flushAllPendingEdits(true);
         return !this.lightQueue.isEmpty();
     }
 
@@ -572,7 +572,7 @@ public final class StarLightInterface {
         }
         pending.add(pos.asLong());
         if (pending.size() >= LUCIS_PENDING_FLUSH_SIZE) {
-            this.lucis$flushPendingEdits(-1L, false);
+            this.lucis$flushAllPendingEdits(false);
             this.lucis$currentEditChunk = Long.MIN_VALUE; // the flush drained the buffers: re-check on the next edit
         }
         return true;
@@ -592,15 +592,41 @@ public final class StarLightInterface {
      * engine's own queue has work - work the inline lane deliberately does not create.</p>
      */
     public void lucisFlushPendingEdits() {
-        this.lucis$flushPendingEdits(-1L, true);
+        this.lucis$flushAllPendingEdits(true);
     }
 
     private void lucis$flushPendingEdits(final long keepKey, final boolean settle) {
+        this.lucis$flushPendingEditsImpl(true, keepKey, settle);
+    }
+
+    /** Applies every buffered burst, keeping nothing back: see {@link #lucis$flushPendingEditsImpl} for why "keep
+     *  nothing" is its own entry point rather than {@code keepKey = -1}. */
+    private void lucis$flushAllPendingEdits(final boolean settle) {
+        this.lucis$flushPendingEditsImpl(false, 0L, settle);
+    }
+
+    /**
+     * @param keepOne when true, the one chunk {@code keepKey} is left buffered (it is the chunk whose burst is still
+     *                arriving); when false the {@code keepKey} argument is ignored entirely. The flag exists because
+     *                the previous form passed {@code -1} as "keep nothing" — and a chunk key of -1 is not a sentinel,
+     *                it is the real key of chunk (-1,-1) ({@code (x & 0xFFFFFFFFL) | ((z & 0xFFFFFFFFL) << 32)} with
+     *                x = z = -1). Every buffered edit in that one chunk was therefore skipped by every flush that was
+     *                supposed to apply it: a light source placed there never lit up, live or after a save, while the
+     *                same placement one chunk away worked. It is the chunk players stand in at the origin, so it is
+     *                exactly where the first player builds.
+     */
+    private void lucis$flushPendingEditsImpl(final boolean keepOne, final long keepKey, final boolean settle) {
         // NOTE: the recompute queue lives on after the edit buffer is drained - the 256-change flush empties it long
         // before the settle points arrive, and returning early here silently skipped every deferred recompute (the sky
         // half of a bulk burst was simply never done: faster, and wrong). Check both sets.
         if (this.lucis$pendingEdits.isEmpty() && this.lucis$pendingRecomputes.isEmpty()) {
             return;
+        }
+        if (LUCIS_EDIT_DEBUG) {
+            System.out.println("FLUSHDBG enter thread=" + Thread.currentThread().getName()
+                    + " pending=" + this.lucis$pendingEdits.size()
+                    + " recomputes=" + this.lucis$pendingRecomputes.size()
+                    + " keepKey=" + keepKey + " settle=" + settle);
         }
         if (!(this.world instanceof ServerLevel serverLevel)
                 || !serverLevel.getChunkSource().chunkMap.mainThreadExecutor.isSameThread()) {
@@ -645,7 +671,7 @@ public final class StarLightInterface {
             final it.unimi.dsi.fastutil.longs.LongIterator keys = this.lucis$pendingEdits.keySet().iterator();
             while (keys.hasNext()) {
                 final long key = keys.nextLong();
-                if (key == keepKey) {
+                if (keepOne && key == keepKey) {
                     continue;
                 }
                 final it.unimi.dsi.fastutil.longs.LongOpenHashSet positions = this.lucis$pendingEdits.get(key);
@@ -966,7 +992,7 @@ public final class StarLightInterface {
     }
 
     public CompletableFuture<Void> syncFuture(final int chunkX, final int chunkZ) {
-        this.lucis$flushPendingEdits(-1L, true);
+        this.lucis$flushAllPendingEdits(true);
         return this.lightQueue.getChunkSyncFuture(chunkX, chunkZ).thenApply(Function.identity());
     }
 

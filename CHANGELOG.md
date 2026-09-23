@@ -9,6 +9,29 @@ Numbering: `2.0.1` was the first release of the 2.0 line. The development builds
 none of them was released; the measurement records in `docs/` refer to those jar names, so the version strings in
 them are left as they were measured rather than rewritten.
 
+## 2.0.3 — 2026-09-23
+
+**Completes the fix for the first defect reported from play.** 2.0.2 fixed two real causes but not the one that explained the
+reported cell, so the symptom survived it. Found by reproducing on a **copy of the reporting player's own save**, at their
+own coordinates, with the edit trace on (`docs/BUG-EMITTER-BLOCK-LIGHT.md`).
+
+- **The "keep this chunk" sentinel was `-1`, which is a real chunk key.** A chunk key is
+  `(x & 0xFFFFFFFFL) | ((z & 0xFFFFFFFFL) << 32)`, so chunk **(-1,-1)** — the chunk next to the origin, i.e. the one
+  players spawn in — has key `-1L`. Every flush that was supposed to apply its buffered edits skipped it as "the chunk
+  still being built", so **no edit in that one chunk ever reached the engine**: a light source placed there stayed dark
+  live and after a save, while the same placement one chunk away worked. The flush no longer takes a sentinel at all —
+  `keepOne=false` is an explicit parameter, and only the chunk a burst is still arriving for is held back.
+- The two 2.0.2 changes stay (both are genuine defects that were also fixed): the opaque-emitter skip rule and the
+  missing per-tick server-thread settle point.
+
+Verified on a copy of the reporting player's save and then **in their own client**: clearing the cell and placing
+glowstone reads `block=15 updBlock=15`, and it reads the same after saving, stopping and restarting.
+Regression on the four acceptance workloads afterwards is recorded below.
+
+**Two notes for whoever tests next.** A light source that was already saved *dark* does not repair itself — there is no
+change to react to; use `/lucistarlink relight` or replace the block. And a test at (0,150,0) passing does not imply the
+player's base passes: this defect only affected one chunk.
+
 ## 2.0.2 — 2026-09-23
 
 **Fixes the first defect reported from play: a placed light source did not light up, and stayed dark across a
@@ -112,3 +135,22 @@ be reached by a stray flag.
   Lucis's region-image design, which this line does not have at all: here light is owned per chunk and freed with
   it, so it is bounded by construction. That audit, and the parts of it that *were* portable (telemetry, tooling),
   are in [docs/PORT-LUCIS-IDEAS.md](docs/PORT-LUCIS-IDEAS.md).
+
+### Regression after 2.0.3, and one correction to the standing table
+
+Clean window (CPU average 12.3%), defaults only, one round of the four cells: `block_toggle_border` 0.493 ms,
+`structure_cube` 3.450 ms, `dense_chunk_patch` 1.103 ms, `sky_hole` 1.045 ms, player axis 48.8-50.2 ms per pass,
+structure fingerprint still `sky=905931078dfc5ace`.
+
+**`structure_cube` and `sky_hole` read worse than the 2.0.2 numbers (2.566 and 0.517), and that is the fix, not a
+regression.** The measured box covers chunks -3..3, which **includes chunk (-1,-1)** — the chunk whose light updates
+never propagated before this release. The earlier table was therefore measured while roughly a ninth of the box's
+changes did no propagation work at all: flattering on exactly the two cells that depend on propagated volume. With the
+work actually performed, the honest comparison against ScalableLux in the same window band is: border 0.493 vs 4.01
+(still ~8x), structure 3.450 vs 4.97 (~1.4x), dense 1.103 vs 3.65 (~3.3x), and `sky_hole` 1.045 vs 0.88 — **behind on
+that one cell on this reading**, where the pre-fix 0.69 was measured with a chunk of the box skipped.
+
+**Therefore: the four-cell table needs a multi-round re-measurement before any performance claim is repeated**, and
+the standing claim to quote until then is the narrow one — `block_toggle_border` and `dense_chunk_patch` are decisive
+wins, `structure_cube` is a win, `sky_hole` is undecided between the two engines. The light itself is unaffected:
+bit-identical to vanilla/ScalableLux on the verification box in every run.
