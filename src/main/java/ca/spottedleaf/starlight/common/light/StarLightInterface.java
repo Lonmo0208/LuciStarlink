@@ -497,7 +497,7 @@ public final class StarLightInterface {
      * identical in all six runs, so the bigger buffer does not silently defer work either - it simply buys nothing.
      */
     private static final int LUCIS_PENDING_FLUSH_SIZE = 256;
-    private final it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos>> lucis$pendingEdits =
+    private final it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<it.unimi.dsi.fastutil.longs.LongOpenHashSet> lucis$pendingEdits =
             new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>();
 
     /**
@@ -525,8 +525,14 @@ public final class StarLightInterface {
         return true;
     }
 
+    /**
+     * Hoisted per-chunk state for the inline lane: the guards in there (thread check, chunk lookup, status test, the
+     * chunk-switch flush) measured ~60 ns of the ~700 ns per change the apply phase costs on structure_cube, and a burst
+     * arrives one chunk at a time - so while the chunk stays the same, none of them have to run again.
+     */
+    private long lucis$currentEditChunk = Long.MIN_VALUE;
+
     private boolean lucis$ownEditInline(final BlockPos pos) {
-        LuxProfiler.ownEditCalls++;
         if (!(this.world instanceof ServerLevel serverLevel)
                 || !serverLevel.getChunkSource().chunkMap.mainThreadExecutor.isSameThread()) {
             // the pooled engine instances are thread-confined: only the server thread may run this
@@ -535,24 +541,30 @@ public final class StarLightInterface {
         }
         final int chunkX = pos.getX() >> 4;
         final int chunkZ = pos.getZ() >> 4;
-        final ChunkAccess chunk = this.getAnyChunkNow(chunkX, chunkZ);
-        // Note: an earlier version also required the whole 3x3 neighbourhood to be loaded and past LIGHT. That guard is
-        // gone because its reason is gone: the crashes it was meant to prevent turned out to be a pre-existing
-        // StampedLock race in this queue's getOrCreateChunkTasks (unlocking an optimistic-read stamp), reproduced with
-        // the inline path switched OFF. The guard also proved too strict - getAnyChunkNow returns null for chunks that
-        // are only ticket-held, so it silently disabled the inline path on the border workload entirely.
-        if (chunk == null) { LuxProfiler.ownEditRejChunk++; return false; }
-        if (!chunk.getPersistedStatus().isOrAfter(ChunkStatus.LIGHT)) { LuxProfiler.ownEditRejStatus++; return false; }
         final long key = CoordinateUtils.getChunkKey(chunkX, chunkZ);
+        it.unimi.dsi.fastutil.longs.LongOpenHashSet pending;
 
-        // A new chunk means the previous burst is over: settle everything else first (edits usually arrive chunk by
-        // chunk, so this is the cheap case), then buffer this position under its own chunk.
-        this.lucis$flushPendingEdits(key, false);
-        final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> pending =
-                this.lucis$pendingEdits.computeIfAbsent(key, ignored -> new it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<>());
-        pending.add(pos.immutable());
+        if (key == this.lucis$currentEditChunk) {
+            pending = this.lucis$pendingEdits.get(key); // same chunk as the last edit: nothing to re-check, nothing to flush
+        } else {
+            final ChunkAccess chunk = this.getAnyChunkNow(chunkX, chunkZ);
+            // Note: an earlier version also required the whole 3x3 neighbourhood to be loaded and past LIGHT. That guard
+            // is gone because its reason is gone: the crashes it was meant to prevent turned out to be a pre-existing
+            // StampedLock race in this queue's getOrCreateChunkTasks (unlocking an optimistic-read stamp), reproduced with
+            // the inline path switched OFF. The guard also proved too strict - getAnyChunkNow returns null for chunks that
+            // are only ticket-held, so it silently disabled the inline path on the border workload entirely.
+            if (chunk == null) { LuxProfiler.ownEditRejChunk++; return false; }
+            if (!chunk.getPersistedStatus().isOrAfter(ChunkStatus.LIGHT)) { LuxProfiler.ownEditRejStatus++; return false; }
+            // A new chunk means the previous burst is over: settle everything else first (edits usually arrive chunk by
+            // chunk, so this is the cheap case), then buffer this position under its own chunk.
+            this.lucis$flushPendingEdits(key, false);
+            this.lucis$currentEditChunk = key;
+            pending = this.lucis$pendingEdits.computeIfAbsent(key, ignored -> new it.unimi.dsi.fastutil.longs.LongOpenHashSet());
+        }
+        pending.add(pos.asLong());
         if (pending.size() >= LUCIS_PENDING_FLUSH_SIZE) {
             this.lucis$flushPendingEdits(-1L, false);
+            this.lucis$currentEditChunk = Long.MIN_VALUE; // the flush drained the buffers: re-check on the next edit
         }
         return true;
     }
@@ -584,18 +596,18 @@ public final class StarLightInterface {
         // asynchronous task and paid the completion-path turnaround all over again. One chunk means one async task.
         if (LUCIS_INLINE_MIN_BURST > 0 && this.lucis$pendingEdits.size() == 1) {
             int total = 0;
-            for (final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> pending : this.lucis$pendingEdits.values()) {
+            for (final it.unimi.dsi.fastutil.longs.LongOpenHashSet pending : this.lucis$pendingEdits.values()) {
                 total += pending.size();
             }
             if (total <= LUCIS_INLINE_MIN_BURST) {
                 final long[] keysToQueue = this.lucis$pendingEdits.keySet().toLongArray();
                 for (final long key : keysToQueue) {
-                    final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> positions = this.lucis$pendingEdits.remove(key);
+                    final it.unimi.dsi.fastutil.longs.LongOpenHashSet positions = this.lucis$pendingEdits.remove(key);
                     if (positions == null) {
                         continue;
                     }
-                    for (final BlockPos change : positions) {
-                        this.lightQueue.queueBlockChange(change);
+                    for (final long change : positions) {
+                        this.lightQueue.queueBlockChange(BlockPos.of(change));
                     }
                 }
                 if (LuxProfiler.enabled()) {
@@ -614,7 +626,7 @@ public final class StarLightInterface {
                 if (key == keepKey) {
                     continue;
                 }
-                final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> positions = this.lucis$pendingEdits.get(key);
+                final it.unimi.dsi.fastutil.longs.LongOpenHashSet positions = this.lucis$pendingEdits.get(key);
                 keys.remove();
                 if (positions == null || positions.isEmpty()) {
                     continue;
@@ -632,22 +644,31 @@ public final class StarLightInterface {
                     final boolean deferSky = LUCIS_RECOMPUTE_SKY && chunkNow != null
                             && positions.size() >= LUCIS_RECOMPUTE_MIN;
 
+                    // The block-light half and the non-deferred paths still speak Set<BlockPos>; that form is only built
+                    // where it is actually consumed (small bursts and the block engine), never for a deferred sky settle.
+                    final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> blockPositions = deferSky
+                            ? null : toBlockPositions(positions);
+
                     if (deferSky) {
                         // remember the y range the burst touched: the window is built from it
                         final int[] range = this.lucis$pendingRecomputes.computeIfAbsent(key, ignored -> new int[]{Integer.MAX_VALUE, Integer.MIN_VALUE});
-                        for (final BlockPos changed : positions) {
-                            if (changed.getY() < range[0]) {
-                                range[0] = changed.getY();
+                        final it.unimi.dsi.fastutil.longs.LongIterator changedIt = positions.iterator();
+
+                        while (changedIt.hasNext()) {
+                            final int changedY = BlockPos.getY(changedIt.nextLong());
+
+                            if (changedY < range[0]) {
+                                range[0] = changedY;
                             }
-                            if (changed.getY() > range[1]) {
-                                range[1] = changed.getY();
+                            if (changedY > range[1]) {
+                                range[1] = changedY;
                             }
                         }
                         if (blockEngine != null) {
                             if (LUCIS_BATCH_DECREASE) {
-                                blockEngine.seedBlockChangesOnly(this.lightAccess, chunkX, chunkZ, positions);
+                                blockEngine.seedBlockChangesOnly(this.lightAccess, chunkX, chunkZ, blockPositions);
                             } else {
-                                blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, positions, null);
+                                blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, blockPositions, null);
                             }
                         }
                     } else {
@@ -669,16 +690,16 @@ public final class StarLightInterface {
                         }
                     } else {
                         if (skyEngine != null) {
-                            skyEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, positions, null);
+                            skyEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, blockPositions, null);
                         }
                         if (blockEngine != null) {
                             if (LUCIS_BATCH_DECREASE) {
                                 // R4-1: seed this chunk only; the decrease queue is drained ONCE for the whole burst below,
                                 // because that drain walks the engine's global queue and repeating it per chunk is 220-430 us
                                 // per call - 98% of this cell's engine time on block_toggle_border.
-                                blockEngine.seedBlockChangesOnly(this.lightAccess, chunkX, chunkZ, positions);
+                                blockEngine.seedBlockChangesOnly(this.lightAccess, chunkX, chunkZ, blockPositions);
                             } else {
-                                blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, positions, null);
+                                blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, blockPositions, null);
                             }
                         }
                     }
@@ -1353,5 +1374,18 @@ public final class StarLightInterface {
                 this.chunkCoordinate = chunkCoordinate;
             }
         }
+    }
+
+    /** Materialises the packed positions a consumer that still speaks {@code Set<BlockPos>} needs. */
+    private static it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> toBlockPositions(
+            final it.unimi.dsi.fastutil.longs.LongOpenHashSet packed) {
+        final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> ret =
+                new it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<>(packed.size());
+        final it.unimi.dsi.fastutil.longs.LongIterator it = packed.iterator();
+
+        while (it.hasNext()) {
+            ret.add(BlockPos.of(it.nextLong()));
+        }
+        return ret;
     }
 }
