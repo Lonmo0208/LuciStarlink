@@ -708,7 +708,10 @@ public final class StarLightInterface {
 
                     skyEngine.setupCaches(this.lightAccess, chunkX * 16 + 7, 128, chunkZ * 16 + 7, true, true);
                     try {
+                        // the recompute pushes both directions, so both propagations have to run (decrease first, as the
+                        // engine does everywhere else) before the section is published
                         skyEngine.recomputeChunkSkyLight(this.lightAccess, chunk);
+                        skyEngine.performLightDecrease(this.lightAccess);
                         skyEngine.performLightIncrease(this.lightAccess);
                         skyEngine.updateVisible(this.lightAccess);
                     } finally {

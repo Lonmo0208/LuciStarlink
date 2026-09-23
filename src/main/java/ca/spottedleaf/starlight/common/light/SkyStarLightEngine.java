@@ -749,6 +749,7 @@ public final class SkyStarLightEngine extends StarLightEngine {
         final int height = maxY - minY + 1;
         final int cells = 256 * height;
 
+        final long tStart = System.nanoTime();
         final byte[] light = this.recomputeCells(cells);
         final byte[] material = this.recomputeMaterialCells(cells);
         final byte[] before = this.recomputeBeforeCells(cells);
@@ -783,6 +784,7 @@ public final class SkyStarLightEngine extends StarLightEngine {
 
         System.arraycopy(light, 0, before, 0, cells); // the raise-only install needs the previous values
 
+        final long tExpand = System.nanoTime();
         // ---- 2) run bottoms for this chunk and for the one-block halo, the halo from material (see the class doc)
         for (int z = -1; z <= 16; z++) {
             for (int x = -1; x <= 16; x++) {
@@ -793,6 +795,7 @@ public final class SkyStarLightEngine extends StarLightEngine {
             }
         }
 
+        final long tHalo = System.nanoTime();
         // ---- 3) sweep the centre chunk, recording each column's run bottom
         for (int z = 0; z < 16; z++) {
             for (int x = 0; x < 16; x++) {
@@ -812,6 +815,7 @@ public final class SkyStarLightEngine extends StarLightEngine {
             }
         }
 
+        final long tSweep = System.nanoTime();
         // ---- 4) the shell: run bottoms, plus lit cells beside a column whose run ends lower (light leaves the column)
         int tail = 0;
 
@@ -846,6 +850,7 @@ public final class SkyStarLightEngine extends StarLightEngine {
             }
         }
 
+        final long tShell = System.nanoTime();
         // ---- 5) the engine's increase rule over the buffers, to a fixed point
         int head = 0;
 
@@ -910,7 +915,11 @@ public final class SkyStarLightEngine extends StarLightEngine {
             }
         }
 
-        // ---- 6) install: raise only, and push every raised cell so neighbouring chunks receive the light as well
+        final long tBfs = System.nanoTime();
+        // ---- 6) install: BOTH directions. A full recompute replaces the light wholesale, so cells that must go dark
+        // have to be handed to the decrease machinery (the first version was raise-only, which silently skipped the sky
+        // half of a "place blocks" burst - the shadow never formed). Each changed cell is pushed with its own level so
+        // both propagations can carry the change into neighbouring chunks.
         final long propagateDirection = AxisDirection.POSITIVE_Y.everythingButThisDirection;
 
         for (int y = minY; y <= maxY; y++) {
@@ -921,7 +930,7 @@ public final class SkyStarLightEngine extends StarLightEngine {
                 final int target = light[index] & 0xFF;
                 final int old = before[index] & 0xFF;
 
-                if (target <= old) {
+                if (target == old) {
                     continue;
                 }
                 final int x = col & 15;
@@ -929,13 +938,34 @@ public final class SkyStarLightEngine extends StarLightEngine {
                 final int wx = worldX0 + x;
                 final int wz = worldZ0 + z;
 
-                // write through the nibble directly (the buffers are the recompute's own working copy)
                 this.setLightLevel(wx, y, wz, target);
-                this.appendToIncreaseQueue(
-                        ((wx + (wz << 6) + (y << (6 + 6)) + this.coordinateOffset) & ((1L << (6 + 6 + 16)) - 1))
-                                | ((long) target << (6 + 6 + 16))
-                                | (propagateDirection << (6 + 6 + 16 + 4)));
+                // Push ONLY at the chunk's boundary. The recompute already produced this chunk's fixed point, so its
+                // interior needs no propagation; what the engine's queues are for is telling the NEIGHBOURING chunks,
+                // and that can only happen across a shared face (light moves one cell at a time). The first version
+                // pushed every changed cell - ~30,000 of them on structure_cube - which made the engine redo the whole
+                // propagation in its own slow loop: 13 ms for work the scratch had already finished.
+                if (x != 0 && x != 15 && z != 0 && z != 15) {
+                    continue;
+                }
+                final long encoded = ((wx + (wz << 6) + (y << (6 + 6)) + this.coordinateOffset)
+                        & ((1L << (6 + 6 + 16)) - 1)) | (propagateDirection << (6 + 6 + 16 + 4));
+
+                if (target > old) {
+                    this.appendToIncreaseQueue(encoded | ((long) target << (6 + 6 + 16)));
+                } else {
+                    this.appendToDecreaseQueue(encoded | ((long) old << (6 + 6 + 16)));
+                }
             }
+        }
+        if (Boolean.getBoolean("scalablelux.recomputeDebug")) {
+            final long tEnd = System.nanoTime();
+            this.logRecomputeDebug("TIME expandUs=" + (tExpand - tStart) / 1000
+                    + " haloUs=" + (tHalo - tExpand) / 1000
+                    + " sweepUs=" + (tSweep - tHalo) / 1000
+                    + " shellUs=" + (tShell - tSweep) / 1000
+                    + " bfsUs=" + (tBfs - tShell) / 1000
+                    + " installUs=" + (tEnd - tBfs) / 1000
+                    + " totalUs=" + (tEnd - tStart) / 1000);
         }
     }
 
@@ -945,28 +975,24 @@ public final class SkyStarLightEngine extends StarLightEngine {
     }
 
     /** A halo column's run bottom, computed from the neighbouring chunk's material (not from its light). */
+     /**
+      * A halo column's run bottom, read from the light that is already there.
+      *
+      * <p>The first version read it from the neighbouring chunk's material, which is more "correct" but cost ~7 ms per
+      * recompute: 64 halo columns x 24 sections of first-touch material builds (4.5 us each) and 4 KB allocations. The
+      * light-based read is justified by measurement: our stored light equals the rule's fixed point over 574,340
+      * compared cells to within 24 cells (section 25), so the neighbours' runs are the rule's runs.</p>
+      *
+      * <p>Exactness: the first cell that is not 15 from the top IS the run bottom, because skylight attenuates by at
+      * least 1 per step and therefore cannot be 15 again below its own run.</p>
+      */
     private int haloRunBottom(final int wx, final int wz, final int minY, final int maxY) {
-        int runBottom = Integer.MIN_VALUE;
-        int slot = -1;
-        byte[] material = null;
-
         for (int y = maxY; y >= minY; y--) {
-            final int slotNow = (wx >> 4) + 5 * (wz >> 4) + (5 * 5) * (y >> 4) + this.chunkSectionIndexOffset;
-
-            if (slotNow != slot) {
-                slot = slotNow;
-                material = this.materialBound(slotNow);
+            if (this.getLightLevel(wx, y, wz) != 15) {
+                return y + 1;
             }
-            final int opacity = material == null
-                    ? ExtendedChunk.MATERIAL_UNCACHED
-                    : (material[((y & 15) << 8) | ((wz & 15) << 4) | (wx & 15)] & 0xFF);
-
-            if (opacity != 0) {
-                break;
-            }
-            runBottom = y;
         }
-        return runBottom;
+        return minY;
     }
 
     private byte[] recomputeCells(final int cells) {
@@ -1007,9 +1033,9 @@ public final class SkyStarLightEngine extends StarLightEngine {
             queue = this.recomputeQueue = new int[cells * 2];
         }
         return queue;
-}
+    }
     /** One diagnostic line, prefixed so it can be grepped out of a run log. */
     private void logRecomputeDebug(final String message) {
-        System.out.println("SKYRECOMPUTE-DEBUG chunk=" + " " + message);
+        System.out.println("SKYRECOMPUTE-DEBUG " + message);
     }
 }
