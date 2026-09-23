@@ -1376,15 +1376,47 @@ public final class StarLightInterface {
         }
     }
 
-    /** Materialises the packed positions a consumer that still speaks {@code Set<BlockPos>} needs. */
-    private static it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> toBlockPositions(
+    /**
+     * Materialises the packed positions a consumer that still speaks {@code Set<BlockPos>} needs, <b>minus the changes
+     * that provably cannot move block light</b>.
+     *
+     * <p>The skip rule: a cell whose block light is already 0 that becomes fully opaque (opacity 15) changes nothing for
+     * block light. It emits nothing (level 0), so it is not a source for its neighbours, and relaying light through it
+     * would have needed a level above 0 to pass on. Its own value stays 0, and no neighbour's computed value depends on
+     * whether the cell is air-with-0 or stone. That is the shape a bulk fill has on every "place" pass - structure_cube
+     * places 4096 stone blocks - and block seeding there costs ~1.2 us per position.</p>
+     */
+    private it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> toBlockPositions(
             final it.unimi.dsi.fastutil.longs.LongOpenHashSet packed) {
         final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> ret =
                 new it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<>(packed.size());
         final it.unimi.dsi.fastutil.longs.LongIterator it = packed.iterator();
+        final net.minecraft.world.level.lighting.LayerLightEventListener blockLight = this.world == null
+                ? null
+                : this.world.getChunkSource().getLightEngine().getLayerListener(net.minecraft.world.level.LightLayer.BLOCK);
+        final BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
+        int skipped = 0;
 
         while (it.hasNext()) {
-            ret.add(BlockPos.of(it.nextLong()));
+            final long packedPos = it.nextLong();
+
+            if (blockLight != null) {
+                mutable.set(BlockPos.getX(packedPos), BlockPos.getY(packedPos), BlockPos.getZ(packedPos));
+                if (blockLight.getLightValue(mutable) == 0) {
+                    final net.minecraft.world.level.block.state.BlockState state = this.world.getBlockState(mutable);
+                    final int opacity = ((ca.spottedleaf.starlight.common.blockstate.ExtendedAbstractBlockState) state)
+                            .scalablelux$getOpacityIfCached();
+
+                    if (opacity == 15) {
+                        skipped++;
+                        continue; // provably a no-op for block light
+                    }
+                }
+            }
+            ret.add(BlockPos.of(packedPos));
+        }
+        if (LuxProfiler.enabled()) {
+            LuxProfiler.ownEditBlockSkipped += skipped;
         }
         return ret;
     }
