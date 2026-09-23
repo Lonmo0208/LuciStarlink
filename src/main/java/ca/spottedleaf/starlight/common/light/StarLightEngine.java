@@ -1314,12 +1314,13 @@ public abstract class StarLightEngine {
     private static final boolean FLAT_LIGHT = Boolean.getBoolean("scalablelux.flatLight");
     private byte[][] flatCells;
 
-    /** R5: the per-cell opacity table (see {@link #materialBound(int)}). Off unless {@code
-     *  -Dscalablelux.materialTable=true}; {@code materialCells} holds per-slot references to the chunk-owned tables. */
-    // The recompute NEEDS the material table (without it every cell reads as "opacity not cached" and the whole
-    // rebuild silently becomes a no-op), so asking for one turns on the other.
-    private static final boolean MATERIAL_TABLE = Boolean.getBoolean("scalablelux.materialTable")
-            || Boolean.getBoolean("scalablelux.recomputeSky");
+    /**
+     * R5: the per-cell opacity table (see {@link #materialBound(int)}). Off by default; the dirty bit it needs came from
+     * a mixin on the hot path ({@code LevelChunkSection.setBlockState}), which was removed from the mixin config once
+     * the table measured slower than the palette lookup it replaced (section 18) - so enabling this flag alone would
+     * only cost, without the invalidation signal. Kept as the record of that route.
+     */
+    private static final boolean MATERIAL_TABLE = Boolean.getBoolean("scalablelux.materialTable");
     private byte[][] materialCells;
     /** Section object each bound material table was validated against, so a replaced section forces a rebuild. */
     private LevelChunkSection[] materialSource;

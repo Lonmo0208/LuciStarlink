@@ -10,7 +10,6 @@
     "common.chunk.EmptyLevelChunkMixin",
     "common.chunk.ImposterProtoChunkMixin",
     "common.chunk.LevelChunkMixin",
-    "common.chunk.LevelChunkSectionMixin",
     "common.chunk.ProtoChunkMixin",
     "common.lightengine.ChunkMapMixin",
     "common.lightengine.LevelLightEngineMixin",
