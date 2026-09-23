@@ -5,12 +5,14 @@ replaces the update path, where the 1.x line was built on Lucis and owned a regi
 the 1.x branch's own changelog; for what belongs to whom see [NOTICE](NOTICE) and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-Version numbering follows `2.0.0-alpha.N` while the line is in development.
+Numbering: `2.0.1` is the first release of the 2.0 line. The development builds were numbered `2.0.0-alpha.N` and
+none of them was released; the measurement records in `docs/` refer to those jar names, so the version strings in
+them are left as they were measured rather than rewritten.
 
-## 2.0.0-alpha.1 — 2026-09-23
+## 2.0.1 — 2026-09-23
 
-First build of the 2.0 line. **Not tagged yet**; the jar is built locally
-(`./gradlew build`, artifact stays local by project rule).
+First release of the 2.0 line, tagged `v2.0.1`. The jar is built locally (`./gradlew build`); release artifacts stay
+local for this project by policy, and the GitHub workflow compiles the tree without uploading anything.
 
 ### The engine: an update path of our own, on ScalableLux's engine
 
