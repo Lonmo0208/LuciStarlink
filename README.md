@@ -53,64 +53,58 @@ used to carry (`scalablelux.batchDecrease`) is gone with the code it controlled.
 
 ## Performance
 
-Numbers from this project's own harness (`run-benchmark-scalablelux`), which measures each engine in the same
-session, interleaved, on the same world, with a fixed seed and a settled world before each measurement.
-
-> **This table is superseded as of 2.0.4, and the reason matters more than the numbers.** The `block_toggle_border`
-> figure below was measured while that workload's block-light propagation was **not being done at all** — a defect
-> that also made placed light sources light only their own cell (`docs/BUG-EMITTER-BLOCK-LIGHT.md`). With the light
-> actually computed, the same harness reads **5.03 ms** for that cell, i.e. this engine is currently *behind*
-> ScalableLux's 4.01 ms there, and the "12× faster" claim that used to stand on it was an artefact. The other three
-> workloads are unaffected in kind and remain wins on a first post-fix reading (`structure_cube` 2.79, `dense`
-> 1.07, `sky_hole` 0.56 ms, one round, CPU 17.8%). **A multi-round, same-session re-measurement is required before
-> any of this is quoted again**; the row-by-row table below is kept only as the pre-2.0.4 record.
+Numbers from this project's own harness (`run-benchmark-scalablelux`), which runs each engine in the same session,
+interleaved (the three engines alternate round by round), on the same world, with a fixed seed and a settled world
+before each measurement. Medians of 3 rounds per side. This is the table measured **after** the 2.0.4 correctness
+fix — see the note below it, because the table before that release was wrong in a way that flattered this engine.
 
 **Engine metric** — `minPassNanos`, the engine's own work for one pass (the best measured pass, so tick-crossing
-noise is excluded). Median of 3 rounds, one session, CPU average 29.9%:
+noise is excluded):
 
-| workload (what a player calls it) | LuciStarlink 2.0 (pre-2.0.4) | ScalableLux | 1.x (Lucis line) |
+| workload (what a player calls it) | **LuciStarlink 2.0.4** | ScalableLux | 1.x (Lucis line) | verdict |
+|---|---|---|---|---|
+| `block_toggle_border` — placing/breaking fast along a chunk border | 5.00 ms | 4.18 ms | **1.22 ms** | **lost** — behind both |
+| `structure_cube` — building a solid structure | **2.78 ms** | 4.62 ms | 2.97 ms | **win** vs both |
+| `dense_chunk_patch` — large-area edits | **1.07 ms** | 4.07 ms | 2.35 ms | **win** vs both |
+| `sky_hole` — a single small edit | **0.69 ms** | 0.83 ms | 1.06 ms | **win** vs both |
+
+For scale, **vanilla** (no light mod) reads roughly 10–11 ms on the three heavy workloads and 1.0 ms on `sky_hole` in
+the same harness — measured in a separate session, so quote it as an order of magnitude rather than as a same-session
+ratio.
+
+**Player metric** — `bench.pass_wall_actual`, the wall time of a whole pass, which *does* include the tick crossings
+a player waits through (median / best round):
+
+| workload | LuciStarlink 2.0.4 | ScalableLux | 1.x |
 |---|---|---|---|
-| `block_toggle_border` — placing/breaking fast along a chunk border | ~~0.32 ms~~ **5.03 ms** | 4.01 ms | 0.84 ms |
-| `structure_cube` — building a solid structure | **2.51 ms** (2.79 ms post-fix) | 4.97 ms | 2.69 ms |
-| `dense_chunk_patch` — large-area edits | **1.07 ms** (1.07 ms post-fix) | 3.65 ms | 1.96 ms |
-| `sky_hole` — a single small edit | **0.69 ms** (0.56 ms post-fix) | 0.88 ms | 0.73 ms |
+| border | 49 / 48 ms | 50 / 49 ms | 103 / 72 ms |
+| structure | 48 / 46 ms | 49 / 48 ms | 61 / 49 ms |
+| dense | 50 / 49 ms | 50 / 49 ms | 70 / 51 ms |
+| sky_hole | 50 / 49 ms | 49 / 49 ms | 67 / 62 ms |
 
-For scale, **vanilla** (no light mod) reads 10.41 / 10.81 / 10.17 / 1.03 ms on the same four workloads in the same
-harness — measured in a separate session, so quote it as an order of magnitude rather than as a same-session ratio.
+The window these numbers come from was **loaded** (CPU average 30.3%, peak 48.7% — the machine this project measures
+on runs other work by design). Same-session interleaving is what makes the comparison valid; the absolute values are
+the player-facing picture, not a quiet-room number.
 
-**Player metric** — `bench.pass_wall_actual`, the wall time of a whole pass, which *does* include the tick
-crossings a player waits through. Median / best round, same session:
+**The honest reading:**
 
-| workload | LuciStarlink 2.0 | ScalableLux | 1.x |
-|---|---|---|---|
-| border | **49 / 49 ms** | 50 / 49 ms | 101 / 85 ms |
-| structure | **49 / 49 ms** | 49 / 49 ms | 68 / 55 ms |
-| dense | **50 / 50 ms** | 50 / 47 ms | 73 / 65 ms |
-| sky_hole | 50 / 50 ms | 50 / 50 ms | **49 / 27 ms** |
-
-**The honest reading of those two tables:**
-
-- **Against ScalableLux, as measured after the 2.0.4 correctness fix: two clear wins, one loss.** `structure_cube`
-  2.79 vs 4.97, `dense_chunk_patch` 1.07 vs 3.65, `sky_hole` 0.56 vs 0.88 — and `block_toggle_border` **5.03 vs
-  4.01, a loss** (the pre-2.0.4 0.32 there was the artefact described above). This is one round; the multi-round
-  re-measurement is the next record to publish.
-- **The player metric is level with ScalableLux** — 49–50 ms is one server tick, the floor of what any engine can
-  deliver for an edit that has to be visible to the next tick, and both engines sit on it.
-- **Against 1.x:** its window reads 0.84 / 2.69 / 1.96 / 0.73 ms, which we cannot compare cell by cell without a
-  same-session run; what is directly comparable is that our light is bit-identical to vanilla's and 1.x's is not.
+- **Two clear wins, one loss, one floor.** `structure_cube` (2.78 vs 4.62 / 2.97), `dense_chunk_patch` (1.07 vs 4.07 /
+  2.35) and `sky_hole` (0.69 vs 0.83 / 1.06) are won against **both** predecessors. `block_toggle_border` is **lost
+  to both** (5.00 vs ScalableLux 4.18 and 1.x 1.22) — that cell is small synchronous work, and 1.x's engine is
+  synchronous by design.
+- **The player axis is the one-tick floor** (48–50 ms) for this engine and for ScalableLux on all four workloads;
+  1.x is there only on `structure_cube`'s best round and 30–50 ms behind on the other three.
+- **Not speed, but correctness:** the light this engine produces is bit-identical to vanilla and to ScalableLux on
+  the measurement box — every run prints a fingerprint (`sky=905931078dfc5ace`). The 1.x line's is
+  `641356fc41163add`, i.e. identical to neither.
+- **Read this before quoting the older tables anywhere:** before 2.0.4 this engine's `block_toggle_border` figure was
+  0.32 ms and the headline claim was "12× faster than ScalableLux". That measurement was taken while the cell's
+  block-light propagation **was not being done at all** — the same defect that made placed torches light only their
+  own cell (`docs/BUG-EMITTER-BLOCK-LIGHT.md`, root cause four). The 0.32 was an artefact and this README no longer
+  quotes it.
 - **The `structure_cube` caveat, which belongs in any claim about that cell:** roughly 90% of that reading is
   Minecraft's own `Level.setBlockState` (state write, heightmap, dirty marking, vanilla's synchronous light hook) —
-  600–775 ns per change for *every* engine measured, vanilla included. 1.x's 2.86 ms is ~2.6 ms of that floor plus
-  ~0.26 ms of its own work. That cell cannot produce a large victory for anybody, this build included.
-- **Not speed, but correctness:** the light this engine produces is **bit-identical to vanilla and to ScalableLux**
-  on a 599,040-cell verification box — every run prints a fingerprint (`sky=905931078dfc5ace block=59e2252f732ce67b`).
-  The 1.x line's fingerprint is `641356fc41163add`, i.e. it is not vanilla-identical. The windowed recompute
-  reproduces the engine's own propagation rule instead of approximating it, and that is checked on every acceptance
-  run.
-
-**Re-verified on the shipped defaults** (no `-Dscalablelux.*` flag anywhere, only the harness protocol triple,
-CPU average 8.3%): 0.331 / 2.698 / 1.029 / 0.772 ms, wall 48.5–50.5 ms per pass, canonical fingerprint. The default
-build *is* the measured build.
+  600–775 ns per change for *every* engine measured, vanilla included. It cannot produce a large victory for anybody.
 
 ## Compatibility
 
@@ -119,7 +113,7 @@ build *is* the measured build.
 - **Sable** is supported: per-plot light engines are deferred to Sable instead of fighting them.
 - Works alongside worldgen optimizers (C2ME, Generator Accelerator, Fast Noise); the benchmark harness can measure
   those combinations directly.
-- The three engine switches are consumed **only** inside paths guarded by "am I a `ServerLevel` and is this the
+- The engine switches are consumed **only** inside paths guarded by "am I a `ServerLevel` and is this the
   server thread", so a client runs the unmodified base path — the client cannot see this change at all.
 
 ## Configuration

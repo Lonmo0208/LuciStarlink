@@ -33,28 +33,45 @@ not a test — it reads 15 even when nothing propagates. Checking the gradient i
 | 3 blocks west | 12 | **0** | 12 | 12 |
 
 
-### Regression after 2.0.4, and the correction it forces
+### Regression after 2.0.4, three rounds, three engines, and the correction it forces
 
-Clean window (CPU average 17.8%), defaults only, one round of the four cells:
+Same session, interleaved (the three engines alternate round by round), 3 rounds per side, per-round medians.
+Window load: CPU average 30.3%, peak 48.7% — a loaded window, so quote the **ratios between sides** (which the
+interleaving makes valid) and treat the absolute values as the player-facing dataset rather than a protocol-valid
+absolute.
 
-| workload | 2.0.4 (work actually done) | the table quoted before | ScalableLux |
+**Engine metric — `minPassNanos`, ms (3-round median):**
+
+| workload | LuciStarlink 2.0.4 | ScalableLux | 1.x | verdict |
+|---|---|---|---|---|
+| `block_toggle_border` | 5.00 | 4.18 | **1.22** | **lost** — behind both predecessors |
+| `structure_cube` | **2.78** | 4.62 | 2.97 | **win** vs both |
+| `dense_chunk_patch` | **1.07** | 4.07 | 2.35 | **win** vs both |
+| `sky_hole` | **0.69** | 0.83 | 1.06 | **win** vs both |
+
+**Player metric — `bench.pass_wall_actual`, ms (median / best round):**
+
+| workload | LuciStarlink 2.0.4 | ScalableLux | 1.x |
 |---|---|---|---|
-| `block_toggle_border` | **5.033 ms** | 0.32 ms | 4.01 ms |
-| `structure_cube` | 2.788 ms | 2.51 ms | 4.97 ms |
-| `dense_chunk_patch` | 1.073 ms | 1.07 ms | 3.65 ms |
-| `sky_hole` | 0.563 ms | 0.69 ms | 0.88 ms |
+| border | 49 / 48 | 50 / 49 | 103 / 72 |
+| structure | 48 / 46 | 49 / 48 | 61 / 49 |
+| dense | 50 / 49 | 50 / 49 | 70 / 51 |
+| sky_hole | 50 / 49 | 49 / 49 | 67 / 62 |
 
-**`block_toggle_border` regressed tenfold, and that is the point: the 0.32 ms was measured while the block-light half
-of the work was not being done at all.** The "12x faster than ScalableLux on that cell" claim was an artefact of the
-same defect this release fixes. With the drain actually running, this engine is *slower* than ScalableLux there
-(5.03 vs 4.01) and roughly level with the 1.x line (0.84 in its own window — cell-level comparison needs the same
-session). `structure_cube`, `dense_chunk_patch` and `sky_hole` remain wins on this reading.
+Structure fingerprint on every one of our runs: `sky=905931078dfc5ace` (bit-identical to vanilla and ScalableLux);
+1.x's is `641356fc41163add`, i.e. identical to neither.
 
-**What this means for anything published:** the four-workload table needs a multi-round, same-session re-measurement
-before it is quoted again, and the border cell specifically needs the R4-1 idea revisited *correctly* (a consolidated
-drain that runs with proper caches, or a cheaper per-chunk drain) if it is to be won back. Until that exists, the
-honest standing claim is: this engine is the correct one, it wins `structure_cube` and `dense_chunk_patch`, it is
-competitive on `sky_hole`, and it loses `block_toggle_border`.
+**The correction this forces, stated plainly:** the table quoted before 2.0.4 — border 0.32 ms, "12× faster than
+ScalableLux" — was an artefact of the defect this release fixes; that workload's block-light propagation was not being
+done. With the work done, **this engine loses `block_toggle_border` to both ScalableLux (4.18) and the 1.x line
+(1.22)**, and wins the other three against both. On the player axis it sits on the one-tick floor (48–50 ms) together
+with ScalableLux, ahead of 1.x on three of four.
+
+**What that leaves, honestly:** the engine is correct now (its light is bit-identical to vanilla, and propagation is
+verified by gradient rather than by the emitter's own cell), it is the fastest of the three on `structure_cube`,
+`dense_chunk_patch` and `sky_hole`, and it is the slowest of the three on `block_toggle_border`. Winning that cell
+back means re-designing the consolidated-drain idea so the drain runs with proper caches — not restoring the code
+that was removed.
 
 Numbering: `2.0.1` was the first release of the 2.0 line. The development builds were numbered `2.0.0-alpha.N` and
 none of them was released; the measurement records in `docs/` refer to those jar names, so the version strings in
