@@ -1072,6 +1072,7 @@ public final class SkyStarLightEngine extends StarLightEngine {
         final byte[] material = this.recomputeMaterialCells(cells);
         final byte[] before = this.recomputeBeforeCells(cells);
         final int[] queue = this.recomputeQueueCells(cells);
+        final int[] runs = this.recomputeRuns; // 18x18: the chunk plus a one-block halo, indexed (z+1)*18 + (x+1)
         final long tStart = System.nanoTime();
 
         // ---- 1) expand the window, column-major: index = col * height + (y - yLo)
@@ -1111,31 +1112,46 @@ public final class SkyStarLightEngine extends StarLightEngine {
         System.arraycopy(light, 0, before, 0, cells);
         final long tExpand = System.nanoTime();
 
+        // ---- 1b) run bottoms for the one-block halo, computed ONCE per settle. The shell asks for a neighbour's run
+        // bottom for every column and every direction; doing that per lookup would be 1024 heightmap-guided searches a
+        // settle instead of the 64 different columns that actually exist.
+        for (int z = -1; z <= 16; z++) {
+            for (int x = -1; x <= 16; x++) {
+                if (x >= 0 && x <= 15 && z >= 0 && z <= 15) {
+                    continue;
+                }
+                runs[(z + 1) * 18 + (x + 1)] = this.runBottomFromLight(worldX0 + x, worldZ0 + z, worldMinY, worldMaxY);
+            }
+        }
+        final long tHalo = System.nanoTime();
+
         // ---- 2) sweep: the 15-runs, from the world top down (the window's top edge may sit under a ceiling, so the run
         // bottom has to be found from the material, not assumed to be the window top)
         for (int z = 0; z < 16; z++) {
             for (int x = 0; x < 16; x++) {
                 final int col = (z << 4) | x;
                 final int windowBase = col * height;
+                int runBottom = Integer.MIN_VALUE;
 
                 // The part above the window is UNCHANGED, and 15 requires the cell above to be 15 - so ONE light read at
                 // the window's top edge decides whether this column has a run inside the window at all. The earlier
                 // version walked the palette from the world top for every column (~250 reads x 256 columns), which was
                 // the settle's largest single cost.
-                if (this.getLightLevel(worldX0 + x, yHi + 1 > worldMaxY ? worldMaxY : yHi + 1, worldZ0 + z) != 15) {
-                    continue; // no run reaches the window from above: the BFS handles whatever the edit changed
-                }
-                int y = yHi;
+                if (this.getLightLevel(worldX0 + x, yHi + 1 > worldMaxY ? worldMaxY : yHi + 1, worldZ0 + z) == 15) {
+                    int y = yHi;
 
-                while (y >= yLo) {
-                    final int i = windowBase + (y - yLo);
+                    while (y >= yLo) {
+                        final int i = windowBase + (y - yLo);
 
-                    if (material[i] != 0) {
-                        break;
+                        if (material[i] != 0) {
+                            break;
+                        }
+                        light[i] = 15;
+                        y--;
                     }
-                    light[i] = 15;
-                    y--;
+                    runBottom = y + 1 > yHi ? Integer.MIN_VALUE : y + 1;
                 }
+                runs[(z + 1) * 18 + (x + 1)] = runBottom;
             }
         }
         final long tSweep = System.nanoTime();
@@ -1147,22 +1163,18 @@ public final class SkyStarLightEngine extends StarLightEngine {
             for (int x = 0; x < 16; x++) {
                 final int col = (z << 4) | x;
                 final int base = col * height;
-                int runBottom = Integer.MIN_VALUE;
+                final int runBottom = runs[(z + 1) * 18 + (x + 1)];
 
-                for (int i = height - 1; i >= 0; i--) {
-                    if ((light[base + i] & 0xFF) == 15) {
-                        runBottom = yLo + i;
-                        break;
-                    }
-                }
                 if (runBottom == Integer.MIN_VALUE) {
                     continue;
                 }
-                final int runWest = this.runBottomNear(worldX0 + x - 1, worldZ0 + z, runBottom, worldMinY, worldMaxY);
-                final int runEast = this.runBottomNear(worldX0 + x + 1, worldZ0 + z, runBottom, worldMinY, worldMaxY);
-                final int runNorth = this.runBottomNear(worldX0 + x, worldZ0 + z - 1, runBottom, worldMinY, worldMaxY);
-                final int runSouth = this.runBottomNear(worldX0 + x, worldZ0 + z + 1, runBottom, worldMinY, worldMaxY);
-                final int lowestNeighbour = Math.min(Math.min(runWest, runEast), Math.min(runNorth, runSouth));
+                // Exact neighbour runs from the cached table (filled above): a neighbour column whose run ends higher - a
+                // wall, an overhang, the side of a cube - is dark at heights where this one is lit, and those cells have to
+                // be seeded or the light never spills sideways. The first version tested only "is the neighbour lit at MY
+                // run bottom", which misses exactly that case.
+                final int lowestNeighbour = Math.min(
+                        Math.min(runs[(z + 1) * 18 + x], runs[(z + 1) * 18 + (x + 2)]),
+                        Math.min(runs[z * 18 + (x + 1)], runs[(z + 2) * 18 + (x + 1)]));
 
                 queue[tail++] = base + (runBottom - yLo);
                 for (int y = runBottom + 1; y <= lowestNeighbour && y <= yHi; y++) {
@@ -1301,16 +1313,29 @@ public final class SkyStarLightEngine extends StarLightEngine {
     }
 
     /**
-     * A neighbouring column's run bottom, asked only where it matters: if the light at the given height (or one below) is
-     * 15, the neighbour's run reaches at least that far, which is all the shell test needs. Returning {@code runBottom}
-     * when the neighbour is lit at or below it keeps the shell's "lowest neighbour" comparison honest without scanning a
-     * whole column - that scan was 1 ms of the measured cost.
+     * The lowest lit cell of a column, read from the light that is already there.
+     *
+     * <p>Exact, and cheap because the search starts where the column's surface is: the heightmap gives a y that is
+     * normally inside the lit run, so the walk is a few steps down to the run's bottom (and, for a column that is dark
+     * there, a bounded walk up to find the top of its run first). The naive version scanned from the world top for every
+     * column - ~250 reads each, which was 1 ms of the settle.</p>
      */
-    private int runBottomNear(final int wx, final int wz, final int runBottom, final int minY, final int maxY) {
-        if (this.getLightLevel(wx, runBottom, wz) == 15) {
-            return runBottom;
+    private int runBottomFromLight(final int wx, final int wz, final int minY, final int maxY) {
+        int y = Math.max(minY, Math.min(maxY, this.world.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING, wx, wz)));
+
+        if (this.getLightLevel(wx, y, wz) != 15) {
+            // not inside a lit run: walk up to the top of one (bounded by the world), or report none
+            while (y <= maxY && this.getLightLevel(wx, y, wz) != 15) {
+                y++;
+            }
+            if (y > maxY) {
+                return Integer.MIN_VALUE;
+            }
         }
-        return Integer.MIN_VALUE;
+        while (y > minY && this.getLightLevel(wx, y - 1, wz) == 15) {
+            y--;
+        }
+        return y;
     }
 
     /** Opacity of one cell, straight from the section's palette (used when no material table is enabled). */

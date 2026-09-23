@@ -545,8 +545,15 @@ public final class StarLightInterface {
         it.unimi.dsi.fastutil.longs.LongOpenHashSet pending;
 
         if (key == this.lucis$currentEditChunk) {
-            pending = this.lucis$pendingEdits.get(key); // same chunk as the last edit: nothing to re-check, nothing to flush
-        } else {
+            pending = this.lucis$pendingEdits.get(key);
+            if (pending == null) {
+                // LANDMINE found in review: every flush drains the buffers (hasUpdates() runs each tick), and when it did,
+                // this cached key stayed valid while its buffer was gone - the next edit of the same chunk took this
+                // branch, got null and would have thrown. Re-check the chunk instead of trusting the cache.
+                this.lucis$currentEditChunk = Long.MIN_VALUE;
+            }
+        }
+        if (this.lucis$currentEditChunk != key) {
             final ChunkAccess chunk = this.getAnyChunkNow(chunkX, chunkZ);
             // Note: an earlier version also required the whole 3x3 neighbourhood to be loaded and past LIGHT. That guard
             // is gone because its reason is gone: the crashes it was meant to prevent turned out to be a pre-existing
@@ -560,6 +567,9 @@ public final class StarLightInterface {
             this.lucis$flushPendingEdits(key, false);
             this.lucis$currentEditChunk = key;
             pending = this.lucis$pendingEdits.computeIfAbsent(key, ignored -> new it.unimi.dsi.fastutil.longs.LongOpenHashSet());
+        } else {
+            // the cache is valid and the buffer exists: nothing to re-check, nothing to flush
+            pending = this.lucis$pendingEdits.get(key);
         }
         pending.add(pos.asLong());
         if (pending.size() >= LUCIS_PENDING_FLUSH_SIZE) {
