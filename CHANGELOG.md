@@ -5,6 +5,57 @@ replaces the update path, where the 1.x line was built on Lucis and owned a regi
 the 1.x branch's own changelog; for what belongs to whom see [NOTICE](NOTICE) and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+
+## 2.0.4 — 2026-09-24
+
+**The cause of 「只有一格」: an optimisation that drained the light queues with no engine caches set up, so nothing
+propagated at all.** Reported after 2.0.3 as "still only one cell", with a screenshot of a torch lighting itself and
+nothing around it.
+
+- **Removed R4-1** (`scalablelux.batchDecrease`, `seedBlockChangesOnly`). It seeded each touched chunk and then called
+  `performLightDecrease` **once** for the whole burst — after every cache had already been destroyed by the seeding
+  step. A drain with no caches cannot read a neighbour or write a cell: it does nothing. Worse, the seeding step
+  published (`updateVisible`) *before* that drain, so the only light that ever reached the visible layer — what the
+  client is sent and what a save contains — was the emitter's own cell. That is exactly the reported symptom.
+  The batch path now uses the base's own per-chunk routine, `blocksChangedInChunk`: setup caches → seed → drain →
+  publish → destroy, in that order. The flag and the method are gone; there is no switch that can restore the
+  shortcut.
+- The three earlier causes stay fixed (2.0.2: the opaque-emitter skip rule and the per-tick settle point;
+  2.0.3: the chunk key of (-1,-1) colliding with the flush's `-1` sentinel).
+
+**Verified on the reporting player's own save, and the lesson is in the method**: reading the emitter's own cell is
+not a test — it reads 15 even when nothing propagates. Checking the gradient is:
+
+| cell | expected | before | after | after restart |
+|---|---|---|---|---|
+| the emitter | 15 | **15** (false pass) | 15 | 15 |
+| 1 block west / east / down | 14 | **0** | 14 | 14 |
+| 3 blocks west | 12 | **0** | 12 | 12 |
+
+
+### Regression after 2.0.4, and the correction it forces
+
+Clean window (CPU average 17.8%), defaults only, one round of the four cells:
+
+| workload | 2.0.4 (work actually done) | the table quoted before | ScalableLux |
+|---|---|---|---|
+| `block_toggle_border` | **5.033 ms** | 0.32 ms | 4.01 ms |
+| `structure_cube` | 2.788 ms | 2.51 ms | 4.97 ms |
+| `dense_chunk_patch` | 1.073 ms | 1.07 ms | 3.65 ms |
+| `sky_hole` | 0.563 ms | 0.69 ms | 0.88 ms |
+
+**`block_toggle_border` regressed tenfold, and that is the point: the 0.32 ms was measured while the block-light half
+of the work was not being done at all.** The "12x faster than ScalableLux on that cell" claim was an artefact of the
+same defect this release fixes. With the drain actually running, this engine is *slower* than ScalableLux there
+(5.03 vs 4.01) and roughly level with the 1.x line (0.84 in its own window — cell-level comparison needs the same
+session). `structure_cube`, `dense_chunk_patch` and `sky_hole` remain wins on this reading.
+
+**What this means for anything published:** the four-workload table needs a multi-round, same-session re-measurement
+before it is quoted again, and the border cell specifically needs the R4-1 idea revisited *correctly* (a consolidated
+drain that runs with proper caches, or a cheaper per-chunk drain) if it is to be won back. Until that exists, the
+honest standing claim is: this engine is the correct one, it wins `structure_cube` and `dense_chunk_patch`, it is
+competitive on `sky_hole`, and it loses `block_toggle_border`.
+
 Numbering: `2.0.1` was the first release of the 2.0 line. The development builds were numbered `2.0.0-alpha.N` and
 none of them was released; the measurement records in `docs/` refer to those jar names, so the version strings in
 them are left as they were measured rather than rewritten.

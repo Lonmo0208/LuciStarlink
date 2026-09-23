@@ -12,7 +12,6 @@ were already walked and closed. The measurements behind every claim are in
   ours          │ edit hook: LevelChunk.setBlockState → StarLightInterface      │
                 │  · per-chunk buffering      (R3)                              │
                 │  · inline propagation       (R2, ownEdit)                     │
-                │  · consolidated decrease    (R4-1, batchDecrease)             │
                 │  · windowed sky settle      (R5, recomputeSky)                │
                 └───────────────────────────┬───────────────────────────────────┘
                                             │ installs into / reads from
@@ -121,6 +120,7 @@ before a pass is timed, and the box-scoped barrier stops a pass being charged fo
 | Deferring the block-light half | 17.8 ms: keeping the buffer made the per-tick `hasUpdates()` settle partial bursts repeatedly |
 | Owning the update loop entirely (no engine queue at all) | two distinct hang mechanisms, one a self-dependency deadlock where waiter and releaser are the same server thread — recorded in `OWN-SCHEDULER-PLAN.md` and `OWN-INSTALL-PLAN.md` |
 | Carrying a "not bit-identical to vanilla" plan | the evidence for it (a 6.5% history gap) was a bug in the probe, not in the engine — the real gap is 24 cells in 574,340 |
+| A consolidated decrease drain (R4-1, `scalablelux.batchDecrease`) | **removed in 2.0.4 for correctness, not for speed**: it drained the engine's queues after the seeding step had already destroyed its caches, so the drain could not read a neighbour or write a cell — nothing propagated, and a placed light source lit only its own cell. Its measured "win" on `block_toggle_border` (0.32 ms) was the work it was not doing; with the drain actually running that cell reads 5.03 ms against ScalableLux's 4.01. Re-opening the idea means designing it so the drain runs with proper caches (`docs/BUG-EMITTER-BLOCK-LIGHT.md`, root cause four) |
 
 ## 6. Debug and measurement surface
 

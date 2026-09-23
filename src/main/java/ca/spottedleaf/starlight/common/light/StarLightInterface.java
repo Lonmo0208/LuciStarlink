@@ -465,8 +465,6 @@ public final class StarLightInterface {
     private static final boolean LUCIS_OWN_EDIT = !"false".equalsIgnoreCase(System.getProperty("scalablelux.ownEdit", "true"));
     /** Diagnostic trace of one block change's route through this class; off unless asked for by hand. */
     private static final boolean LUCIS_EDIT_DEBUG = Boolean.getBoolean("scalablelux.editDebug");
-    /** R4-1: seed every chunk, then drain the decrease queue once (see seedBlockChangesOnly). */
-    private static final boolean LUCIS_BATCH_DECREASE = !"false".equalsIgnoreCase(System.getProperty("scalablelux.batchDecrease", "true"));
     /**
      * Dispatch rule, CLOSED by measurement (default 0 = off). Idea: a small buffered burst is cheaper on the base's
      * asynchronous path - on sky_hole the base settles 25 changes in 0.86 ms while this path's setup + seed + drain
@@ -721,11 +719,7 @@ public final class StarLightInterface {
                             }
                         }
                         if (blockEngine != null) {
-                            if (LUCIS_BATCH_DECREASE) {
-                                blockEngine.seedBlockChangesOnly(this.lightAccess, chunkX, chunkZ, blockPositions);
-                            } else {
-                                blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, blockPositions, null);
-                            }
+                            blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, blockPositions, null);
                         }
                     } else {
                     final ChunkAccess bulkChunk = LUCIS_BULK_RELIGHT && positions.size() >= LUCIS_BULK_MIN_CHANGES
@@ -749,14 +743,14 @@ public final class StarLightInterface {
                             skyEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, blockPositions, null);
                         }
                         if (blockEngine != null) {
-                            if (LUCIS_BATCH_DECREASE) {
-                                // R4-1: seed this chunk only; the decrease queue is drained ONCE for the whole burst below,
-                                // because that drain walks the engine's global queue and repeating it per chunk is 220-430 us
-                                // per call - 98% of this cell's engine time on block_toggle_border.
-                                blockEngine.seedBlockChangesOnly(this.lightAccess, chunkX, chunkZ, blockPositions);
-                            } else {
-                                blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, blockPositions, null);
-                            }
+                            // The base's own per-chunk routine, and it has to be this one: setup caches -> seed -> drain
+                            // -> publish -> destroy. An earlier "consolidated drain" (R4-1) seeded chunks without
+                            // draining and then called performLightDecrease once for the whole burst - with every cache
+                            // already destroyed. That drain could not read a neighbour or write a cell, so nothing
+                            // propagated at all, and the only light that reached the visible layer was the emitter's own
+                            // cell (published by the seed step, before any propagation could happen). A placed torch lit
+                            // exactly one block.
+                            blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, blockPositions, null);
                         }
                     }
                     }
@@ -771,12 +765,6 @@ public final class StarLightInterface {
                     }
                 }
             }
-            }
-            if (blockEngine != null && LUCIS_BATCH_DECREASE) {
-                // the single consolidated drain (seeds above); one walk of the engine's queue instead of one per chunk
-                final long lucisDecT0 = System.nanoTime();
-                blockEngine.performLightDecrease(this.lightAccess);
-                LuxProfiler.ownEditDecBatchNanos += System.nanoTime() - lucisDecT0;
             }
             if (settle && !this.lucis$pendingRecomputes.isEmpty()) {
                 // R5: the deferred sky settles, one per chunk per burst, over the y window the burst touched (see the sky
