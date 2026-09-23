@@ -448,8 +448,19 @@ public final class SkyStarLightEngine extends StarLightEngine {
         for (final BlockPos pos : positions) {
             this.checkBlock(lightAccess, pos.getX(), pos.getY(), pos.getZ());
         }
-
         this.performLightDecrease(lightAccess);
+    }
+
+    /**
+     * The sky half of the seeding step, for callers that own the caches and the drain (see
+     * {@link StarLightEngine#seedChanges}). The delayed light sets must be processed before the per-position checks,
+     * because a check reads the immediate light value — the base's per-chunk routine does the same thing.
+     */
+    @Override
+    public void seedChanges(final LightChunkGetter lightAccess, final Set<BlockPos> positions) {
+        this.processDelayedIncreases();
+        this.processDelayedDecreases();
+        super.seedChanges(lightAccess, positions);
     }
 
     protected final int[] heightMapGen = new int[32 * 32];

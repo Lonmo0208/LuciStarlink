@@ -489,6 +489,36 @@ public abstract class StarLightEngine {
 
     protected abstract void checkBlock(final LightChunkGetter lightAccess, final int worldX, final int worldY, final int worldZ);
 
+    /**
+     * The seeding half of {@link #blocksChangedInChunk}, with the caches already set up by the caller.
+     *
+     * <p><b>Why the split exists.</b> A drain has to run with the engine's caches in place — that is not an
+     * optimisation detail, it is what makes it able to read a neighbour at all (a drain with cleared caches reads
+     * every neighbour as dark and writes nothing; that defect shipped as 2.0.3 and made a placed torch light exactly
+     * one cell). The caches cover a chunk +-2, and a change can move light one chunk further, so <b>every chunk of a
+     * group must lie within +-1 chunk of the cache centre</b> for the group's propagation to be as exact as the
+     * base's per-chunk version. Under that rule several chunks along one border share one setup, one drain and one
+     * publish — which is what {@code block_toggle_border} is made of.</p>
+     */
+    public void seedChanges(final LightChunkGetter lightAccess, final Set<BlockPos> positions) {
+        for (final BlockPos pos : positions) {
+            this.checkBlock(lightAccess, pos.getX(), pos.getY(), pos.getZ());
+        }
+    }
+
+    /** Drains what the seeding queued and publishes the result. <b>Drain first, publish after</b>, never the reverse:
+     *  publishing before the drain is what left a placed light source visible on its own cell only. */
+    public final void settleSeededChanges(final LightChunkGetter lightAccess) {
+        this.performLightDecrease(lightAccess);
+        this.updateVisible(lightAccess);
+    }
+
+    /** Whether the caches currently hold this chunk. A chunk that is not bound (not lit yet, not usable) must not be
+     *  seeded: its sections read as air and its light as dark, so seeding it would compute wrong light. */
+    public final boolean isChunkInCache(final int chunkX, final int chunkZ) {
+        return this.getChunkInCache(chunkX, chunkZ) != null;
+    }
+
     // if ret > expect, then the real value is at least ret (early returns if ret > expect, rather than calculating actual)
     // if ret == expect, then expect is the correct light value for pos
     // if ret < expect, then ret is the real light value

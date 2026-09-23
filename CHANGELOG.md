@@ -6,6 +6,83 @@ the 1.x branch's own changelog; for what belongs to whom see [NOTICE](NOTICE) an
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 
+## 2.0.5 — 2026-09-24
+
+**Wins `block_toggle_border` back — the cell 2.0.4 had to concede — without giving up the correctness 2.0.4
+restored.** Two changes, and the second is the one that pays:
+
+1. **Chunks that share one cache window are settled together.** The base settles one chunk at a time (setup caches →
+   seed → drain → publish → destroy), so a burst along a chunk border — many small changes over many chunks — paid a
+   full setup and publish for each of them. The seeding half of that routine is now a separate entry point
+   (`seedChanges`), and the flush groups the chunks of one burst by cache window: every chunk within ±1 chunk of the
+   group's centre, which is exactly the bound that keeps the group's propagation inside the caches (a change moves
+   light at most one chunk, the caches cover ±2). The drain and the publish happen once per group, in that order,
+   **with the caches still up** — the 2.0.3/2.0.4 defect was both of those things done the other way round.
+
+2. **The sky recompute threshold dropped from 128 changes to 4**, because the old value rested on a wrong assumption:
+   that the windowed recompute only pays for *bulk* bursts. It pays for *small* ones too. The BFS is not priced per
+   change but per cascade — a few block toggles on a border measured ~950 queue pops per change at ~65 ns each — while
+   the recompute's cost is fixed by the y window the burst touches. Measured on the same harness and window
+   (`block_toggle_border`, per-chunk bursts of ~5 changes):
+
+   | threshold | `block_toggle_border` | `sky_hole` |
+   |---|---|---|
+   | 128 (before) | 4.876 ms | 0.614 ms |
+   | 16 | 5.071 ms | 0.537 ms |
+   | **4 (now)** | **1.471 ms** | **0.588 ms** |
+   | 1 | 1.837 ms | 1.416 ms (outlier run) |
+
+   16 sits above the border bursts' size, so they fall back to the BFS and keep the old cost; 4 keeps them on the
+   recompute. A burst below 4 changes stays on the BFS — that is the path the light-source gate exercises, and it is
+   unchanged.
+
+**Correctness was re-verified on the new paths before any timing was believed**, because 2.0.4's lesson is that the
+emitter's own cell reads 15 whether or not anything propagates:
+
+- six light sources placed in **one burst spanning a chunk border** (so the recompute path and the grouping both
+  apply): the gradient reads exactly 12 / 15 / 15 / 15 / 12 and 14 / 14 one block off-axis;
+- the single-source gate (`tools/emitter-gate/`, BFS path) still passes, neighbours 14, three blocks out 12;
+- the structure fingerprint stays `sky=905931078dfc5ace`, bit-identical to vanilla and ScalableLux.
+
+Full three-round, three-engine table after this release is in the "Regression" section below.
+
+### Three-round, three-engine acceptance after 2.0.5
+
+Same session, interleaved, 3 rounds per side, medians. Window load: CPU average 35.9%, peak 68.1% (a loaded window —
+quote the ratios, which the interleaving makes valid).
+
+**Engine metric — `minPassNanos`, ms:**
+
+| workload | LuciStarlink 2.0.5 | ScalableLux | 1.x | verdict |
+|---|---|---|---|---|
+| `block_toggle_border` | **1.51** | 4.54 | 0.81 | **won back from ScalableLux (3x)**; 1.x still ahead |
+| `structure_cube` | **2.99** | 4.78 | 3.22 | win vs both |
+| `dense_chunk_patch` | **1.11** | 3.77 | 2.39 | win vs both |
+| `sky_hole` | 1.06 | 0.98 | 0.81 | within noise of both; last in this window |
+
+**Player metric — `bench.pass_wall_actual`, ms (median / best):**
+
+| workload | LuciStarlink 2.0.5 | ScalableLux | 1.x |
+|---|---|---|---|
+| border | 50 / 48 | 49 / 47 | 80 / 72 |
+| structure | 50 / 48 | 50 / 50 | 60 / 53 |
+| dense | 50 / 48 | 50 / 48 | 68 / 48 |
+| sky_hole | **49 / 48** | 50 / 50 | 71 / 63 |
+
+Fingerprint on every one of our runs: `sky=905931078dfc5ace` — bit-identical to vanilla and ScalableLux. 1.x's is
+`641356fc41163add`, identical to neither.
+
+**Where this leaves the three engines, honestly:**
+
+- `block_toggle_border`: **this engine is now 3× faster than ScalableLux** (1.51 vs 4.54) after being 22% slower than it
+  in the 2.0.4 table, and 3.3× faster than its own 2.0.4 self (5.00). The 1.x line remains ahead on this cell (0.81)
+  — that is its region-batched architecture doing small synchronous work it was built for, and closing that last gap
+  would mean a different engine, not a different schedule.
+- `structure_cube` and `dense_chunk_patch`: won against both predecessors.
+- `sky_hole`: all three engines are within 0.81–1.06 ms of each other and the ordering moves with machine load; this
+  cell has never been stably decided at this round count, and it is not claimed either way.
+
+
 ## 2.0.4 — 2026-09-24
 
 **The cause of 「只有一格」: an optimisation that drained the light queues with no engine caches set up, so nothing

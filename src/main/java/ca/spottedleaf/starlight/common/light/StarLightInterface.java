@@ -481,9 +481,16 @@ public final class StarLightInterface {
     private static final int LUCIS_BULK_MIN_CHANGES = Integer.getInteger("scalablelux.bulkMinChanges", 128);
     /** R5: settle a bulk skylight change by the canonical recompute instead of the seeded BFS (see the sky engine). */
     private static final boolean LUCIS_RECOMPUTE_SKY = !"false".equalsIgnoreCase(System.getProperty("scalablelux.recomputeSky", "true"));
-    // 128, not 1024: the buffer flushes every 256 changes, so a bigger threshold could never be reached (the first
-    // version of this sat at 1024 and the recompute silently never ran).
-    private static final int LUCIS_RECOMPUTE_MIN = Integer.getInteger("scalablelux.recomputeMinChanges", 128);
+    // The threshold is 4, and the earlier 128 was wrong in a way worth recording: it assumed the windowed recompute only
+    // pays for *bulk* bursts. It pays for *small* ones too, because the BFS is not priced per change but per cascade - a
+    // handful of block toggles on a chunk border measured ~950 queue pops per change (~65 ns each), while the recompute's
+    // cost is set by the y window the burst touches and nothing else. Measured on the same harness, same window:
+    //   block_toggle_border:  min=128 4.876 ms | min=16 5.071 | min=4 1.471 | min=1 1.837   (per-chunk bursts ~5 changes)
+    //   sky_hole:             min=128 0.614 ms | min=16 0.537 | min=4 0.588 | min=1 1.416 (outlier run)
+    // 16 is above the border bursts' size, so it falls back to the BFS there and keeps the old cost; 4 keeps the border
+    // chunks on the recompute and is below sky_hole's burst, which is also on the recompute and slightly better for it.
+    // A burst smaller than 4 changes stays on the BFS, which is the path the light-source gate exercises.
+    private static final int LUCIS_RECOMPUTE_MIN = Integer.getInteger("scalablelux.recomputeMinChanges", 4);
 
     /**
      * R3: edits wait here per chunk so one engine call handles a whole burst instead of one call per block. Each flush
@@ -664,6 +671,10 @@ public final class StarLightInterface {
         }
         final SkyStarLightEngine skyEngine = this.getSkyLightEngine();
         final BlockStarLightEngine blockEngine = this.getBlockLightEngine();
+        // bursts on the ordinary path are collected here and settled in cache-window groups after the loop: several
+        // chunks along one border then share one cache setup, one drain and one publish (see lucis$settleGroups)
+        final it.unimi.dsi.fastutil.objects.ObjectArrayList<LucisChunkBurst> grouped =
+                new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
         try {
             if (!this.lucis$pendingEdits.isEmpty()) {
             final it.unimi.dsi.fastutil.longs.LongIterator keys = this.lucis$pendingEdits.keySet().iterator();
@@ -739,19 +750,11 @@ public final class StarLightInterface {
                             LuxProfiler.ownEditBulkRelights++;
                         }
                     } else {
-                        if (skyEngine != null) {
-                            skyEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, blockPositions, null);
-                        }
-                        if (blockEngine != null) {
-                            // The base's own per-chunk routine, and it has to be this one: setup caches -> seed -> drain
-                            // -> publish -> destroy. An earlier "consolidated drain" (R4-1) seeded chunks without
-                            // draining and then called performLightDecrease once for the whole burst - with every cache
-                            // already destroyed. That drain could not read a neighbour or write a cell, so nothing
-                            // propagated at all, and the only light that reached the visible layer was the emitter's own
-                            // cell (published by the seed step, before any propagation could happen). A placed torch lit
-                            // exactly one block.
-                            blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, blockPositions, null);
-                        }
+                        // Collected rather than settled here. The base settles one chunk at a time (setup caches ->
+                        // seed -> drain -> publish -> destroy) and pays a full drain per chunk; a burst along a chunk
+                        // border is many small changes spread over several chunks, so it paid that drain for each of
+                        // them. Chunks that share one cache window are settled together after the loop instead.
+                        grouped.add(new LucisChunkBurst(chunkX, chunkZ, blockPositions));
                     }
                     }
                     if (LuxProfiler.enabled()) {
@@ -765,6 +768,9 @@ public final class StarLightInterface {
                     }
                 }
             }
+            }
+            if (!grouped.isEmpty()) {
+                this.lucis$settleGroups(skyEngine, blockEngine, grouped);
             }
             if (settle && !this.lucis$pendingRecomputes.isEmpty()) {
                 // R5: the deferred sky settles, one per chunk per burst, over the y window the burst touched (see the sky
@@ -809,6 +815,124 @@ public final class StarLightInterface {
         } finally {
             this.releaseSkyLightEngine(skyEngine);
             this.releaseBlockLightEngine(blockEngine);
+        }
+    }
+
+    /** One chunk's ordinary-path burst, waiting for a cache window to be settled in. */
+    private record LucisChunkBurst(int chunkX, int chunkZ,
+                                   it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> positions) {}
+
+    /**
+     * Settles the collected bursts, several chunks per cache setup.
+     *
+     * <p><b>The rule that keeps this exact.</b> The engine's caches cover the centre chunk plus two chunks in every
+     * direction, and a single change can move light at most one chunk away (a level is 0..15 and each propagation
+     * step costs one). So a group may contain any chunks that lie within <b>±1 chunk of the centre</b>: their
+     * propagation then reaches at most two chunks out, which is still inside the cache — the same bound the base's
+     * per-chunk routine has, because there the centre <i>is</i> the edited chunk.</p>
+     *
+     * <p><b>The order that keeps it correct.</b> setup caches → seed every chunk in the group → <i>one</i> drain →
+     * <i>one</i> publish → destroy. A drain with cleared caches does nothing at all (2.0.3 shipped that and a placed
+     * torch lit one cell); publishing before the drain leaves the propagated light invisible (2.0.2/2.0.3 shipped
+     * that as well). Both mistakes are only possible if the drain is moved out of the cache window, which is why the
+     * seeding half is a separate entry point now and the drain is not.</p>
+     *
+     * <p>Chunks the caches refused to bind (not lit yet, not usable) are skipped exactly as the base skips them.</p>
+     */
+    private void lucis$settleGroups(final SkyStarLightEngine skyEngine, final BlockStarLightEngine blockEngine,
+                                    final it.unimi.dsi.fastutil.objects.ObjectArrayList<LucisChunkBurst> pending) {
+        if (skyEngine == null && blockEngine == null) {
+            return;
+        }
+        final it.unimi.dsi.fastutil.objects.ObjectArrayList<LucisChunkBurst> remaining =
+                new it.unimi.dsi.fastutil.objects.ObjectArrayList<>(pending);
+
+        while (!remaining.isEmpty()) {
+            // the centre that keeps the most chunks: a burst along one border is a line of chunks, and only a centre
+            // inside it turns three of them into one group (a rule of "anchor + its +-1 neighbours" makes groups of two)
+            int bestCentre = 0;
+            int bestCount = -1;
+
+            for (int centre = 0; centre < remaining.size(); centre++) {
+                final LucisChunkBurst candidate = remaining.get(centre);
+                int count = 0;
+
+                for (final LucisChunkBurst other : remaining) {
+                    if (Math.abs(other.chunkX() - candidate.chunkX()) <= 1
+                            && Math.abs(other.chunkZ() - candidate.chunkZ()) <= 1) {
+                        count++;
+                    }
+                }
+                if (count > bestCount) {
+                    bestCount = count;
+                    bestCentre = centre;
+                }
+            }
+            final LucisChunkBurst centre = remaining.get(bestCentre);
+            final it.unimi.dsi.fastutil.objects.ObjectArrayList<LucisChunkBurst> group =
+                    new it.unimi.dsi.fastutil.objects.ObjectArrayList<>(bestCount);
+
+            for (int i = remaining.size() - 1; i >= 0; i--) {
+                final LucisChunkBurst burst = remaining.get(i);
+
+                if (Math.abs(burst.chunkX() - centre.chunkX()) <= 1 && Math.abs(burst.chunkZ() - centre.chunkZ()) <= 1) {
+                    group.add(burst);
+                    remaining.remove(i);
+                }
+            }
+            this.lucis$settleGroup(skyEngine, blockEngine, group, centre.chunkX(), centre.chunkZ());
+        }
+    }
+
+    private void lucis$settleGroup(final SkyStarLightEngine skyEngine, final BlockStarLightEngine blockEngine,
+                                   final it.unimi.dsi.fastutil.objects.ObjectArrayList<LucisChunkBurst> group,
+                                   final int centerChunkX, final int centerChunkZ) {
+        final int centerX = centerChunkX * 16 + 7;
+        final int centerZ = centerChunkZ * 16 + 7;
+
+        final long lucisSetupT0 = System.nanoTime();
+
+        if (skyEngine != null) {
+            skyEngine.setupCaches(this.lightAccess, centerX, 128, centerZ, true, true);
+        }
+        if (blockEngine != null) {
+            blockEngine.setupCaches(this.lightAccess, centerX, 128, centerZ, true, true);
+        }
+        final long lucisT0 = System.nanoTime();
+        try {
+            for (final LucisChunkBurst burst : group) {
+                if (skyEngine != null && skyEngine.isChunkInCache(burst.chunkX(), burst.chunkZ())) {
+                    skyEngine.seedChanges(this.lightAccess, burst.positions());
+                }
+                if (blockEngine != null && blockEngine.isChunkInCache(burst.chunkX(), burst.chunkZ())) {
+                    blockEngine.seedChanges(this.lightAccess, burst.positions());
+                }
+            }
+            final long lucisT1 = System.nanoTime();
+            // one drain and one publish for the whole group, with the caches still up: the drain reads neighbours
+            // through them and the publish is what makes the propagation visible to the client and to a save
+            if (skyEngine != null) {
+                skyEngine.settleSeededChanges(this.lightAccess);
+            }
+            if (blockEngine != null) {
+                blockEngine.settleSeededChanges(this.lightAccess);
+            }
+            if (LuxProfiler.enabled()) {
+                final long lucisT2 = System.nanoTime();
+
+                LuxProfiler.ownEditSetupNanos += lucisT0 - lucisSetupT0;
+                LuxProfiler.ownEditBlkCheckNanos += lucisT1 - lucisT0;   // the group's seeding phase
+                LuxProfiler.ownEditBlkDecreaseNanos += lucisT2 - lucisT1; // the group's drain + publish phase
+                LuxProfiler.ownEditGroups++;
+                LuxProfiler.ownEditGroupChunks += group.size();
+            }
+        } finally {
+            if (skyEngine != null) {
+                skyEngine.destroyCaches();
+            }
+            if (blockEngine != null) {
+                blockEngine.destroyCaches();
+            }
         }
     }
 

@@ -66,6 +66,8 @@ public final class LuxProfiler {
     public static long ownEditBlkCheckNanos;
     public static long ownEditBlkDecreaseNanos;
     public static long ownEditDecBatchNanos;
+    public static long ownEditGroups;
+    public static long ownEditGroupChunks;
     public static long ownEditSmallBursts;
     public static long ownEditBulkRelights;
     public static long ownEditRecomputes;
@@ -183,6 +185,8 @@ public final class LuxProfiler {
         ownEditBlkCheckNanos = 0;
         ownEditBlkDecreaseNanos = 0;
         ownEditDecBatchNanos = 0;
+        ownEditGroups = 0;
+        ownEditGroupChunks = 0;
         ownEditSmallBursts = 0;
         ownEditBulkRelights = 0;
         ownEditRecomputes = 0;
@@ -252,6 +256,8 @@ public final class LuxProfiler {
                 + " blkCheckNanos=" + ownEditBlkCheckNanos
                 + " blkDecNanos=" + ownEditBlkDecreaseNanos
                 + " decBatchNanos=" + ownEditDecBatchNanos
+                + " groups=" + ownEditGroups
+                + " groupChunks=" + ownEditGroupChunks
                 + " smallBursts=" + ownEditSmallBursts
                 + " bulkRelights=" + ownEditBulkRelights
                 + " recomputes=" + ownEditRecomputes + " blockSkipped=" + ownEditBlockSkipped + " recomputeNanos=" + ownEditRecomputeNanos

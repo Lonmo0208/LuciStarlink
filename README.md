@@ -53,20 +53,19 @@ used to carry (`scalablelux.batchDecrease`) is gone with the code it controlled.
 
 ## Performance
 
-Numbers from this project's own harness (`run-benchmark-scalablelux`), which runs each engine in the same session,
+Numbers from this project's own harness (`run-benchmark-scalablelux`): each engine runs in the same session,
 interleaved (the three engines alternate round by round), on the same world, with a fixed seed and a settled world
-before each measurement. Medians of 3 rounds per side. This is the table measured **after** the 2.0.4 correctness
-fix — see the note below it, because the table before that release was wrong in a way that flattered this engine.
+before each measurement. Medians of 3 rounds per side, after the 2.0.5 release.
 
 **Engine metric** — `minPassNanos`, the engine's own work for one pass (the best measured pass, so tick-crossing
 noise is excluded):
 
-| workload (what a player calls it) | **LuciStarlink 2.0.4** | ScalableLux | 1.x (Lucis line) | verdict |
+| workload (what a player calls it) | **LuciStarlink 2.0.5** | ScalableLux | 1.x (Lucis line) | verdict |
 |---|---|---|---|---|
-| `block_toggle_border` — placing/breaking fast along a chunk border | 5.00 ms | 4.18 ms | **1.22 ms** | **lost** — behind both |
-| `structure_cube` — building a solid structure | **2.78 ms** | 4.62 ms | 2.97 ms | **win** vs both |
-| `dense_chunk_patch` — large-area edits | **1.07 ms** | 4.07 ms | 2.35 ms | **win** vs both |
-| `sky_hole` — a single small edit | **0.69 ms** | 0.83 ms | 1.06 ms | **win** vs both |
+| `block_toggle_border` — placing/breaking fast along a chunk border | **1.51 ms** | 4.54 ms | **0.81 ms** | 3× faster than ScalableLux; 1.x still ahead |
+| `structure_cube` — building a solid structure | **2.99 ms** | 4.78 ms | 3.22 ms | **win** vs both |
+| `dense_chunk_patch` — large-area edits | **1.11 ms** | 3.77 ms | 2.39 ms | **win** vs both |
+| `sky_hole` — a single small edit | 1.06 ms | 0.98 ms | 0.81 ms | within noise of both |
 
 For scale, **vanilla** (no light mod) reads roughly 10–11 ms on the three heavy workloads and 1.0 ms on `sky_hole` in
 the same harness — measured in a separate session, so quote it as an order of magnitude rather than as a same-session
@@ -75,33 +74,35 @@ ratio.
 **Player metric** — `bench.pass_wall_actual`, the wall time of a whole pass, which *does* include the tick crossings
 a player waits through (median / best round):
 
-| workload | LuciStarlink 2.0.4 | ScalableLux | 1.x |
+| workload | LuciStarlink 2.0.5 | ScalableLux | 1.x |
 |---|---|---|---|
-| border | 49 / 48 ms | 50 / 49 ms | 103 / 72 ms |
-| structure | 48 / 46 ms | 49 / 48 ms | 61 / 49 ms |
-| dense | 50 / 49 ms | 50 / 49 ms | 70 / 51 ms |
-| sky_hole | 50 / 49 ms | 49 / 49 ms | 67 / 62 ms |
+| border | 50 / 48 ms | 49 / 47 ms | 80 / 72 ms |
+| structure | 50 / 48 ms | 50 / 50 ms | 60 / 53 ms |
+| dense | 50 / 48 ms | 50 / 48 ms | 68 / 48 ms |
+| sky_hole | **49 / 48 ms** | 50 / 50 ms | 71 / 63 ms |
 
-The window these numbers come from was **loaded** (CPU average 30.3%, peak 48.7% — the machine this project measures
+The window these numbers come from was **loaded** (CPU average 35.9%, peak 68.1% — the machine this project measures
 on runs other work by design). Same-session interleaving is what makes the comparison valid; the absolute values are
 the player-facing picture, not a quiet-room number.
 
 **The honest reading:**
 
-- **Two clear wins, one loss, one floor.** `structure_cube` (2.78 vs 4.62 / 2.97), `dense_chunk_patch` (1.07 vs 4.07 /
-  2.35) and `sky_hole` (0.69 vs 0.83 / 1.06) are won against **both** predecessors. `block_toggle_border` is **lost
-  to both** (5.00 vs ScalableLux 4.18 and 1.x 1.22) — that cell is small synchronous work, and 1.x's engine is
-  synchronous by design.
-- **The player axis is the one-tick floor** (48–50 ms) for this engine and for ScalableLux on all four workloads;
-  1.x is there only on `structure_cube`'s best round and 30–50 ms behind on the other three.
-- **Not speed, but correctness:** the light this engine produces is bit-identical to vanilla and to ScalableLux on
-  the measurement box — every run prints a fingerprint (`sky=905931078dfc5ace`). The 1.x line's is
-  `641356fc41163add`, i.e. identical to neither.
-- **Read this before quoting the older tables anywhere:** before 2.0.4 this engine's `block_toggle_border` figure was
-  0.32 ms and the headline claim was "12× faster than ScalableLux". That measurement was taken while the cell's
-  block-light propagation **was not being done at all** — the same defect that made placed torches light only their
-  own cell (`docs/BUG-EMITTER-BLOCK-LIGHT.md`, root cause four). The 0.32 was an artefact and this README no longer
-  quotes it.
+- **Two wins, one 3× improvement, one tie.** `structure_cube` and `dense_chunk_patch` are won against both
+  predecessors; `block_toggle_border` went from 22% *behind* ScalableLux (2.0.4, 5.00 vs 4.18) to **3× ahead of it**
+  (1.51 vs 4.54) — the 1.x line's 0.81 there is its region-batched architecture doing exactly the small synchronous
+  work it was built for, and that cell is the one place a predecessor beats this engine on compute.
+- **`sky_hole` is a tie between all three** (0.81–1.06 ms) and the ordering moves with machine load; nothing is
+  claimed on it at this round count.
+- **The player axis is the one-tick floor** (48–50 ms) for this engine and for ScalableLux on all four; 1.x sits
+  10–30 ms behind on three of four.
+- **Not speed, but correctness:** the light this engine produces is bit-identical to vanilla and to ScalableLux on the
+  measurement box — every run prints a fingerprint (`sky=905931078dfc5ace`). The 1.x line's is
+  `641356fc41163add`, identical to neither.
+- **Two corrections that belong with any quote of the numbers above.** Before 2.0.4 the `block_toggle_border` figure
+  was 0.32 ms and the headline was "12× faster than ScalableLux": that was measured while the cell's block-light
+  propagation was not being done at all, the same defect that made placed torches light only their own cell, and it is
+  no longer quoted. And the 2.0.4 table's 5.00 ms for the same cell was the cost of doing the work with the wrong
+  settle rule; 2.0.5 fixed that rule (see `docs/BUG-EMITTER-BLOCK-LIGHT.md` and the 2.0.5 changelog entry).
 - **The `structure_cube` caveat, which belongs in any claim about that cell:** roughly 90% of that reading is
   Minecraft's own `Level.setBlockState` (state write, heightmap, dirty marking, vanilla's synchronous light hook) —
   600–775 ns per change for *every* engine measured, vanilla included. It cannot produce a large victory for anybody.
