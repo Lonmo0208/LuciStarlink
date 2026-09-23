@@ -819,3 +819,44 @@ minPass = 原版地板(2.60 ms = 4096 × 634 ns) + 我们的引擎工作
 3. （顺带）上面那次修改若按"每（列×方向）"调用会是 1024 次查找 ≈ 1 ms/settle，缓存后回到几十次读 —— 既是正确性修复也是成本修复。
 
 **结论**：这三处都是"测量看不出来、但会在别的地形/时序上咬人"的典型地雷：第一个是时序窗口，第二个是地形窗口。修复后重新验证（见 §34）。
+
+## 34. 三个开关翻成默认开 + 死路径清除，无参数复验四档（2026-09-23 晚）
+
+**指令**：「肯定是默认要让玩家吃到最好的成绩啊 打开打开」。这一节是那个发布决定的落地记录。
+
+**改了什么**
+
+1. **默认值翻转**（`StarLightInterface`）：`scalablelux.ownEdit` / `scalablelux.batchDecrease` / `scalablelux.recomputeSky`
+   三个开关从「默认关、测量时用 `-PslArgs` 打开」改为 **默认开**（`!"false".equalsIgnoreCase(System.getProperty(name, "true"))`）。
+   要关掉仍然可以显式传 `=false`，所以 A/B 能力没有丢。
+2. **删掉三条已经测过、被否掉、但代码还留着的路径**（它们在任何一层都可能咬人）：
+   - **flat mirror（R5-1/R5-2）**：`flatCells` / `flatBound` / `chunkFlat` / `FLAT_LIGHT`，以及 `ExtendedChunk` 与
+     `ChunkAccessMixin` 里的 `scalablelux$getSkyFlat` 等四个访问器。两次测量都是负的（先是 27.8 s → 322 s 每 pass
+     的镜像风暴，改成 chunk 持有后正确但慢 8–40%）。删掉之后 `getLightLevel(sectionIndex, localIndex)` 与四个传播
+     内层循环回到纯 nibble 读，热路径少一个静态判断 + 一次方法调用。
+   - **material table（R5-3/R5-4）**：`materialBound`、flag、字段、`ExtendedChunk.scalablelux$getMaterial`、
+     `LevelChunkSectionMixin`（早已从 `lucistarlink.mixins.json` 摘掉，只剩文件在编译）。保留
+     `ExtendedChunk.MATERIAL_UNCACHED` 作为标记常量。第一次测量说"快 10%"其实是**错的**（少算活的、给了错光），
+     修对后慢 11%。
+   - **整块版重算 `recomputeChunkSkyLight`**：窗口版 `settleSkyWindow` 已经在用同一条规则、并且只跑编辑能影响到
+     的 y 窗口（±16，可证明精确）；整块版已无调用者，而且它的 material 缓冲随 material table 一起失效（会变成
+     "整块跳过"）。一并删除，含 `expandedCurrent` / `haloRunBottom` 两个只服务它的残件。
+3. 顺带修掉自己上一次删除留下的编译错误（`destroyCaches` 多一个 `}`、`chunkFlat` 只剩签名），并清掉 `ExtendedChunk`
+   的无用 import。
+
+**复验（关键：不带任何 `-Dscalablelux.*` 参数，只有 harness 协议三件套）**
+
+`zcode-defaults-pre.sh` + `zcode-defaults-4cell.sh`，jar 为 `sl-jar/ls2-defaults-rig.jar`
+（`lucistarlink-1.21.1-2.0.0-alpha.1-all.jar`，`-Pmod_id=lucistarlinkrig`），CPU 平均 8.3%（干净窗口）。
+
+| 档位 | minPass（默认开） | 上一窗口（显式开） | 玩家口径 wall/pass |
+|---|---|---|---|
+| block_toggle_border | **0.331 ms** | 0.32 ms | 50.5 ms |
+| structure_cube | **2.698 ms** | 2.51 ms | 48.5 ms |
+| dense_chunk_patch | **1.029 ms** | 1.07 ms | 50.0 ms |
+| sky_hole | **0.772 ms** | 0.69 ms | 49.4 ms |
+
+**并且 structure 的规范指纹仍是 `sky=905931078dfc5ace`、`block=59e2252f732ce67b`**（与 ScalableLux/原版逐位相同），
+`chunksNotLightCorrect=0`。⇒ 默认构建就是 §32 验收的那台引擎，玩家不需要任何参数。
+
+**这才算真的落地**：在此之前"最好的成绩"只存在于带 `-PslArgs` 的测量运行里；现在它是不带参数的默认行为。

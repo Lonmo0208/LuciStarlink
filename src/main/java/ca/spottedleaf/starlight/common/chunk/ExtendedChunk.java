@@ -55,47 +55,9 @@ public interface ExtendedChunk {
     }
 
     /**
-     * R5: the flat byte-per-cell mirror of this chunk's light, one {@code byte[4096]} per light section, indexed exactly
-     * like {@link #scalablelux$getSkyNibbles()} / {@link #scalablelux$getBlockNibbles()}.
-     *
-     * <p><b>Why it lives here.</b> The first attempt kept the mirror in the engine's cache slots and measured 27.8 s and
-     * then 322 s for a pass that takes 4.6 ms: those slots are recycled across chunks, so the mirror was rebuilt on
-     * nearly every access. Ownership has to follow the light data - allocated with the nibble array, dropped when that
-     * array is replaced (chunk reload), one entry built on first touch and reused for the chunk's lifetime. Entries are
-     * {@code null} until built, and a {@code null} array or entry means "no mirror", in which case callers use the
-     * nibble path. That is why this can only change the cost, never the semantics.</p>
-     */
-    default byte[][] scalablelux$getSkyFlat() {
-        return null;
-    }
-
-    default void scalablelux$setSkyFlat(final byte[][] flat) {
-    }
-
-    default byte[][] scalablelux$getBlockFlat() {
-        return null;
-    }
-
-    default void scalablelux$setBlockFlat(final byte[][] flat) {
-    }
-
-    /**
-     * R5: per-cell opacity of this chunk's blocks, one byte per cell (0 = fully transparent, 1..15 = the cached
-     * opacity, {@link #MATERIAL_UNCACHED} = the block state's opacity is not cached and the shape path is needed),
-     * one {@code byte[4096]} per light section, indexed like the nibble arrays.
-     *
-     * <p>Material is what the propagation actually consults - it needs the opacity of the neighbour it is about to
-     * write into - and asking the palette for it costs ~20 ns per call (measured, 8,790 calls per pass on
-     * structure_cube). Unlike light, material <b>cannot change during one propagation</b>, so a table here needs no
-     * write-through and no versioning: an entry is dropped when a block in that section changes, and rebuilt on next
-     * use. It also takes the section's 32 KB of palette references out of the propagation loop's working set.</p>
+     * The marker the propagation rule uses for "this cell's opacity is not cached, the engine has to ask the block
+     * state" - the shape path and the palette walk both take that route. (The one-byte material table that used to fill
+     * this in was measured at 11% slower than the palette walk and removed; see docs/NEW-ENGINE-TEARDOWN.md.)
      */
     byte MATERIAL_UNCACHED = 16;
-
-    default byte[][] scalablelux$getMaterial() {
-        return null;
-    }
-
-    default void scalablelux$setMaterial(final byte[][] material) {
-    }
 }

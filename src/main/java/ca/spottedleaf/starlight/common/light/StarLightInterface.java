@@ -458,16 +458,15 @@ public final class StarLightInterface {
      * <p>Why this is not one of the twelve failed queue attempts: those all stayed inside the queue (or held it), so the
      * light thread's scheduling turnaround stayed in the completion path - measured at ~4.3 ms of a 4.6 ms pass on
      * {@code block_toggle_border}, while the pass's own work is only ~150 us. This path never touches the queue: the
-     * engine's own propagation runs on the calling (server) thread and publishes into the visible layer, so the chunk's
-     * sync futures are already complete and there is nothing to wait for. Nothing is deferred either, so there is no
-     * pending state for a blocking reader to interlock with - the interlock that hung four earlier attempts.</p>
-     *
-     * <p>Falls back to the queue on anything unexpected, and only handles chunks that are ready: a chunk still
-     * generating keeps the asynchronous path, which is what the light thread exists for.</p>
+    /**
+     * R2 of the new engine: propagate and install an edit inside the call that made it, buffered per chunk and settled by
+     * the windowed recompute below. <b>Default ON</b> since 2026-09-23: this is the configuration the acceptance measured
+     * (all four engine-metric cells and the player axis against ScalableLux, 1.x and vanilla), so players get it unless
+     * they explicitly set {@code -Dscalablelux.ownEdit=false}.
      */
-    private static final boolean LUCIS_OWN_EDIT = Boolean.getBoolean("scalablelux.ownEdit");
+    private static final boolean LUCIS_OWN_EDIT = !"false".equalsIgnoreCase(System.getProperty("scalablelux.ownEdit", "true"));
     /** R4-1: seed every chunk, then drain the decrease queue once (see seedBlockChangesOnly). */
-    private static final boolean LUCIS_BATCH_DECREASE = Boolean.getBoolean("scalablelux.batchDecrease");
+    private static final boolean LUCIS_BATCH_DECREASE = !"false".equalsIgnoreCase(System.getProperty("scalablelux.batchDecrease", "true"));
     /**
      * Dispatch rule, CLOSED by measurement (default 0 = off). Idea: a small buffered burst is cheaper on the base's
      * asynchronous path - on sky_hole the base settles 25 changes in 0.86 ms while this path's setup + seed + drain
@@ -483,7 +482,7 @@ public final class StarLightInterface {
     private static final boolean LUCIS_BULK_RELIGHT = Boolean.getBoolean("scalablelux.bulkRelight");
     private static final int LUCIS_BULK_MIN_CHANGES = Integer.getInteger("scalablelux.bulkMinChanges", 128);
     /** R5: settle a bulk skylight change by the canonical recompute instead of the seeded BFS (see the sky engine). */
-    private static final boolean LUCIS_RECOMPUTE_SKY = Boolean.getBoolean("scalablelux.recomputeSky");
+    private static final boolean LUCIS_RECOMPUTE_SKY = !"false".equalsIgnoreCase(System.getProperty("scalablelux.recomputeSky", "true"));
     // 128, not 1024: the buffer flushes every 256 changes, so a bigger threshold could never be reached (the first
     // version of this sat at 1024 and the recompute silently never ran).
     private static final int LUCIS_RECOMPUTE_MIN = Integer.getInteger("scalablelux.recomputeMinChanges", 128);
