@@ -154,6 +154,22 @@ public final class LuciStarlinkCommand {
                             }
                             for (final LevelChunk chunk : chunks) {
                                 chunk.setLightCorrect(false);
+                                // A repair has to clear what it repairs. The block engine's relight seeds the chunk's
+                                // light sources and propagates them; it does not zero the light already stored, so stale
+                                // block light survived a relight untouched (verified: a cell holding level 1 with no source
+                                // read 1 before and after). Zeroing the chunk's block nibbles first makes `relight` mean
+                                // "recompute this chunk's block light from its blocks", which is what it is documented to
+                                // do and what a save written by a buggy build needs.
+                                final ca.spottedleaf.starlight.common.light.SWMRNibbleArray[] nibbles =
+                                        ((ca.spottedleaf.starlight.common.chunk.ExtendedChunk) chunk).scalablelux$getBlockNibbles();
+
+                                if (nibbles != null) {
+                                    for (final ca.spottedleaf.starlight.common.light.SWMRNibbleArray nibble : nibbles) {
+                                        if (nibble != null) {
+                                            nibble.setZero();
+                                        }
+                                    }
+                                }
                             }
                             final ThreadedLevelLightEngine lightEngine =
                                     (ThreadedLevelLightEngine) level.getChunkSource().getLightEngine();

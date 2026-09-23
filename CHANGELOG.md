@@ -6,6 +6,78 @@ the 1.x branch's own changelog; for what belongs to whom see [NOTICE](NOTICE) an
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 
+## 2.0.6 — 2026-09-24
+
+**Fixes the defect behind the reported light loss after large edits**: the block-light half of every burst past the
+defer threshold was **never computed at all** — a null position set was passed into the block engine, the resulting
+`NullPointerException` was caught by a `catch (Throwable)` that only incremented an invisible counter, and the sky half
+went on to be settled by the recompute. So a large fill computed its skylight and none of its block light.
+
+Found by following the report 「重新进存档有光残留」 with a two-pass light dump of the player's own save (dump, force a
+relight, dump again) and then a controlled fill/clear of a 8192-block volume on a copy of it:
+
+| what the dump showed | before | after |
+|---|---|---|
+| a 8192-block glowstone fill, cells at their own level 15 | **6 of 208 cells lit at all** | **154 cells at 15**, the rest a correct 14/13 gradient |
+| `ownEditBatched` (positions the engine actually processed) | **0** | **32 768** |
+| swallowed failures (`ownEditFallback`) | **128** | **0** |
+
+The null was introduced with the deferred-sky path (2.0.1) and survived every release since: `blockPositions` was built
+as `deferSky ? null : toBlockPositions(positions)`, and the deferred branch handed that `null` to
+`blocksChangedInChunk`. Every burst at or above the defer threshold — 128 changes through 2.0.4, 4 changes in 2.0.5 —
+therefore lost its block light, while small bursts (the light-source gate's path, and every test that used one or two
+changes) worked, which is exactly why it went unnoticed.
+
+Two more changes so this class of failure cannot hide again:
+
+- **The silent catch now logs.** A burst that fails to settle logs an ERROR with its exception (first occurrence, then
+  every 1024th) instead of only bumping a counter that is invisible unless the profiler is on.
+- **`relight` clears before it relights.** It marked chunks light-incorrect and called `lightChunk`, which *seeds* the
+  chunk's light sources and propagates — it never zeroed what was already stored, so stale block light survived a
+  relight untouched (verified: a cell holding level 1 with no source read the same before and after). It now zeroes the
+  chunk's block nibbles first, which is what "repair this chunk's block light" has to mean. Verified the other way
+  round on a correct area: a torch's full 14/13/12/11/10/9 field was zeroed and came back identical, which also proves
+  the relight republishes what it computes.
+
+**Not a defect: the light the report was about.** The area the player pointed at holds a plain `minecraft:torch` at
+(11,-60,-22) — emission 14 — plus two redstone wall torches, and the "residue" was that torch's own field (14 at its
+cell, decaying 13/12/11/10/9 around it), while the genuinely *dark* ground beside it was the bug above. A coarse dump
+grid (every two blocks) had skipped the torch's cell, which is what made it look like stale light for a while.
+
+**Performance consequence, to be measured rather than assumed:** with the block-light half actually running for large
+bursts, the two workloads whose bursts deferred their sky work (`structure_cube`, `dense_chunk_patch`) are doing work
+they were previously skipping, so their numbers will move. The acceptance table is re-measured with this release and
+recorded below.
+
+### Three-round acceptance, and the first table measured with the block half actually running
+
+Same session, interleaved, 3 rounds per side, medians; window load CPU 25.7% average. **This is the first table in
+which the block-light half of the heavy workloads is really computed** — every earlier one skipped it (the defect
+above), which is why the numbers move so much:
+
+| workload | 2.0.6 | ScalableLux | 1.x | verdict |
+|---|---|---|---|---|
+| `block_toggle_border` | 5.85 ms | 4.33 ms | **0.76 ms** | lost to both |
+| `structure_cube` | **2.90 ms** | 4.62 ms | 2.87 ms | win vs both |
+| `dense_chunk_patch` | 6.21 ms | **3.90 ms** | 2.36 ms | lost |
+| `sky_hole` | **0.56 ms** | 0.78 ms | 0.81 ms | win vs both |
+
+Player axis: 48–51 ms on all four for this engine and ScalableLux (the one-tick floor), 1.x 20–35 ms behind on three of
+four. Structure fingerprint canonical in every run.
+
+**What the loss is, and what it is not.** It is the block-light half being *seeded per changed position* — each change
+costs a `checkBlock` (~1.2 µs) and its share of the propagation cascade — for workloads made of thousands of emitter
+changes (`dense_chunk_patch` is 2048 glowstone changes a pass). Two candidate levers were measured against this and
+both came back null: the bulk-relight path (`scalablelux.bulkRelight`, −9% on `dense`, inside noise) and the flush
+size (`scalablelux.pendingFlushSize`, 4096 was *worse* than 256 on all three). Those two were also the levers the
+earlier campaign closed — but that campaign measured them while this very half was not running, so their closures were
+re-opened, re-measured here, and are now genuinely closed.
+
+**So the standing claim after 2.0.6 is two wins and two losses** (`structure_cube`, `sky_hole` against both
+predecessors; `block_toggle_border`, `dense_chunk_patch` lost), with the correct light that none of the three earlier
+tables had. Making the block-light seeding cheaper is the open lever, and it is a real one: it is now the single
+biggest cost in the two cells we lose.
+
 ## 2.0.5 — 2026-09-24
 
 **Wins `block_toggle_border` back — the cell 2.0.4 had to concede — without giving up the correctness 2.0.4

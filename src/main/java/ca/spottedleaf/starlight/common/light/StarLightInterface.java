@@ -44,6 +44,11 @@ import java.util.function.IntConsumer;
 
 public final class StarLightInterface {
 
+    private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger("LuciStarlink");
+
+    /** How many burst-settling failures have been logged (see the catch in lucis$flushPendingEditsImpl). */
+    private static long LUCIS_FALLBACK_LOGGED;
+
     public static final TicketType<ChunkPos> CHUNK_WORK_TICKET = TicketType.create("starlight_chunk_work_ticket", (p1, p2) -> Long.compare(p1.toLong(), p2.toLong()));
 
     /**
@@ -500,7 +505,7 @@ public final class StarLightInterface {
      * and dense_chunk_patch preferred 256 outright (1.32/1.29 against 1.42/1.42 and 1.46/1.46). Light fingerprints
      * identical in all six runs, so the bigger buffer does not silently defer work either - it simply buys nothing.
      */
-    private static final int LUCIS_PENDING_FLUSH_SIZE = 256;
+    private static final int LUCIS_PENDING_FLUSH_SIZE = Integer.getInteger("scalablelux.pendingFlushSize", 256);
     private final it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<it.unimi.dsi.fastutil.longs.LongOpenHashSet> lucis$pendingEdits =
             new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>();
 
@@ -709,10 +714,13 @@ public final class StarLightInterface {
                     final boolean deferSky = LUCIS_RECOMPUTE_SKY && chunkNow != null
                             && positions.size() >= LUCIS_RECOMPUTE_MIN;
 
-                    // The block-light half and the non-deferred paths still speak Set<BlockPos>; that form is only built
-                    // where it is actually consumed (small bursts and the block engine), never for a deferred sky settle.
-                    final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> blockPositions = deferSky
-                            ? null : toBlockPositions(positions);
+                    // The block-light half always speaks Set<BlockPos>, and this set is consumed even when the sky half is
+                    // deferred: leaving it null for a deferred burst passed null into blocksChangedInChunk, which threw
+                    // inside a catch that only counted the failure - so every burst past the defer threshold silently
+                    // lost its block light. A big glowstone fill then read 0 in almost every cell it had just filled
+                    // (own cell included), and clearing it left the few computed values behind as residue that no rule
+                    // could justify. The set is built unconditionally now.
+                    final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> blockPositions = toBlockPositions(positions);
 
                     if (deferSky) {
                         // remember the y range the burst touched: the window is built from it
@@ -765,6 +773,15 @@ public final class StarLightInterface {
                 } catch (Throwable t) {
                     if (LuxProfiler.enabled()) {
                         LuxProfiler.ownEditFallback++;
+                    }
+                    // Never swallow this quietly again: the counter above is invisible unless the profiler is on, and a
+                    // failure here means the burst's light is left stale (it is what hid a null position set behind the
+                    // deferred-sky path for several releases). Log the first one, then every 1024th, so a systematic
+                    // failure is loud without flooding a busy log.
+                    if (LUCIS_FALLBACK_LOGGED == 0L || LuxProfiler.ownEditFallback % 1024L == 0L) {
+                        LUCIS_FALLBACK_LOGGED++;
+                        LOGGER.error("LuciStarlink: settling a buffered edit burst failed ("
+                                + LUCIS_FALLBACK_LOGGED + ". occurrence); the light of those changes is stale", t);
                     }
                 }
             }
