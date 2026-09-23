@@ -12,23 +12,52 @@ Upstream (the code base)
 Previous line
   Lucis - Copyright (c) Team Argentum, DenisMasterHerobrine (LGPL-3.0-only)
   LuciStarlink 1.x - Copyright (c) Lonmo - the line this release succeeds.
+  Note: no code from Lucis or from LuciStarlink 1.x is present in this distribution.
+  (Lucis's design needs a region-owned light image and its own material extraction; porting
+  it onto this base was measured and is not feasible. See docs/PORT-LUCIS-IDEAS.md.)
 
 This derivative
   LuciStarlink 2.0 - Copyright (c) Lonmo
   License: LGPL-3.0-only (unchanged from both lineages)
 
-Changes relative to the ScalableLux base (full rationale and measurements in
-docs/PORT-LUCIS-IDEAS.md and docs/LS2-PLAN.md of the source tree)
-  1. Identity: modId `lucistarlink`, display name `LuciStarlink`, entrypoint/command/mixin-config renamed.
+Changes relative to the ScalableLux base
+(full rationale and measurements: docs/NEW-ENGINE-TEARDOWN.md, docs/ARCHITECTURE.md)
+  A. The update path was replaced by an own implementation (the reason this release exists; all
+     three switches ship ON and can each be turned off with a system property):
+     1. The edit is propagated and installed inside the setBlockState call that made it, instead of
+        being handed to the light engine's queue (`-Dscalablelux.ownEdit=false` restores the base
+        path).
+     2. Edits are buffered per chunk, so one engine call handles a whole burst.
+     3. The block-light decrease queue is seeded per chunk and drained once per burst instead of
+        once per touched chunk (`-Dscalablelux.batchDecrease=false` restores the base path).
+     4. A bulk skylight change is settled by a windowed recompute - only the y range an edit can
+        reach (change +- 16, exact for levels 0..15) is recomputed, from the same propagation rule
+        the base uses (`-Dscalablelux.recomputeSky=false` restores the base path).
+     5. Inline guards are hoisted from per-change to per-chunk, and a change that makes an already
+        dark cell fully opaque skips block-light seeding (provably cannot move block light).
+     The light these produce is bit-identical to the base and to vanilla on the verification box
+     used for acceptance (fingerprint sky=905931078dfc5ace block=59e2252f732ce67b).
+  B. Identity: modId `lucistarlink`, display name `LuciStarlink`, entrypoint/command/mixin-config renamed.
      Internal ScalableLux identifiers (the `scalablelux$` mixin member prefix, the
      `ca.spottedleaf.starlight` packages) are deliberately kept so the origin of every file stays visible.
-  2. Telemetry: periodic `SLTELEM` line (queue depth, dirty positions, pooled propagators),
+  C. Telemetry: periodic `SLTELEM` line (queue depth, dirty positions, pooled propagators),
      `-Dscalablelux.telemetrySeconds` (default 30, 0 disables).
-  3. Commands: `/lucistarlink stats | light <pos> | relight <radius>` (permission level 2).
-  4. Client update path: `SWMRNibbleArray.updateVisible()` no longer publishes a nibble whose bytes are
-     unchanged (identity-preserving: only when the on-wire content is byte-identical).
-  5. Instrumentation: `ca.spottedleaf.starlight.common.debug.LuxProfiler`, off unless `-Dscalablelux.profile=true`.
-  6. An optional, default-off scheduling batch (`-Dscalablelux.batchLimit`) kept for A/B experiments only;
-     measured neutral, not enabled.
-  7. The light computation itself is unchanged. The main repository's differential probe measures this build as
-     bit-identical to vanilla on a 599,040-cell box once the engine has settled.
+  D. Commands: `/lucistarlink stats | light <pos> | relight <radius>` (permission level 2).
+  E. Client update path: `SWMRNibbleArray.updateVisible()` no longer publishes a nibble whose bytes are
+     unchanged (identity-preserving: only when the on-wire content is byte-identical). The client is
+     not taken over: it runs the base path, and change A is consumed only under a
+     "is a ServerLevel and is the server thread" guard.
+  F. Save guarantees: the light-incorrect marks written to a save are per chunk and precise instead of
+     blanket, and the worldgen write path was audited and pinned.
+  G. Block-state opacity is cached per block state (0..15, or "not cached") so the propagation loop
+     does not rebuild a palette lookup per neighbour.
+  H. Compatibility: Sable per-plot light engines are deferred to Sable; Starlight / ScalableLux / Lucis
+     are declared incompatible in the mod metadata.
+  I. Instrumentation: `ca.spottedleaf.starlight.common.debug.LuxProfiler`, off unless
+     `-Dscalablelux.profile=true`; `-Dscalablelux.recomputeDebug=true` prints per-settle phase timings.
+  J. An optional, default-off scheduling batch (`-Dscalablelux.batchLimit`) kept for A/B experiments
+     only; measured neutral, not enabled.
+  K. Six further approaches were implemented, measured and closed; their code has been removed rather
+     than left behind a flag: whole-chunk sky recompute, a flat byte-per-cell light mirror (two forms),
+     a per-cell material table, a small-burst dispatch rule, flush batching, and deferring the
+     block-light half. The numbers are in docs/NEW-ENGINE-TEARDOWN.md.

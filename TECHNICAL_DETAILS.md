@@ -1,6 +1,16 @@
 Starlight Technical Details
 ==
 
+## Note on this copy (LuciStarlink 2.0)
+
+This is the ScalableLux/Starlight technical document, kept verbatim because its description of the light propagation
+algorithm is still an accurate description of **this mod's engine core**: the storage, the increase/decrease
+propagation, the skylight handling and the chunk pipeline are ScalableLux's code. What it does *not* describe is the
+update path this release is judged by (the inline edit lane, per-chunk buffering, the consolidated decrease drain
+and the windowed sky settle), and its benchmark numbers are upstream's, from older Minecraft versions and different
+hardware. For this build's architecture and its measurements see [README.md](README.md),
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/NEW-ENGINE-TEARDOWN.md](docs/NEW-ENGINE-TEARDOWN.md).
+
 ## Obsoletion notice
 
 Given the 1.20 Vanilla light engine copies basically everything from

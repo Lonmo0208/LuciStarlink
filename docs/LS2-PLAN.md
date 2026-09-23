@@ -1,5 +1,11 @@
 # LuciStarlink 2.0 —— 换 ScalableLux 底座（立项）
 
+> **状态：本文件是立项与 M0–M3 阶段的历史记录（2026-09-21/22），不是当前状态。**
+> 之后 R0–R5 把更新回路换成了我们自己的实现并完成验收，三个开关已默认开启，代码已进 `master`。
+> 当前状态看 [README.md](../README.md) 与 [ARCHITECTURE.md](ARCHITECTURE.md)，全部测量看
+> [NEW-ENGINE-TEARDOWN.md](NEW-ENGINE-TEARDOWN.md) §32–§34。下面 §6 里列的两项"待决"（与上游的关系、1.x 的 80 格差异）
+> 在前者已经收口，后者已定性为 1.x 自己的世界生成期缺陷。
+
 * 决定人 / 日期：用户，2026-09-21（「做成"LS 2.0 = 换 SL 底座" 这个 才是我想要的」）
 * 本文件所在仓库 = 2.0 的**底座树**：`E:\LuciStarlin\ScalableLux-neoforge-build\ScalableLux-Patched`（分支 `lucis-ideas`，
   ScalableLux `0.3.0-alpha.0.8` 的 NeoForge 1.21.1 移植，基线提交 `c312ee3`）

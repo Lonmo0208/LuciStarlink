@@ -452,13 +452,6 @@ public final class StarLightInterface {
     }
 
     /**
-     * R2 of the new engine (default OFF, {@code -Dscalablelux.ownEdit=true}): propagate and install an edit inside the
-     * call that made it, instead of handing it to the light thread.
-     *
-     * <p>Why this is not one of the twelve failed queue attempts: those all stayed inside the queue (or held it), so the
-     * light thread's scheduling turnaround stayed in the completion path - measured at ~4.3 ms of a 4.6 ms pass on
-     * {@code block_toggle_border}, while the pass's own work is only ~150 us. This path never touches the queue: the
-    /**
      * R2 of the new engine: propagate and install an edit inside the call that made it, buffered per chunk and settled by
      * the windowed recompute below. <b>Default ON</b> since 2026-09-23: this is the configuration the acceptance measured
      * (all four engine-metric cells and the player axis against ScalableLux, 1.x and vanilla), so players get it unless

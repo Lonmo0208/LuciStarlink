@@ -1,7 +1,7 @@
 modLoader="javafml"
 loaderVersion="*"
 license="LGPL-3.0-only"
-issueTrackerURL="https://github.com/RelativityMC/ScalableLux/issues"
+issueTrackerURL="https://github.com/Lonmo0208/LuciStarlink/issues"
 clientSideOnly = false
 showAsResourcePack = false
 showAsDataPack = false
@@ -12,9 +12,9 @@ version="${version}"
 displayName="LuciStarlink"
 logoFile="assets/scalablelux/icon.png"
 authors="Lonmo (LuciStarlink); light engine by Spottedleaf and ishland (ScalableLux)"
-description='''LuciStarlink 2.0: ScalableLux's light engine with LuciStarlink's telemetry, in-game tools and correctness work. LGPL-3.0-only - see NOTICE for attribution and the change list.'''
-displayURL = "https://github.com/RelativityMC/ScalableLux"
-credits="The light engine is ScalableLux by Spottedleaf and ishland (RelativityMC), licensed LGPL-3.0-only; this build is a derivative work carrying LuciStarlink's additions. The previous LuciStarlink 1.x line was derived from Lucis (Team Argentum, DenisMasterHerobrine). See NOTICE."
+description='''LuciStarlink 2.0: the ScalableLux light engine (Spottedleaf, ishland) with LuciStarlink's own update path - inline edits, per-chunk batching, a windowed sky settle - plus telemetry, in-game tools and save-correctness work. LGPL-3.0-only; see NOTICE for attribution and the change list.'''
+displayURL = "https://github.com/Lonmo0208/LuciStarlink"
+credits="The engine core is ScalableLux by Spottedleaf and ishland (RelativityMC), licensed LGPL-3.0-only; this build is a derivative work that replaces the update path with LuciStarlink's own (inline edits, per-chunk batching, consolidated decrease drain, windowed sky settle). The previous LuciStarlink 1.x line was derived from Lucis (Team Argentum, DenisMasterHerobrine); no code from it is present here. See NOTICE and docs/ARCHITECTURE.md."
 
 [[dependencies.lucistarlink]]
 modId = "minecraft"
@@ -27,6 +27,22 @@ side = "BOTH"
 modId = "scalablelux"
 type = "incompatible"
 reason = "LuciStarlink 2.0 already is the ScalableLux light engine; install only one."
+versionRange = "[0,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.lucistarlink]]
+modId = "starlight"
+type = "incompatible"
+reason = "Both replace the vanilla light engine; install only one."
+versionRange = "[0,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.lucistarlink]]
+modId = "lucis"
+type = "incompatible"
+reason = "Both replace the vanilla light engine; install only one."
 versionRange = "[0,)"
 ordering = "NONE"
 side = "BOTH"
