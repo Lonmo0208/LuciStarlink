@@ -84,6 +84,19 @@ Nothing is promoted on a single number. An engine change is accepted only when *
    i.e. identical to vanilla and to ScalableLux; a change that moves it is rejected even if it is faster.
 4. **No hang** — all four phases of a measured pass complete.
 
+**Since 2.0.2 the correctness gate needs a light source in it, and that is not optional.** The first defect reported
+from play (`docs/BUG-EMITTER-BLOCK-LIGHT.md`) was an opaque emitter — glowstone, sea lantern, redstone lamp — whose
+own cell was never lit, because the only gated workload was `structure_cube`, whose changes are all non-emitters:
+273 block-light cells out of 599,040, i.e. the gate could not see a light source at all. Three things are required
+now:
+
+- at least one measured workload contains emitters, and its **block-light** fingerprint is compared too (not just
+  sky);
+- the **place → save → reload** check passes: a placed glowstone must read `block=15` after a restart (the script is
+  the two-boot datapack protocol recorded in the bug document);
+- a placed emitter must read `block=15` in the same session, with the tick hook as its settle point and no dependency
+  on an unrelated call asking the engine for work.
+
 The rig protocol (three settings, all recorded in the run logs):
 
 ```

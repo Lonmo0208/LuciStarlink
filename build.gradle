@@ -123,6 +123,16 @@ loom {
             property "scalablelux.telemetrySeconds", providers.gradleProperty("probeTelemetrySeconds").getOrElse("5")
             vmArg "-Xmx3G"
         }
+        // A server in its OWN run directory. The default runServer shares run/ with the client, and two live JVMs
+        // cannot share it: the second one dies at startup trying to take over run/logs/latest.log
+        // ("Unable to delete file ... latest.log"), which looks like a mod failure and is not one. This tree gets
+        // played and measured at the same time, so the two need separate directories.
+        serverDiag {
+            server()
+            runDir "run-diag"
+            property "scalablelux.telemetrySeconds", providers.gradleProperty("probeTelemetrySeconds").getOrElse("10")
+            property "scalablelux.profile", providers.gradleProperty("probeProfile").getOrElse("true")
+        }
     }
 }
 

@@ -1,0 +1,2 @@
+say RELOADTEST-STOPPING-A
+stop

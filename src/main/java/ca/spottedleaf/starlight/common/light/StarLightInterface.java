@@ -358,6 +358,11 @@ public final class StarLightInterface {
     public boolean hasUpdates() {
         // a guaranteed, per-tick, server-thread call site (the harness's barrier and vanilla's tryScheduleUpdate both
         // come through here): the flush point for R3's coalesced edits, so nothing stays buffered across ticks
+        if (LUCIS_EDIT_DEBUG) {
+            System.out.println("FLUSHDBG hasUpdates pendingChunks=" + this.lucis$pendingEdits.size()
+                    + " pendingRecomputes=" + this.lucis$pendingRecomputes.size()
+                    + " queueEmpty=" + this.lightQueue.isEmpty());
+        }
         this.lucis$flushPendingEdits(-1L, true);
         return !this.lightQueue.isEmpty();
     }
@@ -458,6 +463,8 @@ public final class StarLightInterface {
      * they explicitly set {@code -Dscalablelux.ownEdit=false}.
      */
     private static final boolean LUCIS_OWN_EDIT = !"false".equalsIgnoreCase(System.getProperty("scalablelux.ownEdit", "true"));
+    /** Diagnostic trace of one block change's route through this class; off unless asked for by hand. */
+    private static final boolean LUCIS_EDIT_DEBUG = Boolean.getBoolean("scalablelux.editDebug");
     /** R4-1: seed every chunk, then drain the decrease queue once (see seedBlockChangesOnly). */
     private static final boolean LUCIS_BATCH_DECREASE = !"false".equalsIgnoreCase(System.getProperty("scalablelux.batchDecrease", "true"));
     /**
@@ -552,8 +559,8 @@ public final class StarLightInterface {
             // StampedLock race in this queue's getOrCreateChunkTasks (unlocking an optimistic-read stamp), reproduced with
             // the inline path switched OFF. The guard also proved too strict - getAnyChunkNow returns null for chunks that
             // are only ticket-held, so it silently disabled the inline path on the border workload entirely.
-            if (chunk == null) { LuxProfiler.ownEditRejChunk++; return false; }
-            if (!chunk.getPersistedStatus().isOrAfter(ChunkStatus.LIGHT)) { LuxProfiler.ownEditRejStatus++; return false; }
+            if (chunk == null) { LuxProfiler.ownEditRejChunk++; if (LUCIS_EDIT_DEBUG) { System.out.println("EDITDBG inline reject chunk-null " + chunkX + "," + chunkZ); } return false; }
+            if (!chunk.getPersistedStatus().isOrAfter(ChunkStatus.LIGHT)) { LuxProfiler.ownEditRejStatus++; if (LUCIS_EDIT_DEBUG) { System.out.println("EDITDBG inline reject status " + chunk.getPersistedStatus()); } return false; }
             // A new chunk means the previous burst is over: settle everything else first (edits usually arrive chunk by
             // chunk, so this is the cheap case), then buffer this position under its own chunk.
             this.lucis$flushPendingEdits(key, false);
@@ -575,7 +582,16 @@ public final class StarLightInterface {
      * Applies every buffered edit burst except {@code keepKey} (pass -1 to apply all), one engine call per chunk.
      * Server thread only; a call from any other thread is ignored (the buffer stays for the next server-thread point).
      */
-    private void lucis$flushPendingEdits() {
+    /**
+     * Applies every buffered edit burst, one engine call per chunk. Server thread only; a call from any other thread
+     * is ignored and the buffer stays for the next server-thread point.
+     *
+     * <p>Called from {@code ServerLevel.tick} (see ServerWorldMixin) so that a buffered edit is never left waiting for
+     * an unrelated server-thread call: without that tick hook the only settle point was {@code hasUpdates()}, which the
+     * light thread also reaches (and is refused), and which vanilla only reaches from the server thread when the
+     * engine's own queue has work - work the inline lane deliberately does not create.</p>
+     */
+    public void lucisFlushPendingEdits() {
         this.lucis$flushPendingEdits(-1L, true);
     }
 
@@ -588,6 +604,10 @@ public final class StarLightInterface {
         }
         if (!(this.world instanceof ServerLevel serverLevel)
                 || !serverLevel.getChunkSource().chunkMap.mainThreadExecutor.isSameThread()) {
+            if (LUCIS_EDIT_DEBUG) {
+                System.out.println("FLUSHDBG exit: not the main thread (" + Thread.currentThread().getName() + ")"
+                        + " pending=" + this.lucis$pendingEdits.size());
+            }
             return;
         }
         // Dispatch rule (acceptance follow-up): a small burst is cheaper on the base path - but only when it is ONE
@@ -631,7 +651,15 @@ public final class StarLightInterface {
                 final it.unimi.dsi.fastutil.longs.LongOpenHashSet positions = this.lucis$pendingEdits.get(key);
                 keys.remove();
                 if (positions == null || positions.isEmpty()) {
+                    if (LUCIS_EDIT_DEBUG) {
+                        System.out.println("FLUSHDBG drop key=" + key + " positions="
+                                + (positions == null ? "null" : "empty"));
+                    }
                     continue;
+                }
+                if (LUCIS_EDIT_DEBUG) {
+                    System.out.println("FLUSHDBG apply chunk=" + CoordinateUtils.getChunkX(key) + ","
+                            + CoordinateUtils.getChunkZ(key) + " n=" + positions.size());
                 }
                 final int chunkX = CoordinateUtils.getChunkX(key);
                 final int chunkZ = CoordinateUtils.getChunkZ(key);
@@ -780,9 +808,15 @@ public final class StarLightInterface {
         }
         if (LUCIS_OWN_EDIT && this.lucis$ownEditInline(pos)) {
             // handled here: propagated, installed and published; nothing was queued
+            if (LUCIS_EDIT_DEBUG) {
+                System.out.println("EDITDBG blockChange " + pos + " -> inline lane");
+            }
             return null;
         }
 
+        if (LUCIS_EDIT_DEBUG) {
+            System.out.println("EDITDBG blockChange " + pos + " -> engine queue");
+        }
         return this.lightQueue.queueBlockChange(pos);
     }
 
@@ -1409,7 +1443,12 @@ public final class StarLightInterface {
                     final int opacity = ((ca.spottedleaf.starlight.common.blockstate.ExtendedAbstractBlockState) state)
                             .scalablelux$getOpacityIfCached();
 
-                    if (opacity == 15) {
+                    // The emission test is not optional, and leaving it out was a real defect: glowstone, sea lanterns and
+                    // the other opaque light sources are opacity 15 AND light sources, so "already dark and now fully
+                    // opaque" described them exactly - their own cell's light was skipped, the light never appeared in a
+                    // live world, and a save taken before anything else relit the chunk stored it dark. Stone (what the
+                    // rule exists for: a bulk fill) emits nothing and is still skipped.
+                    if (opacity == 15 && state.getLightEmission(this.world, mutable) == 0) {
                         skipped++;
                         continue; // provably a no-op for block light
                     }

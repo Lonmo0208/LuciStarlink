@@ -200,21 +200,23 @@ public class ThreadedLevelLightEngineVanillaInterface extends ThreadedLevelLight
         // Redirect scheduling call away from the vanilla light engine, as well as enforce
         // that chunk neighbors are loaded before the processing can occur
 
+        // Counted before the branch below, not inside it: the batching-off path returns early, and a counter that the
+        // early return skipped made a diagnostic read "checkBlock was never called" when it was called every time
+        // (docs/BUG-EMITTER-BLOCK-LIGHT.md records how that cost a round).
+        if (LuxProfiler.enabled()) {
+            LuxProfiler.checkBlockCalls++;
+        }
         if (LUCIS_BATCH_LIMIT <= 1) { // batching off: one change, one full scheduling pass
             this.lucis$queueOne(pos);
             return;
         }
         if (LuxProfiler.enabled() && LuxProfiler.sample()) {
-            LuxProfiler.checkBlockCalls++;
             final long t0 = System.nanoTime();
             this.lucis$buffer(pos);
             LuxProfiler.checkBlockSampled++;
             LuxProfiler.checkBlockSampledNanos += System.nanoTime() - t0;
             LuxProfiler.maybePrint();
             return;
-        }
-        if (LuxProfiler.enabled()) {
-            LuxProfiler.checkBlockCalls++;
         }
         this.lucis$buffer(pos);
     }

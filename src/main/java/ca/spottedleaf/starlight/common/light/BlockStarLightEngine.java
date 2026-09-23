@@ -19,6 +19,9 @@ import java.util.Set;
 
 public final class BlockStarLightEngine extends StarLightEngine {
 
+    /** Diagnostic trace of a light source being installed; off unless asked for by hand. */
+    private static final boolean EMIT_DEBUG = Boolean.getBoolean("scalablelux.editDebug");
+
     public BlockStarLightEngine(final Level world) {
         super(false, world);
     }
@@ -95,6 +98,15 @@ public final class BlockStarLightEngine extends StarLightEngine {
         this.checkBlockPos.set(worldX, worldY, worldZ);
         final int emittedLevel = blockState.getLightEmission(lightAccess.getLevel(), this.checkBlockPos) & emittedMask;
 
+        if (EMIT_DEBUG && emittedLevel != 0) {
+            // what the engine is about to install for a light source, and the identity of the array it installs into
+            final int sectionIndex = (worldX >> 4) + 5 * (worldZ >> 4) + (5 * 5) * (worldY >> 4) + this.chunkSectionIndexOffset;
+            final int localIndex = (worldX & 15) | ((worldZ & 15) << 4) | ((worldY & 15) << 8);
+            final SWMRNibbleArray bound = this.nibbleCache[sectionIndex];
+            System.out.println("EMITDBG checkBlock " + worldX + "," + worldY + "," + worldZ + " state=" + blockState
+                    + " emit=" + emittedLevel + " bound=" + (bound == null ? "null" : "nibble@" + System.identityHashCode(bound))
+                    + " before=" + (bound == null ? -1 : bound.getUpdating(localIndex)));
+        }
         this.setLightLevel(worldX, worldY, worldZ, emittedLevel);
         // this accounts for change in emitted light that would cause an increase
         if (emittedLevel != 0) {

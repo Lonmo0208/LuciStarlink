@@ -136,6 +136,9 @@ public abstract class StarLightEngine {
     protected final int minSection;
     protected final int maxSection;
 
+    /** Diagnostic trace of cache setup and block-light installs; off unless asked for by hand. */
+    protected static final boolean EMIT_DEBUG = Boolean.getBoolean("scalablelux.editDebug");
+
     protected StarLightEngine(final boolean skylightPropagator, final Level world) {
         this.skylightPropagator = skylightPropagator;
         this.emittedLightMask = skylightPropagator ? 0 : 0xF;
@@ -211,6 +214,12 @@ public abstract class StarLightEngine {
                 }
 
                 if (!this.canUseChunk(chunk)) {
+                    if (EMIT_DEBUG) {
+                        // Silently skipping a chunk is the engine's way of saying "not mine yet"; when a light update
+                        // disappears, this line is the difference between "never computed" and "computed elsewhere".
+                        System.out.println("SETUPDBG skip chunk " + cx + "," + cz
+                                + " status=" + chunk.getPersistedStatus() + " lightCorrect=" + chunk.isLightCorrect());
+                    }
                     continue;
                 }
 

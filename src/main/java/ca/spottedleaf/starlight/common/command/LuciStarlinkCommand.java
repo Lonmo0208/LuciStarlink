@@ -1,8 +1,12 @@
 package ca.spottedleaf.starlight.common.command;
 
+import ca.spottedleaf.starlight.common.chunk.ExtendedChunk;
+import ca.spottedleaf.starlight.common.compat.SableCompat;
 import ca.spottedleaf.starlight.common.debug.LuxProfiler;
 import ca.spottedleaf.starlight.common.light.StarLightInterface;
 import ca.spottedleaf.starlight.common.light.StarLightLightingProvider;
+import ca.spottedleaf.starlight.common.light.SWMRNibbleArray;
+import ca.spottedleaf.starlight.common.util.WorldUtil;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import net.minecraft.commands.CommandSourceStack;
@@ -71,9 +75,25 @@ public final class LuciStarlinkCommand {
                         source.sendFailure(Component.literal("LuciStarlink: this level does not run the ScalableLux light engine"));
                         return 0;
                     }
-                    source.sendSuccess(() -> Component.literal("LuciStarlink " + engine.lucisStats()
+                    final String stats = "LuciStarlink " + engine.lucisStats()
                             + " batchLimit=" + Integer.getInteger("scalablelux.batchLimit", 1)
-                            + " profile=" + LuxProfiler.enabled()), false);
+                            + " profile=" + LuxProfiler.enabled()
+                            + " edit=" + LuxProfiler.ownEditCalls + "/" + LuxProfiler.ownEditBatched
+                            + " fallback=" + LuxProfiler.ownEditFallback
+                            + " rej=" + LuxProfiler.ownEditRejThread + "/" + LuxProfiler.ownEditRejChunk
+                            + "/" + LuxProfiler.ownEditRejStatus
+                            + " cb=" + LuxProfiler.checkBlockCalls
+                            + " qt=" + LuxProfiler.queueTaskCalls
+                            + "|notReady=" + LuxProfiler.queueTaskNotReady
+                            + " inline=" + LuxProfiler.queueTaskInline
+                            + " notSched=" + LuxProfiler.queueTaskNotScheduled
+                            + " ticket=" + LuxProfiler.queueTaskTicketAdds
+                            + " blkSkip=" + LuxProfiler.ownEditBlockSkipped
+                            + " blkMs=" + (LuxProfiler.ownEditBlkNanos / 1_000_000L)
+                            + " skyMs=" + (LuxProfiler.ownEditSkyNanos / 1_000_000L)
+                            + " setup=" + (LuxProfiler.ownEditSetupNanos / 1_000_000L);
+                    LOGGER.info(stats); // see the note in the light branch: functions suppress chat output
+                    source.sendSuccess(() -> Component.literal(stats), false);
                     return 1;
                 }))
                 .then(Commands.literal("light")
@@ -82,11 +102,26 @@ public final class LuciStarlinkCommand {
                             final ServerLevel level = source.getLevel();
                             final BlockPos pos = BlockPosArgument.getLoadedBlockPos(context, "pos");
                             final LevelChunk chunk = level.getChunkAt(pos);
-                            source.sendSuccess(() -> Component.literal("LuciStarlink light " + pos.toShortString()
+                            // The two layers this engine keeps, read side by side on purpose: "vis" is what the client
+                            // is sent and what a save contains; "upd" is what the engine has computed but may not have
+                            // promoted yet. A value in one and not the other says which half is at fault.
+                            final int sectionIndex = (pos.getY() >> 4) - WorldUtil.getMinLightSection(level);
+                            final int localIndex = (pos.getX() & 15) | ((pos.getZ() & 15) << 4) | ((pos.getY() & 15) << 8);
+                            final ExtendedChunk extended = (ExtendedChunk) chunk;
+                            final String layers = " updBlock=" + nibbleAt(extended.scalablelux$getBlockNibbles(), sectionIndex, localIndex)
+                                    + " updSky=" + nibbleAt(extended.scalablelux$getSkyNibbles(), sectionIndex, localIndex)
+                                    + " sable=" + SableCompat.isSablePlotChunk(level, pos.getX() >> 4, pos.getZ() >> 4);
+                            final String report = "LuciStarlink light " + pos.toShortString()
                                     + " block=" + level.getBrightness(LightLayer.BLOCK, pos)
                                     + " sky=" + level.getBrightness(LightLayer.SKY, pos)
                                     + " raw=" + level.getRawBrightness(pos, 0)
-                                    + " lightCorrect=" + chunk.isLightCorrect()), false);
+                                    + layers
+                                    + " state=" + level.getBlockState(pos)
+                                    + " lightCorrect=" + chunk.isLightCorrect();
+                            // Also logged: inside a function (a datapack-driven diagnostic, for instance) chat output is
+                            // suppressed, and the log is then the only place the reading can be seen at all.
+                            LOGGER.info(report);
+                            source.sendSuccess(() -> Component.literal(report), false);
                             return 1;
                         })))
                 .then(Commands.literal("relight")
@@ -166,7 +201,8 @@ public final class LuciStarlinkCommand {
      *
      * <p>The default 16x16x16 is 4096 changes per pass - deliberately the same size as the {@code structure_cube}
      * workload in the README, so a number read here can be compared against that table's shape (not its absolute
-     * values: a player's machine, a loaded machine and a dev client are all different rooms).</p>
+     * values: a player's machine, a loaded machine and a dev client are all different rooms). The cube appears two
+     * blocks above the player's feet, centred on them, so the light it produces is visible while it is there.</p>
      *
      * <p>Safety: the cube's blocks are snapshotted before the first pass and restored after every pass, so the world
      * is never left filled; size and pass count are bounded by the argument types; a cube that runs above the build
@@ -226,11 +262,13 @@ public final class LuciStarlinkCommand {
             this.size = size;
             this.passes = passes;
             this.changes = size * size * size;
-            // a cube that would stick out of the build limit moves down instead of being refused
+            // a cube that would stick out of the build limit moves down instead of being refused; the two blocks of
+            // headroom put the cube in front of the player's eyes rather than around their feet, so running the
+            // command shows them the light instead of trapping them inside a block of glowstone
             final int maxY = level.getMaxBuildHeight() - size;
             final int minY = level.getMinBuildHeight();
             this.originX = origin.getX() - (size >> 1);
-            this.originY = Math.max(minY, Math.min(origin.getY(), maxY));
+            this.originY = Math.max(minY, Math.min(origin.getY() + 2, maxY));
             this.originZ = origin.getZ() - (size >> 1);
             this.snapshot = new BlockState[this.changes];
             this.applyNanos = new long[passes];
@@ -404,6 +442,16 @@ public final class LuciStarlinkCommand {
         private static String fmt(final double value) {
             return String.format("%.2f", value);
         }
+    }
+
+    /** One cell out of a chunk's own nibble array, or {@code -} when that section has no storage at all. */
+    private static String nibbleAt(final SWMRNibbleArray[] nibbles, final int sectionIndex, final int localIndex) {
+        if (nibbles == null || sectionIndex < 0 || sectionIndex >= nibbles.length) {
+            return "-";
+        }
+        final SWMRNibbleArray nibble = nibbles[sectionIndex];
+
+        return nibble == null ? "null" : String.valueOf(nibble.getUpdating(localIndex));
     }
 
     private static StarLightInterface engineOf(final ServerLevel level) {
