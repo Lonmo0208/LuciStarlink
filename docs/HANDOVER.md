@@ -15,8 +15,8 @@
 | 项 | 值 |
 |---|---|
 | 工作树 | `E:\LuciStarlin\LuciStarlink-LS-V2`（= `master` = `LS-V2` 分支的 worktree） |
-| 当前 tip | `56e88c9`（2.0.7），CI 全绿（该 commit 3 个 `build` check-run 全 `success`） |
-| 分支 | `master` = `LS-V2` = `56e88c9`；`1x-line` = `472d897`（1.x 线 + 测试台，未动） |
+| 当前 tip | **`e6a28ee`**（= 本文件 + `tools/rig/` + `.gitattributes`，都在 2.0.7 之上）；**代码的发布点仍是 `56e88c9`**，CI 全绿（该 commit 3 个 `build` check-run 全 `success`）。`git log` 见到的 `8b31545`/`15c3579` 都是文档/脚本提交，不含引擎改动 |
+| 分支 | `master` = `LS-V2` = `e6a28ee`；`1x-line` = `472d897`（1.x 线 + 测试台，未动） |
 | tag | `v2.0.1` … `v2.0.7`（1.x 的 11 个 `v1.2.x` 未动） |
 | 本地产物 | `E:\LuciStarlin\sl-jar\lucistarlink-2.0.7-release.jar`，md5 `b718ccae18dfbfa6aef77a9097918165`（**发布件不上 GitHub**，只推 tag） |
 | 测量用的 rig jar | `sl-jar/ls2-varA-rig.jar`（mod id `lucistarlinkrig`）。**已逐类校验 = 2.0.7 的引擎**：92 个 class 里 91 个与发布 jar 逐字节相同，唯一差异是入口类名（`LuciStarlinkRigEntrypoint` / `LuciStarlinkEntrypoint`，由 mod id 决定）。所以下表 2.0.7 的数字就是这个 jar 跑出来的 |
