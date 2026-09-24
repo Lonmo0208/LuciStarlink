@@ -11,11 +11,17 @@ Nothing here is part of the mod's build. The two engines are run from the rig tr
 
 | script | what it does | when |
 |---|---|---|
-| `final207.sh` | **The one that produced the 2.0.7 table.** Four workloads × two engines (us / ScalableLux), one after the other: kills strays, wipes the run world, drops one jar into the rig's `mods/`, runs `runBenchmarkScalableLuxServer` with the accepted protocol (`prepareRing=8`, `quiesceSettleMs=1000`, `globalEngineBarrier=false`, 3 passes / 2 warmup), prints `minPass` and the fingerprint | reproducing the four-cell table; `US` is already `ls2-varA-rig.jar` |
-| `threeway-engines.sh` | Same shape but three engines (`us20` / `sl` / `ls1`, the last one from the other worktree), plus CPU load sampling per run and a stray-process reaper; writes `load-samples.txt` next to the results | when a table must include the 1.x line; point `US20_JAR` at the new rig jar and change `OUT` (it still points at the 2.0.6 run) |
+| `final208.sh` | **The one that produced the 2.0.8 table.** Four workloads × two engines × two interleaved rounds, with the fingerprint box on `structure_cube`. ~25 minutes | reproducing the four-cell table; `US` points at `ls2-dispatch-rig.jar` |
+| `border-duel.sh` | The border cell alone, four runs (us / SL / SL / us), ~5 minutes | when only `block_toggle_border` changed |
+| `final207.sh` | The 2.0.7 predecessor of `final208.sh`: four workloads × two engines, one round, no fingerprint box | only for reproducing the older table |
+| `threeway-engines.sh` | Same shape but three engines (`us20` / `sl` / `ls1`, the last one from the other worktree), plus CPU load sampling per run and a stray-process reaper; writes `load-samples.txt` next to the results | when a table must include the 1.x line; point `US20_JAR` at the new rig jar and change `OUT` |
 | `gate-gradient.sh` | Correctness gate on a copy of the player's world: glowstone across a chunk border plus repeated border edits, then a per-cell dump. Expect the gradient `15/14/14/14/13/10`. Runs the diagnostic server (`run-diag/`, port 25690) | after any change to the edit lane, the sky strategy or the flush |
 | `repro-chunk.sh` | Fills and clears 8192 blocks in one chunk on a copy of the player's save and dumps A/B — the shape that exposed the null-position-set NPE | when a bulk edit's block light is suspect |
 | `lightdump-residue.sh` | Dumps a region, forces a full relight, dumps again, and reports the difference — which is exactly the light that was wrong in the save | when a save is suspected of holding stale light |
+
+**Only one rig script may run at a time.** Two of them fight over `run-benchmark-scalablelux/mods` and the run world,
+and the loser's server is killed by the winner's cleanup — both then write empty results. A round that produced no
+`*.jsonl` was wasted, and the empty line looks like a slow run.
 
 Protocol notes that cost real time to learn, all of them encoded in these scripts: the pass must be allowed to settle
 (`quiesceSettleMs`) or the engine queue means something else at the moment it is read; the harness validates

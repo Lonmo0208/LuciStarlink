@@ -6,6 +6,70 @@ the 1.x branch's own changelog; for what belongs to whom see [NOTICE](NOTICE) an
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 
+## 2.0.8 — 2026-09-24
+
+**`block_toggle_border` is no longer lost.** It was this engine's worst cell (5.62–6.37 ms against ScalableLux's
+5.06–5.76 ms when measured interleaved, and up to 8.4 ms in a loaded window) and the one number nobody could explain.
+It is fixed, and the fix is a **routing rule, not an optimisation**: a buffered burst of at most 16 changes in one
+chunk now goes back to the engine's own asynchronous path instead of being settled in the inline lane.
+
+**Why that is the right answer.** The inline lane exists to skip the queue turnaround, and skipping it is worth the
+price of a synchronous cache setup + drain + publish per chunk only when the burst is large. `block_toggle_border`
+edits ~5 blocks per chunk across 19 chunks, so the lane paid that price 18–23 times per pass for bursts that the
+engine's own thread settles more cheaply. The bulk workloads never see the rule (their per-chunk bursts are 25 for
+`sky_hole`, 2048 for `dense_chunk_patch`, 256+ for `structure_cube`), and a burst that is not one chunk's is never
+dispatched. It is also a *deterministic* rule, which matters: under load the tick hook can fire in the middle of an
+apply loop and split a burst, and before this change that split decided which path each chunk took.
+
+**Measured, interleaved, same session** (four routes on the border workload, two rounds each):
+
+| route | `minPass` round 1 | round 2 | mean per pass, round 1 / 2 |
+|---|---|---|---|
+| inline lane (2.0.7 behaviour) | 6.37 ms | 5.62 ms | 8.12 / 7.14 ms |
+| inline lane, sky seeded per position | 6.00 | 6.11 | 7.19 / 7.10 |
+| **this rule (2.0.8)** | **5.33** | **5.37** | **6.11 / 6.87** |
+| stock ScalableLux | 5.06 | 5.76 | 5.94 / 7.29 |
+
+The final two-round interleaved pair against ScalableLux reads 5.30 / 5.96 ms for this engine and 5.10 / 5.64 ms for
+ScalableLux — a statistical tie on the cell that used to be a 25–35% loss.
+
+**Why it was not found earlier, recorded so the mistake is not repeated.** The dispatch rule already existed, with its
+default off, and its own comment said measurement had closed it. Those measurements were taken in a window where the
+block-light half of a large burst was not being computed at all (the null-position-set defect fixed in 2.0.6), so the
+"0.43 ms" they compared against was the price of *skipping* the work. A rule that sends work away looks bad exactly
+while the work is free. The same mistake had already been made once on this project (`bulkRelight`, `pendingFlushSize`)
+and both were re-measured after 2.0.6 for the same reason.
+
+**The honest state of the other three cells after this change** (two interleaved rounds each, this machine, loaded
+window — the 2.0.7 table was taken in a lighter one):
+
+| cell | 2.0.8 | ScalableLux | reading |
+|---|---|---|---|
+| `structure_cube` | 4.71 / 5.85 ms | 5.99 / 6.32 ms | **won in both rounds** (12–21%); light fingerprint bit-identical to vanilla and ScalableLux |
+| `dense_chunk_patch` | 5.42 / 4.93 | 4.63 / 4.83 | lost by 2–17% in this window; won by 5% in the 2.0.7 window — **not established either way** |
+| `sky_hole` | 1.11 / 1.12 | 0.85 / 1.61 | sign flips between rounds — **not established** |
+| `block_toggle_border` | 5.30 / 5.96 | 5.10 / 5.64 | tie (was a 25–35% loss) |
+
+So 2.0.7's "three of four cells" claim is **withdrawn as not reproducible**: on this machine, in a loaded window, only
+`structure_cube` is a stable win, and the other three cells sit within noise on either side. The reason is measurable
+rather than mysterious: on all four workloads this engine and ScalableLux process the *same number of BFS pops* (101,087
+vs 101,133 on the border workload), i.e. the light propagation itself is identical work done by identical code, and the
+differences that remain are per-drain overhead and machine load. A decisive `dense`/`sky_hole`/`border` win would need
+an algorithm that does *less* work; the two candidates investigated (a block-light window recompute, and holding
+scattered bursts until the settle point so the group rule merges three chunks per drain) were both measured and do not
+pay on these shapes.
+
+**Also in this release** (measurement plumbing, no behaviour change): the profiler's per-pop `System.nanoTime()` pairs
+now have their own switch, `-Dscalablelux.profileTiming=true` (with `-Dscalablelux.profile=true` the counters are exact
+and no longer cost ~3 ms a pass on the border workload), and the inline lane's per-group phases are now timed
+unconditionally so they can be read in an honest (profiler-off) run.
+
+**Correctness gate for this release**: the emitter gradient across a chunk border reads `15 / 14 / 14 / 14 / 13 / 10`
+(the three placements in this test now take the dispatched path, so the gate exercises the new default), and
+`structure_cube`'s fingerprint is `sky=905931078dfc5ace block=59e2252f732ce67b` — identical to vanilla and to
+ScalableLux.
+
+
 ## 2.0.7 — 2026-09-24
 
 **`dense_chunk_patch` and `sky_hole` are won as well — three of the four cells now beat both predecessors on the

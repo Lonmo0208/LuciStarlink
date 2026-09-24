@@ -25,6 +25,15 @@ public final class LuxProfiler {
     private static final int SAMPLE_MASK = SAMPLE_SIZE - 1;
 
     private static final boolean ENABLED = Config.PROFILE;
+    /**
+     * The sampled {@code System.nanoTime()} pairs are the expensive half of the instrumentation (two clock reads per
+     * sampled pop, on the propagation path); the plain counters are single increments. They are separate switches
+     * because a <b>count</b> is exact either way, while a count run whose timing is left on measures the instrument
+     * rather than the engine - profiling a border pass read 10.8 ms where the same pass without the profiler read
+     * 5.6 ms. Default off: ask for {@code -Dscalablelux.profileTiming=true} only when per-call nanos are the question.
+     */
+    private static final boolean TIMING =
+            Boolean.parseBoolean(System.getProperty("scalablelux.profileTiming", "false"));
     private static final long PRINT_INTERVAL_NANOS =
             Config.PROFILE_INTERVAL_NANOS;
 
@@ -132,13 +141,40 @@ public final class LuxProfiler {
 
     /** True when this call should be timed (sampling); also bumps the sample counter. */
     public static boolean sample() {
-        if (!ENABLED) {
+        if (!ENABLED || !TIMING) {
             // With profiling off this has to be free: it sits on the BFS pop path, and an unconditional static
             // increment there is a memory write per pop that also blocks the JIT from optimising the loop - measured
             // as a 1.7x gap against the same propagation loop without the instrumentation (see docs).
             return false;
         }
         return (sampleCounter++ & SAMPLE_MASK) == 0;
+    }
+
+    // --- per-group phases of the inline lane (always on) ---------------------
+    /** Groups settled (one cache window each) and how many chunks the sky half was seeded for. */
+    public static long groupCount;
+    public static long groupChunks;
+    public static long groupSkyChunks;
+    public static long groupSetupNanos;
+    public static long groupSeedNanos;
+    public static long groupSkySettleNanos;
+    public static long groupBlkSettleNanos;
+
+    /**
+     * One group's phase split, measured at the call site in {@code lucis$settleGroup}. <b>Always on, and that is the
+     * point:</b> the pop counters cost ~3 ms a pass on the border workload, so a phase split that only exists while
+     * they are on measures the profiler - this one is six clock reads per group.
+     */
+    public static void lucisGroupPhases(final long setupNanos, final long seedNanos,
+                                        final long skySettleNanos, final long blkSettleNanos,
+                                        final int chunks, final int skyChunks) {
+        groupCount++;
+        groupChunks += chunks;
+        groupSkyChunks += skyChunks;
+        groupSetupNanos += setupNanos;
+        groupSeedNanos += seedNanos;
+        groupSkySettleNanos += skySettleNanos;
+        groupBlkSettleNanos += blkSettleNanos;
     }
 
     public static long scale(final long sampledNanos) {
@@ -193,6 +229,13 @@ public final class LuxProfiler {
         ownEditDecBatchNanos = 0;
         ownEditGroups = 0;
         ownEditGroupChunks = 0;
+        groupCount = 0;
+        groupChunks = 0;
+        groupSkyChunks = 0;
+        groupSetupNanos = 0;
+        groupSeedNanos = 0;
+        groupSkySettleNanos = 0;
+        groupBlkSettleNanos = 0;
         ownEditSmallBursts = 0;
         ownEditBulkRelights = 0;
         ownEditRecomputes = 0;
@@ -262,8 +305,13 @@ public final class LuxProfiler {
                 + " blkCheckNanos=" + ownEditBlkCheckNanos
                 + " blkDecNanos=" + ownEditBlkDecreaseNanos
                 + " decBatchNanos=" + ownEditDecBatchNanos
-                + " groups=" + ownEditGroups
-                + " groupChunks=" + ownEditGroupChunks
+                + " groups=" + groupCount
+                + " groupChunks=" + groupChunks
+                + " groupSkyChunks=" + groupSkyChunks
+                + " groupSetupNanos=" + groupSetupNanos
+                + " groupSeedNanos=" + groupSeedNanos
+                + " groupSkySettleNanos=" + groupSkySettleNanos
+                + " groupBlkSettleNanos=" + groupBlkSettleNanos
                 + " smallBursts=" + ownEditSmallBursts
                 + " bulkRelights=" + ownEditBulkRelights
                 + " recomputes=" + ownEditRecomputes + " blockSkipped=" + ownEditBlockSkipped + " recomputeNanos=" + ownEditRecomputeNanos

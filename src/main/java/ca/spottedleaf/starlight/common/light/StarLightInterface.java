@@ -471,16 +471,20 @@ public final class StarLightInterface {
     /** Diagnostic trace of one block change's route through this class; off unless asked for by hand. */
     private static final boolean LUCIS_EDIT_DEBUG = Boolean.getBoolean("scalablelux.editDebug");
     /**
-     * Dispatch rule, CLOSED by measurement (default 0 = off). Idea: a small buffered burst is cheaper on the base's
-     * asynchronous path - on sky_hole the base settles 25 changes in 0.86 ms while this path's setup + seed + drain
-     * costs 1.00 ms. The rule cannot be made safe: applied to every burst of at most this many changes it took
-     * block_toggle_border from 0.43 ms to 4.03 ms (each tiny per-chunk piece became its own asynchronous task and paid
-     * the completion-path turnaround again), and a narrowed form (only when the whole burst sits in ONE chunk, i.e. one
-     * async task) did not help either - border measured 3.97 ms against 0.47 ms without the rule, and sky_hole measured
-     * 0.754 against 0.777, i.e. the rule has no reliable effect there at all (the earlier 0.733-vs-0.956 reading was
-     * run-to-run noise). The distinguishing factor is the per-change cost, which is only known after the work is done.
+     * Dispatch rule, <b>default 16</b>: a buffered burst of at most this many changes in ONE chunk is handed back to the
+     * base's asynchronous path instead of being settled inline. Idea: the inline lane's gain is skipping the queue
+     * turnaround, and that gain is only worth the cost of a synchronous cache setup + drain + publish per chunk when the
+     * burst is big. Measured on 2026-09-24, four routes interleaved twice on {@code block_toggle_border} (95 scattered
+     * changes over 19 chunks, ~5 per chunk): inline lane 5.62-6.37 ms, this rule 5.33-5.37 ms, base queue throughout
+     * 4.91-5.35 ms, stock ScalableLux 5.06-5.76 ms. The rule therefore removes this engine's worst cell.
+     *
+     * <p><b>What the earlier "CLOSED" verdict here was based on.</b> It read "border went from 0.43 ms to 4.03 ms with
+     * the rule" - but 0.43 ms was measured while the block-light half of a large burst was not being computed at all
+     * (the null-position-set defect fixed in 2.0.6), so those two numbers priced skipping the work against doing it.
+     * The bulk workloads are unaffected by the rule either way: their per-chunk bursts are 25 changes for sky_hole,
+     * 2048 for dense_chunk_patch and 256+ for structure_cube.</p>
      */
-    private static final int LUCIS_INLINE_MIN_BURST = Integer.getInteger("scalablelux.inlineMinBurst", 0);
+    private static final int LUCIS_INLINE_MIN_BURST = Integer.getInteger("scalablelux.inlineMinBurst", 16);
     /** A chunk with at least this many changes in one burst is settled by ONE full relight instead of per-position seeds. */
     private static final boolean LUCIS_BULK_RELIGHT = Boolean.getBoolean("scalablelux.bulkRelight");
     private static final int LUCIS_BULK_MIN_CHANGES = Integer.getInteger("scalablelux.bulkMinChanges", 128);
@@ -546,6 +550,26 @@ public final class StarLightInterface {
      */
     private long lucis$currentEditChunk = Long.MIN_VALUE;
 
+    /**
+     * Whether the inline lane should <b>hold</b> a burst instead of settling it when the edit moves to the next chunk:
+     * the rule that turns a line of small edits along a chunk border into one drain per three chunks rather than one
+     * drain per chunk. Off unless asked for, because the plain "settle what I have when the chunk changes" is what the
+     * bulk workloads are tuned against, and a chunk whose burst is already large is never held.
+     */
+    private static final boolean LUCIS_HOLD_SCATTERED =
+            !"false".equalsIgnoreCase(System.getProperty("scalablelux.holdScattered", "false"));
+    private static final int LUCIS_SCATTER_MAX_CHUNKS = Integer.getInteger("scalablelux.scatterMaxChunks", 64);
+    private static final int LUCIS_SCATTER_MAX_PER_CHUNK = Integer.getInteger("scalablelux.scatterMaxPerChunk", 16);
+
+    private boolean lucis$holdScattered(final long leavingKey) {
+        if (!LUCIS_HOLD_SCATTERED || this.lucis$pendingEdits.size() >= LUCIS_SCATTER_MAX_CHUNKS) {
+            return false;
+        }
+        final it.unimi.dsi.fastutil.longs.LongOpenHashSet leaving = this.lucis$pendingEdits.get(leavingKey);
+
+        return leaving != null && leaving.size() <= LUCIS_SCATTER_MAX_PER_CHUNK;
+    }
+
     private boolean lucis$ownEditInline(final BlockPos pos) {
         if (!(this.world instanceof ServerLevel serverLevel)
                 || !serverLevel.getChunkSource().chunkMap.mainThreadExecutor.isSameThread()) {
@@ -576,11 +600,24 @@ public final class StarLightInterface {
             // are only ticket-held, so it silently disabled the inline path on the border workload entirely.
             if (chunk == null) { LuxProfiler.ownEditRejChunk++; if (LUCIS_EDIT_DEBUG) { System.out.println("EDITDBG inline reject chunk-null " + chunkX + "," + chunkZ); } return false; }
             if (!chunk.getPersistedStatus().isOrAfter(ChunkStatus.LIGHT)) { LuxProfiler.ownEditRejStatus++; if (LUCIS_EDIT_DEBUG) { System.out.println("EDITDBG inline reject status " + chunk.getPersistedStatus()); } return false; }
+            final boolean holdScattered = this.lucis$holdScattered(this.lucis$currentEditChunk);
+
+            if (holdScattered) {
+                // Scattered small edits (a few changes in a chunk, then the next chunk, ...) are the shape
+                // block_toggle_border is made of, and settling them one chunk at a time is the expensive way to do it:
+                // each settle pays a cache setup and a drain, and each drain has to refill from neighbours that the
+                // *next* chunk's drain is about to clear again. Holding them until the settle point lets the group
+                // rule put three chunks of a line into one drain. Bulk bursts never take this path - a chunk whose
+                // burst is large is settled at once, exactly as before.
+                this.lucis$currentEditChunk = key;
+                pending = this.lucis$pendingEdits.computeIfAbsent(key, ignored -> new it.unimi.dsi.fastutil.longs.LongOpenHashSet());
+            } else {
             // A new chunk means the previous burst is over: settle everything else first (edits usually arrive chunk by
             // chunk, so this is the cheap case), then buffer this position under its own chunk.
             this.lucis$flushPendingEdits(key, false);
             this.lucis$currentEditChunk = key;
             pending = this.lucis$pendingEdits.computeIfAbsent(key, ignored -> new it.unimi.dsi.fastutil.longs.LongOpenHashSet());
+            }
         } else {
             // the cache is valid and the buffer exists: nothing to re-check, nothing to flush
             pending = this.lucis$pendingEdits.get(key);
@@ -651,12 +688,15 @@ public final class StarLightInterface {
             }
             return;
         }
-        // Dispatch rule (acceptance follow-up): a small burst is cheaper on the base path - but only when it is ONE
-        // chunk's burst. Measured on sky_hole (25 changes, one chunk) the baseline's single asynchronous task settles in
-        // 0.86 ms while this path's setup + seed + consolidated drain costs 1.00 ms. The rule must not fire when the
-        // buffered edits are spread over chunks: block_toggle_border's 95 changes arrive as many tiny per-chunk bursts,
-        // and sending those back to the queue turned that cell from 0.43 ms into 4.03 ms - each tiny piece became its own
-        // asynchronous task and paid the completion-path turnaround all over again. One chunk means one async task.
+        // Dispatch rule: a burst of a few changes in one chunk is cheaper on the base path, where the engine's own
+        // thread settles it, than in the inline lane, where the server thread pays a cache setup, a drain and a publish
+        // per chunk. Measured on `block_toggle_border` (95 scattered changes over 19 chunks, ~5 per chunk), all three
+        // routes interleaved twice: inline lane 5.62-6.37 ms, base queue 5.33-5.37 ms, stock ScalableLux 5.06-5.76 ms -
+        // so the small-burst case is the one the lane must NOT take. The bulk workloads are unaffected because their
+        // per-chunk bursts are orders of magnitude larger (dense 2048, sky_hole 25, structure 256+), and a burst that
+        // is not one chunk's is never dispatched. An older comment here claimed the opposite (that this rule turned
+        // border "from 0.43 ms into 4.03 ms"): those two numbers were both measured while the block-light half of a
+        // large burst was not being computed at all, so 0.43 ms was the price of skipping the work.
         if (LUCIS_INLINE_MIN_BURST > 0 && this.lucis$pendingEdits.size() == 1) {
             int total = 0;
             for (final it.unimi.dsi.fastutil.longs.LongOpenHashSet pending : this.lucis$pendingEdits.values()) {
@@ -920,11 +960,13 @@ public final class StarLightInterface {
             blockEngine.setupCaches(this.lightAccess, centerX, 128, centerZ, true, true);
         }
         final long lucisT0 = System.nanoTime();
+        int skySeeded = 0;
         try {
             for (final LucisChunkBurst burst : group) {
                 // a deferred burst leaves its sky half to the windowed recompute, so only the block half is seeded here
                 if (skyEngine != null && !burst.skyDeferred() && skyEngine.isChunkInCache(burst.chunkX(), burst.chunkZ())) {
                     skyEngine.seedChanges(this.lightAccess, burst.positions(), burst.positionCount());
+                    skySeeded++;
                 }
                 if (blockEngine != null && blockEngine.isChunkInCache(burst.chunkX(), burst.chunkZ())) {
                     blockEngine.seedChanges(this.lightAccess, burst.positions(), burst.positionCount());
@@ -936,18 +978,17 @@ public final class StarLightInterface {
             if (skyEngine != null) {
                 skyEngine.settleSeededChanges(this.lightAccess);
             }
+            final long lucisT2 = System.nanoTime();
             if (blockEngine != null) {
                 blockEngine.settleSeededChanges(this.lightAccess);
             }
-            if (LuxProfiler.enabled()) {
-                final long lucisT2 = System.nanoTime();
+            final long lucisT3 = System.nanoTime();
 
-                LuxProfiler.ownEditSetupNanos += lucisT0 - lucisSetupT0;
-                LuxProfiler.ownEditBlkCheckNanos += lucisT1 - lucisT0;   // the group's seeding phase
-                LuxProfiler.ownEditBlkDecreaseNanos += lucisT2 - lucisT1; // the group's drain + publish phase
-                LuxProfiler.ownEditGroups++;
-                LuxProfiler.ownEditGroupChunks += group.size();
-            }
+            // Unconditional on purpose: six clock reads per group, ~19 groups in a border pass. The phase split is the
+            // whole question on that cell (our lane settles the same work as the base queue but reads 25% slower), and
+            // a split that only exists with the pop counters on cannot answer it - those counters cost ~3 ms a pass.
+            LuxProfiler.lucisGroupPhases(lucisT0 - lucisSetupT0, lucisT1 - lucisT0,
+                    lucisT2 - lucisT1, lucisT3 - lucisT2, group.size(), skySeeded);
         } finally {
             if (skyEngine != null) {
                 skyEngine.destroyCaches();
