@@ -668,6 +668,19 @@ public final class StarLightInterface {
      *                exactly where the first player builds.
      */
     private void lucis$flushPendingEditsImpl(final boolean keepOne, final long keepKey, final boolean settle) {
+        final long lucisSettleT0 = System.nanoTime();
+
+        try {
+        this.lucis$flushPendingEditsBody(keepOne, keepKey, settle);
+        } finally {
+            // Unconditional: whoever reached this settle (the tick hook or hasUpdates) pays for it, and on
+            // dense_chunk_patch the harness sees ~4.4 ms a pass between the end of apply and the end of the wait that
+            // no other counter covers.
+            LuxProfiler.lucisSettle(System.nanoTime() - lucisSettleT0);
+        }
+    }
+
+    private void lucis$flushPendingEditsBody(final boolean keepOne, final long keepKey, final boolean settle) {
         // NOTE: the recompute queue lives on after the edit buffer is drained - the 256-change flush empties it long
         // before the settle points arrive, and returning early here silently skipped every deferred recompute (the sky
         // half of a bulk burst was simply never done: faster, and wrong). Check both sets.
@@ -869,6 +882,8 @@ public final class StarLightInterface {
                     if (LuxProfiler.enabled()) {
                         LuxProfiler.ownEditRecomputes++;
                         LuxProfiler.ownEditRecomputeNanos += System.nanoTime() - lucisRecT0;
+                    } else {
+                        LuxProfiler.lucisRecompute(System.nanoTime() - lucisRecT0);
                     }
                 }
                 this.lucis$pendingRecomputes.clear();
