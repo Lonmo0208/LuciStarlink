@@ -85,13 +85,26 @@ public final class IntBucketQueue {
         return pollUnchecked();
     }
 
+    /** The bucket level of the most recent {@link #poll()}, or -1: lets the walker re-verify that the cell still
+     * holds the level it was enqueued with (the base engine's recheck rule). Single-threaded by design. */
+    private int lastLevel = -1;
+
+    public int lastLevel() {
+        return this.lastLevel;
+    }
+
     public int poll() {
-        return nonEmptyMask == 0 ? -1 : pollUnchecked();
+        if (nonEmptyMask == 0) {
+            this.lastLevel = -1;
+            return -1;
+        }
+        return pollUnchecked();
     }
 
     private int pollUnchecked() {
         int mask = nonEmptyMask;
         int level = 31 - Integer.numberOfLeadingZeros(mask);
+        this.lastLevel = level;
 
         int[] heads = this.heads;
         int[] tails = this.tails;
