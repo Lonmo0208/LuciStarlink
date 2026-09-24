@@ -30,6 +30,12 @@ public class LuciStarlinkEntrypoint {
             // layout over the structure_cube touch pattern - the number that decides whether R5 is worth building.
             ca.spottedleaf.starlight.common.light.own.OwnFlatField.selfTest();
         }
+        if (Boolean.getBoolean("scalablelux.imageLaneSelfTest")) {
+            // The image lane kernel (docs/IMAGE-LANE-PLAN.md): the 1.x block-light BFS ported onto a settle-local flat
+            // region. Fuzz (incremental must equal the from-scratch oracle, boundary untouchable) plus the border
+            // workload's shape priced in nanoseconds per pop.
+            ca.spottedleaf.starlight.common.light.image.ImageLaneSelfTest.run();
+        }
         // R5-2's OwnSkySweepProbe is called reflectively by the measurement harness at fingerprint time - it has no hook
         // here because a probe running inside the measured window would perturb the reading it exists to explain.
     }
