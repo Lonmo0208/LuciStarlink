@@ -463,6 +463,14 @@ public final class SkyStarLightEngine extends StarLightEngine {
         super.seedChanges(lightAccess, positions);
     }
 
+    /** The packed form of the same seeding (see {@link StarLightEngine#seedChanges}). */
+    @Override
+    public void seedChanges(final LightChunkGetter lightAccess, final long[] packed, final int count) {
+        this.processDelayedIncreases();
+        this.processDelayedDecreases();
+        super.seedChanges(lightAccess, packed, count);
+    }
+
     protected final int[] heightMapGen = new int[32 * 32];
 
     @Override

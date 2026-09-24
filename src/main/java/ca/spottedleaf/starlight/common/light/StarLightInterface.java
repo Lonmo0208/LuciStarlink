@@ -714,13 +714,12 @@ public final class StarLightInterface {
                     final boolean deferSky = LUCIS_RECOMPUTE_SKY && chunkNow != null
                             && positions.size() >= LUCIS_RECOMPUTE_MIN;
 
-                    // The block-light half always speaks Set<BlockPos>, and this set is consumed even when the sky half is
-                    // deferred: leaving it null for a deferred burst passed null into blocksChangedInChunk, which threw
-                    // inside a catch that only counted the failure - so every burst past the defer threshold silently
-                    // lost its block light. A big glowstone fill then read 0 in almost every cell it had just filled
-                    // (own cell included), and clearing it left the few computed values behind as residue that no rule
-                    // could justify. The set is built unconditionally now.
-                    final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> blockPositions = toBlockPositions(positions);
+                    // Packed longs, never boxed BlockPos: this list is built for every flush and a bulk burst holds tens
+                    // of thousands of positions, which JFR showed as heavy young-generation churn in this engine and no
+                    // churn at all in the base on the same workload. It is consumed on both paths now (block and sky),
+                    // including when the sky half is deferred - see the note below about the null that used to be here.
+                    final long[] seedPositions = toSeedPositions(positions);
+                    final int seedCount = seedPositions.length;
 
                     if (deferSky) {
                         // remember the y range the burst touched: the window is built from it
@@ -737,9 +736,9 @@ public final class StarLightInterface {
                                 range[1] = changedY;
                             }
                         }
-                        if (blockEngine != null) {
-                            blockEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, blockPositions, null);
-                        }
+                        // The block half runs here (through the grouped settle, so it shares a cache window and a drain
+                        // with its neighbours); the sky half is left to the deferred recompute.
+                        grouped.add(new LucisChunkBurst(chunkX, chunkZ, seedPositions, seedCount, true));
                     } else {
                     final ChunkAccess bulkChunk = LUCIS_BULK_RELIGHT && positions.size() >= LUCIS_BULK_MIN_CHANGES
                             ? this.getAnyChunkNow(chunkX, chunkZ) : null;
@@ -762,7 +761,7 @@ public final class StarLightInterface {
                         // seed -> drain -> publish -> destroy) and pays a full drain per chunk; a burst along a chunk
                         // border is many small changes spread over several chunks, so it paid that drain for each of
                         // them. Chunks that share one cache window are settled together after the loop instead.
-                        grouped.add(new LucisChunkBurst(chunkX, chunkZ, blockPositions));
+                        grouped.add(new LucisChunkBurst(chunkX, chunkZ, seedPositions, seedCount, false));
                     }
                     }
                     if (LuxProfiler.enabled()) {
@@ -835,9 +834,9 @@ public final class StarLightInterface {
         }
     }
 
-    /** One chunk's ordinary-path burst, waiting for a cache window to be settled in. */
-    private record LucisChunkBurst(int chunkX, int chunkZ,
-                                   it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> positions) {}
+    /** One chunk's ordinary-path burst, waiting for a cache window to be settled in. Positions stay packed as
+     *  {@code BlockPos.asLong} so nothing is boxed on the way from the edit buffer to the engine. */
+    private record LucisChunkBurst(int chunkX, int chunkZ, long[] positions, int positionCount, boolean skyDeferred) {}
 
     /**
      * Settles the collected bursts, several chunks per cache setup.
@@ -918,11 +917,12 @@ public final class StarLightInterface {
         final long lucisT0 = System.nanoTime();
         try {
             for (final LucisChunkBurst burst : group) {
-                if (skyEngine != null && skyEngine.isChunkInCache(burst.chunkX(), burst.chunkZ())) {
-                    skyEngine.seedChanges(this.lightAccess, burst.positions());
+                // a deferred burst leaves its sky half to the windowed recompute, so only the block half is seeded here
+                if (skyEngine != null && !burst.skyDeferred() && skyEngine.isChunkInCache(burst.chunkX(), burst.chunkZ())) {
+                    skyEngine.seedChanges(this.lightAccess, burst.positions(), burst.positionCount());
                 }
                 if (blockEngine != null && blockEngine.isChunkInCache(burst.chunkX(), burst.chunkZ())) {
-                    blockEngine.seedChanges(this.lightAccess, burst.positions());
+                    blockEngine.seedChanges(this.lightAccess, burst.positions(), burst.positionCount());
                 }
             }
             final long lucisT1 = System.nanoTime();
@@ -1577,15 +1577,14 @@ public final class StarLightInterface {
      * whether the cell is air-with-0 or stone. That is the shape a bulk fill has on every "place" pass - structure_cube
      * places 4096 stone blocks - and block seeding there costs ~1.2 us per position.</p>
      */
-    private it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> toBlockPositions(
-            final it.unimi.dsi.fastutil.longs.LongOpenHashSet packed) {
-        final it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<BlockPos> ret =
-                new it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<>(packed.size());
+    private long[] toSeedPositions(final it.unimi.dsi.fastutil.longs.LongOpenHashSet packed) {
+        final long[] ret = new long[packed.size()];
         final it.unimi.dsi.fastutil.longs.LongIterator it = packed.iterator();
         final net.minecraft.world.level.lighting.LayerLightEventListener blockLight = this.world == null
                 ? null
                 : this.world.getChunkSource().getLightEngine().getLayerListener(net.minecraft.world.level.LightLayer.BLOCK);
         final BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
+        int size = 0;
         int skipped = 0;
 
         while (it.hasNext()) {
@@ -1609,11 +1608,12 @@ public final class StarLightInterface {
                     }
                 }
             }
-            ret.add(BlockPos.of(packedPos));
+            ret[size++] = packedPos;
         }
         if (LuxProfiler.enabled()) {
             LuxProfiler.ownEditBlockSkipped += skipped;
         }
-        return ret;
+        // A tail shorter than the array means the filter dropped positions; the callers carry the count.
+        return size == ret.length ? ret : java.util.Arrays.copyOf(ret, size);
     }
 }

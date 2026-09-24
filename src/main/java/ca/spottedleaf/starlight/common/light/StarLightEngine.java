@@ -506,6 +506,20 @@ public abstract class StarLightEngine {
         }
     }
 
+    /**
+     * The same seeding step for a burst held as packed {@code BlockPos.asLong} values, which is how the edit buffer
+     * stores it. Non-allocating on purpose: the {@link Set} form boxes every changed position, and a bulk burst is
+     * tens of thousands of them per pass - measured (JFR) as heavy young-generation churn in this engine and absent in
+     * the base, which is where a good part of the block-light-heavy cells' gap comes from.
+     */
+    public void seedChanges(final LightChunkGetter lightAccess, final long[] packed, final int count) {
+        for (int i = 0; i < count; i++) {
+            final long value = packed[i];
+
+            this.checkBlock(lightAccess, BlockPos.getX(value), BlockPos.getY(value), BlockPos.getZ(value));
+        }
+    }
+
     /** Drains what the seeding queued and publishes the result. <b>Drain first, publish after</b>, never the reverse:
      *  publishing before the drain is what left a placed light source visible on its own cell only. */
     public final void settleSeededChanges(final LightChunkGetter lightAccess) {

@@ -132,6 +132,12 @@ public final class LuxProfiler {
 
     /** True when this call should be timed (sampling); also bumps the sample counter. */
     public static boolean sample() {
+        if (!ENABLED) {
+            // With profiling off this has to be free: it sits on the BFS pop path, and an unconditional static
+            // increment there is a memory write per pop that also blocks the JIT from optimising the loop - measured
+            // as a 1.7x gap against the same propagation loop without the instrumentation (see docs).
+            return false;
+        }
         return (sampleCounter++ & SAMPLE_MASK) == 0;
     }
 
