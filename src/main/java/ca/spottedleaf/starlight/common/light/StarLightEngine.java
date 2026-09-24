@@ -281,6 +281,8 @@ public abstract class StarLightEngine {
     }
 
     protected final void updateVisible(final LightChunkGetter lightAccess) {
+        int published = 0;
+
         for (int index = 0, max = this.nibbleCache.length; index < max; ++index) {
             final SWMRNibbleArray nibble = this.nibbleCache[index];
             if (!this.notifyUpdateCache[index] && (nibble == null || !nibble.isDirty())) {
@@ -292,12 +294,16 @@ public abstract class StarLightEngine {
             final int ySections = this.maxSection - this.minSection + 1;
             final int chunkY = ((index / (5*5)) % (ySections + 2 + 2)) - this.chunkOffsetY;
             if ((nibble != null && nibble.updateVisible()) || this.notifyUpdateCache[index]) {
+                published++;
                 if (LuxProfiler.enabled()) {
                     (this.skylightPropagator ? LuxProfiler.skyNotify : LuxProfiler.blockNotify).increment();
                 }
                 lightAccess.onLightUpdate(this.skylightPropagator ? LightLayer.SKY : LightLayer.BLOCK, SectionPos.of(chunkX, chunkY, chunkZ));
             }
         }
+        // Counted unconditionally: the publish is 0.16 ms in the base's per-chunk task, and if the inline lane's
+        // settle is 3x the same decrease the question is whether it publishes the same number of sections.
+        LuxProfiler.lucisPublished(this.skylightPropagator, published);
     }
 
     protected final void destroyCaches() {

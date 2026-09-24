@@ -157,24 +157,41 @@ public final class LuxProfiler {
     public static long groupSkyChunks;
     public static long groupSetupNanos;
     public static long groupSeedNanos;
-    public static long groupSkySettleNanos;
-    public static long groupBlkSettleNanos;
+    public static long groupSkyDecNanos;
+    public static long groupSkyVisNanos;
+    public static long groupBlkDecNanos;
+    public static long groupBlkVisNanos;
+    /** Sections actually published (one {@code onLightUpdate} each), split by layer - the publish is the one phase
+     *  that reads 0.16 ms in the base's per-chunk task and is unmeasured in the inline lane. */
+    public static long publishSectionsBlock;
+    public static long publishSectionsSky;
 
     /**
      * One group's phase split, measured at the call site in {@code lucis$settleGroup}. <b>Always on, and that is the
      * point:</b> the pop counters cost ~3 ms a pass on the border workload, so a phase split that only exists while
-     * they are on measures the profiler - this one is six clock reads per group.
+     * they are on measures the profiler - this one is a handful of clock reads per group.
      */
     public static void lucisGroupPhases(final long setupNanos, final long seedNanos,
-                                        final long skySettleNanos, final long blkSettleNanos,
+                                        final long skyDecNanos, final long skyVisNanos,
+                                        final long blkDecNanos, final long blkVisNanos,
                                         final int chunks, final int skyChunks) {
         groupCount++;
         groupChunks += chunks;
         groupSkyChunks += skyChunks;
         groupSetupNanos += setupNanos;
         groupSeedNanos += seedNanos;
-        groupSkySettleNanos += skySettleNanos;
-        groupBlkSettleNanos += blkSettleNanos;
+        groupSkyDecNanos += skyDecNanos;
+        groupSkyVisNanos += skyVisNanos;
+        groupBlkDecNanos += blkDecNanos;
+        groupBlkVisNanos += blkVisNanos;
+    }
+
+    public static void lucisPublished(final boolean sky, final int sections) {
+        if (sky) {
+            publishSectionsSky += sections;
+        } else {
+            publishSectionsBlock += sections;
+        }
     }
 
     // --- the settle point itself (always on) --------------------------------
@@ -256,8 +273,12 @@ public final class LuxProfiler {
         groupSkyChunks = 0;
         groupSetupNanos = 0;
         groupSeedNanos = 0;
-        groupSkySettleNanos = 0;
-        groupBlkSettleNanos = 0;
+        groupSkyDecNanos = 0;
+        groupSkyVisNanos = 0;
+        groupBlkDecNanos = 0;
+        groupBlkVisNanos = 0;
+        publishSectionsBlock = 0;
+        publishSectionsSky = 0;
         settleCalls = 0;
         settleNanos = 0;
         settleRecomputeCalls = 0;
@@ -336,8 +357,12 @@ public final class LuxProfiler {
                 + " groupSkyChunks=" + groupSkyChunks
                 + " groupSetupNanos=" + groupSetupNanos
                 + " groupSeedNanos=" + groupSeedNanos
-                + " groupSkySettleNanos=" + groupSkySettleNanos
-                + " groupBlkSettleNanos=" + groupBlkSettleNanos
+                + " groupSkyDecNanos=" + groupSkyDecNanos
+                + " groupSkyVisNanos=" + groupSkyVisNanos
+                + " groupBlkDecNanos=" + groupBlkDecNanos
+                + " groupBlkVisNanos=" + groupBlkVisNanos
+                + " publishSectionsBlock=" + publishSectionsBlock
+                + " publishSectionsSky=" + publishSectionsSky
                 + " settleCalls=" + settleCalls
                 + " settleNanos=" + settleNanos
                 + " settleRecomputeCalls=" + settleRecomputeCalls

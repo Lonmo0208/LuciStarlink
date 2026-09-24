@@ -989,13 +989,34 @@ public final class StarLightInterface {
             }
             final long lucisT1 = System.nanoTime();
             // one drain and one publish for the whole group, with the caches still up: the drain reads neighbours
-            // through them and the publish is what makes the propagation visible to the client and to a save
+            // through them and the publish is what makes the propagation visible to the client and to a save.
+            // Timed separately on purpose: the base's per-chunk task reads 1.78 ms of decrease and 0.16 ms of publish
+            // on this workload while this lane's combined settle reads 5.7 ms, and only a split can say which half is
+            // the 3x.
+            long skyDec = 0L;
+            long skyVis = 0L;
+            long blkDec = 0L;
+            long blkVis = 0L;
+
             if (skyEngine != null) {
-                skyEngine.settleSeededChanges(this.lightAccess);
+                final long t0 = System.nanoTime();
+                skyEngine.performLightDecrease(this.lightAccess);
+                final long t1 = System.nanoTime();
+                skyEngine.updateVisible(this.lightAccess);
+                final long t2 = System.nanoTime();
+
+                skyDec = t1 - t0;
+                skyVis = t2 - t1;
             }
-            final long lucisT2 = System.nanoTime();
             if (blockEngine != null) {
-                blockEngine.settleSeededChanges(this.lightAccess);
+                final long t0 = System.nanoTime();
+                blockEngine.performLightDecrease(this.lightAccess);
+                final long t1 = System.nanoTime();
+                blockEngine.updateVisible(this.lightAccess);
+                final long t2 = System.nanoTime();
+
+                blkDec = t1 - t0;
+                blkVis = t2 - t1;
             }
             final long lucisT3 = System.nanoTime();
 
@@ -1003,7 +1024,7 @@ public final class StarLightInterface {
             // whole question on that cell (our lane settles the same work as the base queue but reads 25% slower), and
             // a split that only exists with the pop counters on cannot answer it - those counters cost ~3 ms a pass.
             LuxProfiler.lucisGroupPhases(lucisT0 - lucisSetupT0, lucisT1 - lucisT0,
-                    lucisT2 - lucisT1, lucisT3 - lucisT2, group.size(), skySeeded);
+                    skyDec, skyVis, blkDec, blkVis, group.size(), skySeeded);
         } finally {
             if (skyEngine != null) {
                 skyEngine.destroyCaches();
