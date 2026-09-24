@@ -1,6 +1,7 @@
 package ca.spottedleaf.starlight.common.light;
 
 import ca.spottedleaf.starlight.common.chunk.ExtendedChunk;
+import ca.spottedleaf.starlight.common.debug.LuxProfiler;
 import ca.spottedleaf.starlight.common.light.image.ImageBlockLightEngine;
 import ca.spottedleaf.starlight.common.light.image.ImageMaterial;
 import ca.spottedleaf.starlight.common.light.image.ImageMaterialCache;
@@ -46,8 +47,10 @@ public final class ImageLane {
 
     private static final int REGION_CHUNKS = 1;
     private static final int HALO_CHUNKS = 1;
-    private static final int LANE_MAX_CHANGES = 2048;
-    private static final int LANE_MIN_CHANGES_PER_CHUNK = 64;
+    // Routing thresholds, property-tunable so the shape question can be probed without a rebuild (the border
+    // attempt-cost split ran with imageLaneMaxChanges=0: the lane enabled but never taking traffic).
+    private static final int LANE_MAX_CHANGES = Integer.getInteger("scalablelux.imageLaneMaxChanges", 2048);
+    private static final int LANE_MIN_CHANGES_PER_CHUNK = Integer.getInteger("scalablelux.imageLaneMinPerChunk", 64);
     private static final long CACHE_BYTE_BUDGET = 128L * 1024L * 1024L;
 
     private static final ConcurrentHashMap<StarLightInterface, ImageLane> LANES = new ConcurrentHashMap<>();
@@ -62,6 +65,7 @@ public final class ImageLane {
     /** Chunk keys the current settle took over; consulted by covers() after the buffer is drained. */
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet lastHandled = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     private int worldgenDepth;
+    private long capturesSinceSettle;
 
     /** Live-world evidence that the lane is the one doing the work (surfaced through stats). */
     public long settleCount;
@@ -106,6 +110,16 @@ public final class ImageLane {
 
     public void onBlockStateChange(final ServerLevel level, final BlockPos pos,
                                    final BlockState oldState, final BlockState newState) {
+        final long lucisCaptureT0 = System.nanoTime();
+        try {
+        this.onBlockStateChangeInner(level, pos, oldState, newState);
+        } finally {
+            LuxProfiler.laneCaptureNanos += System.nanoTime() - lucisCaptureT0;
+        }
+    }
+
+    private void onBlockStateChangeInner(final ServerLevel level, final BlockPos pos,
+                                         final BlockState oldState, final BlockState newState) {
         // captures land in plain thread-unsafe maps, and worldgen workers reach vanilla block writes too:
         // anything off the server main thread is not lane traffic
         if (!(this.owner.world instanceof ServerLevel serverLevel)
@@ -145,6 +159,7 @@ public final class ImageLane {
 
         this.pending.computeIfAbsent(bounds.coreRegionKey(), key -> new RuntimeLightChangeBuffer())
                 .addMaterial(index, oldPacked, newPacked);
+        this.capturesSinceSettle++;
     }
 
     // ------------------------------------------------------------------------------------------------------------
@@ -165,15 +180,15 @@ public final class ImageLane {
      * are cheaper on the grouped nibble path.
      */
     private boolean regionQualifies(final ImageRegionBounds bounds, final RuntimeLightChangeBuffer buffered) {
+        if (buffered == null || buffered.isEmpty() || buffered.size() > LANE_MAX_CHANGES) {
+            return false;
+        }
         // decision cache: the buffer only grows between settles, so (size -> verdict) is a sound memo and
         // hasUpdates() polls during the wait must not rescan the whole buffer every call
         final long cacheKey = bounds.coreRegionKey();
         final long cached = this.qualifyCache.get(cacheKey);
         if (cached != 0L && (cached >>> 1) == buffered.size()) {
             return (cached & 1L) != 0L;
-        }
-        if (buffered == null || buffered.isEmpty() || buffered.size() > LANE_MAX_CHANGES) {
-            return false;
         }
         final int minChunkX = bounds.minBlockX() >> 4, minChunkZ = bounds.minBlockZ() >> 4;
         final int width = bounds.widthBlocks();
@@ -215,6 +230,23 @@ public final class ImageLane {
     }
 
     public void settle() {
+        LuxProfiler.laneSettlePolls++;
+        // Cheap gate first: the harness barrier polls hasUpdates() in a spin loop, and this settle sits behind
+        // every poll. With no captures since the last settle there is nothing to decide - the attempt itself
+        // measured 4-5 ms a pass on border (40-50 us per change) purely from being polled thousands of times.
+        if (this.capturesSinceSettle == 0L) {
+            return;
+        }
+        final long lucisSettleT0 = System.nanoTime();
+        try {
+            this.settleInner();
+        } finally {
+            LuxProfiler.laneSettleNanos += System.nanoTime() - lucisSettleT0;
+            LuxProfiler.laneSettleRuns++;
+        }
+    }
+
+    private void settleInner() {
         this.lastHandled.clear();
         // hasUpdates() is also asked from the light thread, where none of this may run; the buffer simply waits
         // for the next server-thread settle point (the tick hook guarantees one per tick)
@@ -222,34 +254,31 @@ public final class ImageLane {
                 || !serverLevel.getChunkSource().chunkMap.mainThreadExecutor.isSameThread()) {
             return;
         }
-
-        if (this.pending.isEmpty()) {
-            return;
-        }
         final ServerLevel level = (ServerLevel) this.owner.world;
+        final it.unimi.dsi.fastutil.longs.LongArrayList handledKeys = new it.unimi.dsi.fastutil.longs.LongArrayList();
+        final it.unimi.dsi.fastutil.longs.LongArrayList skippedKeys = new it.unimi.dsi.fastutil.longs.LongArrayList();
 
         for (final it.unimi.dsi.fastutil.longs.Long2ObjectMap.Entry<RuntimeLightChangeBuffer> entry
                 : this.pending.long2ObjectEntrySet()) {
             final RuntimeLightChangeBuffer buffer = entry.getValue();
 
             if (buffer.isEmpty()) {
+                skippedKeys.add(entry.getLongKey());
                 continue;
             }
 
             final ImageRegionBounds bounds = this.boundsFor(level, entry.getLongKey());
 
             // routing: a region whose burst is not concentrated stays entirely on the grouped nibble path. The
-            // flush never removed those chunks from pendingEdits, so the nibble path applies them; our own planes
-            // fall behind the world as a result, and the stale mark forces a full re-adopt before a later
-            // qualifying settle may trust them. Non-destructive on purpose: hasUpdates() reaches this many times
-            // during one wait, and evicting or clearing here would churn the mid-apply state.
+            // nibble path applies those changes in this very flush (their pendingEdits entries were never
+            // removed), so the lane buffer entries are dead weight AND would poison the region planes - drop
+            // them and mark the region stale, forcing a full re-adopt before any future qualifying settle.
+            // Destructive on purpose: a buffer kept across passes GROWS (95 toggles a pass), its per-chunk
+            // counts eventually cross the floor, and the region then qualifies on its own dead entries
+            // mid-window (measured: a 21 ms re-adopt inside a measured pass). The dirty gate above keeps the
+            // hasUpdates polling cheap, so destruction costs nothing here.
             if (!this.regionQualifies(bounds, buffer)) {
-                this.staleRegions.add(entry.getLongKey());
-                if (buffer.size() > LANE_MAX_CHANGES) {
-                    // can never qualify at this size; the entries are dead weight (nibble path owns the work)
-                    buffer.clear();
-                    this.pending.remove(entry.getLongKey());
-                }
+                skippedKeys.add(entry.getLongKey());
                 continue;
             }
 
@@ -280,7 +309,6 @@ public final class ImageLane {
             this.capturedChanges += buffer.size();
             this.packDirty(data, entry.getLongKey());
             buffer.clear();
-            this.pending.remove(entry.getLongKey());
 
             // every chunk of this region is now lane-owned for the flush that follows
             final int minChunkX = bounds.minBlockX() >> 4, minChunkZ = bounds.minBlockZ() >> 4;
@@ -290,7 +318,25 @@ public final class ImageLane {
                             minChunkX + dx, minChunkZ + dz));
                 }
             }
+            handledKeys.add(entry.getLongKey());
         }
+
+        // removals happen after the iteration: a map.remove inside the fastutil entry iteration corrupts the
+        // iterator and crashes with an out-of-bounds table index (measured, the r1 crash)
+        for (int i = 0; i < handledKeys.size(); i++) {
+            this.pending.remove(handledKeys.getLong(i));
+        }
+        for (int i = 0; i < skippedKeys.size(); i++) {
+            final long key = skippedKeys.getLong(i);
+            final RuntimeLightChangeBuffer dropped = this.pending.remove(key);
+
+            if (dropped != null && !dropped.isEmpty()) {
+                // the nibble path owns these changes; the region's planes fall behind the world
+                this.cache.remove(key);
+                this.staleRegions.add(key);
+            }
+        }
+        this.capturesSinceSettle = 0L;
         this.cache.trimToSize(-1, CACHE_BYTE_BUDGET);
     }
 

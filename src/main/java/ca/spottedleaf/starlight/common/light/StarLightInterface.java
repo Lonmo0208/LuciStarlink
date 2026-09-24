@@ -732,14 +732,29 @@ public final class StarLightInterface {
         // is not one chunk's is never dispatched. An older comment here claimed the opposite (that this rule turned
         // border "from 0.43 ms into 4.03 ms"): those two numbers were both measured while the block-light half of a
         // large burst was not being computed at all, so 0.43 ms was the price of skipping the work.
-        // the image lane, when on, settles small bursts itself - synchronously and without the queue turnaround -
-        // so the dispatch rule must not send them back to the base queue behind its back
-        if (this.lucis$imageLane == null && LUCIS_INLINE_MIN_BURST > 0 && this.lucis$pendingEdits.size() == 1) {
+        // The dispatch rule stays live with the lane on. The profiler run that diagnosed border's regression
+        // (lane counters, 2026-09-25) showed the rule's absence - not the capture - was the whole tax: its 95
+        // scattered changes belong on the base queue (0.35 ms a pass) and the grouped nibble path costs 10 ms
+        // for the same shape. Only a chunk the lane actually covers is held back from the queue.
+        if (LUCIS_INLINE_MIN_BURST > 0 && this.lucis$pendingEdits.size() == 1) {
+            boolean laneOwnsTheBurst = false;
+
+            if (this.lucis$imageLane != null) {
+                for (final it.unimi.dsi.fastutil.longs.Long2ObjectMap.Entry<it.unimi.dsi.fastutil.longs.LongOpenHashSet> entry
+                        : this.lucis$pendingEdits.long2ObjectEntrySet()) {
+                    final long key = entry.getLongKey();
+                    if (this.lucis$imageLane.covers(CoordinateUtils.getChunkX(key), CoordinateUtils.getChunkZ(key))) {
+                        laneOwnsTheBurst = true;
+                        break;
+                    }
+                }
+            }
+
             int total = 0;
             for (final it.unimi.dsi.fastutil.longs.LongOpenHashSet pending : this.lucis$pendingEdits.values()) {
                 total += pending.size();
             }
-            if (total <= LUCIS_INLINE_MIN_BURST) {
+            if (total <= LUCIS_INLINE_MIN_BURST && !laneOwnsTheBurst) {
                 final long[] keysToQueue = this.lucis$pendingEdits.keySet().toLongArray();
                 for (final long key : keysToQueue) {
                     final it.unimi.dsi.fastutil.longs.LongOpenHashSet positions = this.lucis$pendingEdits.remove(key);
