@@ -453,6 +453,7 @@ public abstract class StarLightEngine {
 
     public final void blocksChangedInChunk(final LightChunkGetter lightAccess, final int chunkX, final int chunkZ,
                                            final Set<BlockPos> positions, final Boolean[] changedSections) {
+        if (!this.skylightPropagator) { ImageLane.onEngineBlockWrite(chunkX, chunkZ); } // the lane re-adopts: its region copy just went stale
         final long lucisSetupT0 = System.nanoTime();
         this.setupCaches(lightAccess, chunkX * 16 + 7, 128, chunkZ * 16 + 7, true, true);
         LuxProfiler.ownEditSetupNanos += System.nanoTime() - lucisSetupT0;
@@ -814,6 +815,7 @@ public abstract class StarLightEngine {
 
     public final void handleEmptySectionChanges(final LightChunkGetter lightAccess, final int chunkX, final int chunkZ,
                                                 final Boolean[] emptinessChanges) {
+        if (!this.skylightPropagator) { ImageLane.onEngineBlockWrite(chunkX, chunkZ); } // section emptiness flips: the lane re-adopts
         final long lucisSetupT0 = System.nanoTime();
         this.setupCaches(lightAccess, chunkX * 16 + 7, 128, chunkZ * 16 + 7, true, true);
         LuxProfiler.ownEditSetupNanos += System.nanoTime() - lucisSetupT0;
@@ -1000,6 +1002,7 @@ public abstract class StarLightEngine {
     public final void light(final LightChunkGetter lightAccess, final ChunkAccess chunk, final Boolean[] emptySections) {
         final int chunkX = chunk.getPos().x;
         final int chunkZ = chunk.getPos().z;
+        if (!this.skylightPropagator) { ImageLane.onEngineBlockWrite(chunkX, chunkZ); } // full relight: the lane re-adopts
         final long lucisSetupT0 = System.nanoTime();
         this.setupCaches(lightAccess, chunkX * 16 + 7, 128, chunkZ * 16 + 7, true, true);
         LuxProfiler.ownEditSetupNanos += System.nanoTime() - lucisSetupT0;
@@ -1029,6 +1032,12 @@ public abstract class StarLightEngine {
 
     public final void relightChunks(final LightChunkGetter lightAccess, final Set<ChunkPos> chunks,
                                     final Consumer<ChunkPos> chunkLightCallback, final IntConsumer onComplete) {
+        // a full relight rewrites every section underneath the lane: drop the affected regions
+        if (!this.skylightPropagator) {
+            for (final ChunkPos pos : chunks) {
+                ImageLane.onEngineBlockWrite(pos.x, pos.z);
+            }
+        }
         // it's recommended for maximum performance that the set is ordered according to a BFS from the center of
         // the region of chunks to relight
         // it's required that tickets are added for each chunk to keep them loaded

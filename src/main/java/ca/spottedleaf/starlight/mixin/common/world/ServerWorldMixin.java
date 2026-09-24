@@ -78,4 +78,25 @@ public abstract class ServerWorldMixin extends Level implements WorldGenLevel, E
             provider.scalablelux$getLightEngine().lucisFlushPendingEdits();
         }
     }
+
+    /**
+     * The image lane's capture funnel (docs/IMAGE-LANE-PLAN.md): vanilla hands us the old and the new state here for
+     * every gameplay {@code setBlock}, which is exactly the material delta the lane's incremental BFS needs. Worldgen
+     * does not pass through here (it writes chunks directly), and {@code onBlockStateChange} is server-side only,
+     * so no further guards are needed beyond the lane's own.
+     */
+    @Inject(method = "onBlockStateChange", at = @At("HEAD"))
+    private void scalablelux$imageLaneCapture(final net.minecraft.core.BlockPos pos,
+                                              final net.minecraft.world.level.block.state.BlockState oldState,
+                                              final net.minecraft.world.level.block.state.BlockState newState,
+                                              final CallbackInfo ci) {
+        if (this.chunkSource.getLightEngine() instanceof StarLightLightingProvider provider) {
+            final ca.spottedleaf.starlight.common.light.ImageLane lane =
+                    provider.scalablelux$getLightEngine().lucis$getImageLane();
+
+            if (lane != null) {
+                lane.onBlockStateChange((ServerLevel) (Object) this, pos, oldState, newState);
+            }
+        }
+    }
 }

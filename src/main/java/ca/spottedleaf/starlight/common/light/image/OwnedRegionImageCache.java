@@ -31,6 +31,11 @@ public final class OwnedRegionImageCache {
         return state != null && state.initialized() ? state : null;
     }
 
+    /** Drops one region so its next use re-adopts from the authoritative storage (external-write invalidation). */
+    public void remove(long regionKey) {
+        cache.remove(regionKey);
+    }
+
     /**
      * Evicts the least recently touched regions until the cache is inside both budgets. A region holds
      * four byte planes of {@code widthBlocks * depthBlocks * heightBlocks} bytes each, so the entry

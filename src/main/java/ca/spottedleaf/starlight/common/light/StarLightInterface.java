@@ -96,6 +96,7 @@ public final class StarLightInterface {
         this.lightEngine = lightEngine;
         this.hasBlockLight = hasBlockLight;
         this.hasSkyLight = hasSkyLight;
+        this.lucis$imageLane = !this.isClientSide && hasBlockLight && ImageLane.ENABLED ? ImageLane.forLevel(this) : null;
         if (this.isClientSide || !GlobalExecutors.ENABLED) {
             this.lightQueue = new SimpleLightQueue(this);
         } else {
@@ -390,6 +391,9 @@ public final class StarLightInterface {
         }
         ret.append(" poolSky=").append(this.cachedSkyPropagators == null ? -1 : this.cachedSkyPropagators.size());
         ret.append(" poolBlock=").append(this.cachedBlockPropagators == null ? -1 : this.cachedBlockPropagators.size());
+        if (this.lucis$imageLane != null) {
+            ret.append(" lane=").append(this.lucis$imageLane.laneStats());
+        }
         return ret.toString();
     }
 
@@ -551,6 +555,18 @@ public final class StarLightInterface {
     private long lucis$currentEditChunk = Long.MIN_VALUE;
 
     /**
+     * The image lane (docs/IMAGE-LANE-PLAN.md): block-light bursts captured at setBlock time and settled on flat
+     * region images, synchronously. Null unless {@code -Dscalablelux.imageLane=true} and this is a server world -
+     * the fuse decides when that becomes the default.
+     */
+    private final ImageLane lucis$imageLane;
+
+    /** The image lane for this world, or null when disabled/client-side (capture funnel). */
+    public ImageLane lucis$getImageLane() {
+        return this.lucis$imageLane;
+    }
+
+    /**
      * Whether the inline lane should <b>hold</b> a burst instead of settling it when the edit moves to the next chunk:
      * the rule that turns a line of small edits along a chunk border into one drain per three chunks rather than one
      * drain per chunk. Off unless asked for, because the plain "settle what I have when the chunk changes" is what the
@@ -671,6 +687,11 @@ public final class StarLightInterface {
         final long lucisSettleT0 = System.nanoTime();
 
         try {
+        // the image lane settles first: its regions carry the block half of the bursts it captured at setBlock
+        // time, and the flush loop below skips those chunks' block seeding (covers()) so nothing double-settles
+        if (this.lucis$imageLane != null) {
+            this.lucis$imageLane.settle();
+        }
         this.lucis$flushPendingEditsBody(keepOne, keepKey, settle);
         } finally {
             // Unconditional: whoever reached this settle (the tick hook or hasUpdates) pays for it, and on
@@ -710,7 +731,9 @@ public final class StarLightInterface {
         // is not one chunk's is never dispatched. An older comment here claimed the opposite (that this rule turned
         // border "from 0.43 ms into 4.03 ms"): those two numbers were both measured while the block-light half of a
         // large burst was not being computed at all, so 0.43 ms was the price of skipping the work.
-        if (LUCIS_INLINE_MIN_BURST > 0 && this.lucis$pendingEdits.size() == 1) {
+        // the image lane, when on, settles small bursts itself - synchronously and without the queue turnaround -
+        // so the dispatch rule must not send them back to the base queue behind its back
+        if (this.lucis$imageLane == null && LUCIS_INLINE_MIN_BURST > 0 && this.lucis$pendingEdits.size() == 1) {
             int total = 0;
             for (final it.unimi.dsi.fastutil.longs.LongOpenHashSet pending : this.lucis$pendingEdits.values()) {
                 total += pending.size();
@@ -771,6 +794,9 @@ public final class StarLightInterface {
                     final ChunkAccess chunkNow = this.getAnyChunkNow(chunkX, chunkZ);
                     final boolean deferSky = LUCIS_RECOMPUTE_SKY && chunkNow != null
                             && positions.size() >= LUCIS_RECOMPUTE_MIN;
+                    // the image lane carries this chunk's block half when it captured the burst at setBlock time
+                    final boolean laneCovered = this.lucis$imageLane != null
+                            && this.lucis$imageLane.covers(chunkX, chunkZ);
 
                     // Packed longs, never boxed BlockPos: this list is built for every flush and a bulk burst holds tens
                     // of thousands of positions, which JFR showed as heavy young-generation churn in this engine and no
@@ -796,7 +822,7 @@ public final class StarLightInterface {
                         }
                         // The block half runs here (through the grouped settle, so it shares a cache window and a drain
                         // with its neighbours); the sky half is left to the deferred recompute.
-                        grouped.add(new LucisChunkBurst(chunkX, chunkZ, seedPositions, seedCount, true));
+                        grouped.add(new LucisChunkBurst(chunkX, chunkZ, seedPositions, seedCount, true, laneCovered));
                     } else {
                     final ChunkAccess bulkChunk = LUCIS_BULK_RELIGHT && positions.size() >= LUCIS_BULK_MIN_CHANGES
                             ? this.getAnyChunkNow(chunkX, chunkZ) : null;
@@ -819,7 +845,7 @@ public final class StarLightInterface {
                         // seed -> drain -> publish -> destroy) and pays a full drain per chunk; a burst along a chunk
                         // border is many small changes spread over several chunks, so it paid that drain for each of
                         // them. Chunks that share one cache window are settled together after the loop instead.
-                        grouped.add(new LucisChunkBurst(chunkX, chunkZ, seedPositions, seedCount, false));
+                        grouped.add(new LucisChunkBurst(chunkX, chunkZ, seedPositions, seedCount, false, laneCovered));
                     }
                     }
                     if (LuxProfiler.enabled()) {
@@ -896,7 +922,8 @@ public final class StarLightInterface {
 
     /** One chunk's ordinary-path burst, waiting for a cache window to be settled in. Positions stay packed as
      *  {@code BlockPos.asLong} so nothing is boxed on the way from the edit buffer to the engine. */
-    private record LucisChunkBurst(int chunkX, int chunkZ, long[] positions, int positionCount, boolean skyDeferred) {}
+    private record LucisChunkBurst(int chunkX, int chunkZ, long[] positions, int positionCount, boolean skyDeferred,
+                                   boolean blockHandledByLane) {}
 
     /**
      * Settles the collected bursts, several chunks per cache setup.
@@ -983,7 +1010,8 @@ public final class StarLightInterface {
                     skyEngine.seedChanges(this.lightAccess, burst.positions(), burst.positionCount());
                     skySeeded++;
                 }
-                if (blockEngine != null && blockEngine.isChunkInCache(burst.chunkX(), burst.chunkZ())) {
+                if (blockEngine != null && !burst.blockHandledByLane()
+                        && blockEngine.isChunkInCache(burst.chunkX(), burst.chunkZ())) {
                     blockEngine.seedChanges(this.lightAccess, burst.positions(), burst.positionCount());
                 }
             }

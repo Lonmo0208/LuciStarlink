@@ -48,4 +48,31 @@ public abstract class LevelChunkMixin implements ExtendedChunk {
                                      final int x, final int y, final int z) {
         return instance != null ? instance.update(blockGetter, x, y, z) : false; // handle unmanaged lighting
     }
+
+    /**
+     * postProcessGeneration replays saved worldgen blocks through {@code level.setBlock}, which reaches the image
+     * lane's capture funnel on the server thread; those writes are worldgen, not player traffic, and the chunk's
+     * own light stage follows them anyway - so they are bracketed out of the lane (the 1.x pattern).
+     */
+    @Inject(method = "postProcessGeneration", at = @At("HEAD"))
+    public void scalablelux$laneWorldgenBegin(final CallbackInfo ci) {
+        if ((Object) this instanceof net.minecraft.world.level.chunk.LevelChunk lc && lc.getLevel() instanceof ServerLevel serverLevel) {
+            final ca.spottedleaf.starlight.common.light.ImageLane lane = ca.spottedleaf.starlight.common.light.ImageLane.laneOrNull(serverLevel);
+
+            if (lane != null) {
+                lane.beginWorldgenWrite();
+            }
+        }
+    }
+
+    @Inject(method = "postProcessGeneration", at = @At("RETURN"))
+    public void scalablelux$laneWorldgenEnd(final CallbackInfo ci) {
+        if ((Object) this instanceof net.minecraft.world.level.chunk.LevelChunk lc && lc.getLevel() instanceof ServerLevel serverLevel) {
+            final ca.spottedleaf.starlight.common.light.ImageLane lane = ca.spottedleaf.starlight.common.light.ImageLane.laneOrNull(serverLevel);
+
+            if (lane != null) {
+                lane.endWorldgenWrite();
+            }
+        }
+    }
 }
