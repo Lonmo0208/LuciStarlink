@@ -1,0 +1,3 @@
+# Shell scripts under tools/ are meant to be executed, and a CRLF checkout breaks them on Git Bash
+# ("/usr/bin/env: bash\r: No such file or directory"). Pin them to LF regardless of core.autocrlf.
+*.sh text eol=lf
