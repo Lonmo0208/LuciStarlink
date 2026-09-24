@@ -202,3 +202,23 @@ export JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStoreType=WINDOWS-ROOT
 "全赢"必须同时赢两个指标，而这两种架构恰好在这一点上互相交换——本项目已实测过这条交换的代价
 （`docs/OWN-ENGINE.md` / 提交 `d88cac1`：把图像搬进我们的引擎，单 section 提取 185 µs，乐观组合 ≈48 µs
 对 ScalableLux 的 ≈34 µs，不划算）。所以"赢 1.x 的引擎口径"= 换成它的存储架构 = 在重负载格上退回去。
+
+## 9. 图像通道（2026-09-25，`docs/IMAGE-LANE-PLAN.md`）——**默认关闭，`-Dscalablelux.imageLane=true` 开启**
+
+把 1.x 的引擎核心（我们自己的 Lucis 代码）移植进了 2.0：`light/image/` 下是逐行照抄的 BFS 内核
+（模糊测试 fuzzErrors=0：增量 == 从头重算 oracle，400 随机世界 × 2 轮；20 ns/弹出对 nibble 的 ~41），
+加完整的区域机制（采纳/打包/跨区失效/LRU）；`ImageLane` 在 `ServerLevel.onBlockStateChange` 捕获材质
+变化（世界生成由 postProcessGeneration 括号挡住），服务器主线程同步结算，脏 section 打包回 nibble
+（先 updateVisible 再 onLightUpdate）。梯度门实测走了通道（stats：lane=settles=2 captured=3
+packed=20，梯度规范 15/14/14/14/13/10）。
+
+开启后四格实测（与 SL 交替）：
+- `structure_cube` **3.54 vs 7.55** ✓（走旧路：4096 > 上限 2048；指纹规范）
+- `dense_chunk_patch` **4.68 vs 6.44** ✓（走通道：apply 3.96 ms，正是内核 20 ns/弹出预测的胜利）
+- `sky_hole` 0.94 vs 0.80-1.53 平（走旧路：25 < 下限 64）
+- `block_toggle_border` 7.3-8.8 vs 4.37-4.69 ✗（**唯一回归**：散布流量每改动付捕获+记账税， grouped nibble 路径一次 setup+drain 批量处理更便宜）
+
+路由规则：只有"某区块 ≥64 处改动且区域总量 ≤2048"的 burst 走通道；不合格区域跳过并记 stale
+（下次资格结算前强制全量重采纳）；资格判定按 buffer 大小做 memo（hasUpdates 轮询不重扫）。
+默认关闭 = 逐位等价 2.0.8 行为。**未解决问题：border 形状下捕获本身 ~2-3 ms/轮**——需要捕获期的
+廉价形状过滤器（IMAGE-LANE-PLAN.md §6 的账目仍有效：dense 已赢，border 与 1.x 的贴脸差距仍在）。
