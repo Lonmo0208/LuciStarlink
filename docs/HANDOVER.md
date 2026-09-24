@@ -19,7 +19,7 @@
 | 项 | 值 |
 |---|---|
 | 工作树 | `E:\LuciStarlin\LuciStarlink-LS-V2`（= `master` = `LS-V2` 分支的 worktree） |
-| 当前 tip | **代码发布点 = `v2.0.8` 那个提交**（`gradle.properties` 的 `mod_version=2.0.8`），CI 全绿；本节以下所有数字都属于 2.0.8 |
+| 当前 tip | **代码发布点 = `v2.0.8`（`32b1524`）**，CI 全绿；其后的提交只有测量插桩（`b65f5d9`：settle 阶段计时，无行为改动），本节以下所有数字都属于 2.0.8 的引擎 |
 | 分支 | `master` = `LS-V2`（同名同内容）；`1x-line` = `472d897`（1.x 线 + 测试台，未动） |
 | tag | `v2.0.1` … `v2.0.8`（1.x 的 11 个 `v1.2.x` 未动） |
 | 本地产物 | `E:\LuciStarlin\sl-jar\lucistarlink-2.0.8-release.jar`，md5 `f46ee515964f32d8da6c196e6cdc1c47`（**发布件不上 GitHub**，只推 tag） |
