@@ -39,7 +39,7 @@
 （a）三胜一负这个**方向**可信（每一格都在同一轮里背靠背跑）；
 （b）单格的**倍数**别当定论引用，尤其 `dense` 的 3.72 对 3.93 只在噪声边缘——要对外用倍数就补跑 ≥3 轮；
 （c）`block_toggle_border` 的差距（1.36×）远大于轮间波动，它不靠补轮数站得住。
-要复现这张表：`bash /c/Users/Administrator/AppData/Local/Temp/zcode-two.sh`，改 `US20_JAR=E:\LuciStarlin\sl-jar\ls2-varA-rig.jar`。
+要复现这张表：`bash tools/rig/final207.sh`（**就是它跑出的这张表**；里面 `US` 已经指向 `ls2-varA-rig.jar`）。
 
 ## 3. 本轮踩过并修掉/记录下来的东西（别重复踩）
 
@@ -100,6 +100,9 @@
 
 ## 5. 常用操作（照抄）
 
+**五个测量脚本已经归档进仓库 `tools/rig/`（含 `tools/rig/README.md` 说明各自用途）**——`%TEMP%` 会被清，
+上面那些数字只有脚本还在时才可复现。它们硬编码了本机路径，换机器先改开头十行。
+
 ```bash
 cd /e/LuciStarlin/LuciStarlink-LS-V2
 export JAVA_HOME='C:\Users\Administrator\.gradle\jdks\eclipse_adoptium-21-amd64-windows.2'
@@ -112,9 +115,13 @@ export JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStoreType=WINDOWS-ROOT
 ./gradlew runClient                           # dev 客户端（单人档玩/看）
 ```
 
-- **四档三方验收**：`bash /c/Users/Administrator/AppData/Local/Temp/zcode-two.sh`（改脚本里的 `US20_JAR` 指向新 rig jar、`OUT` 换目录；36 轮约 30 分钟；它自带端口清理与负载采样）。
-- **单光源/跨区块梯度门**：`bash /tmp/gate205.sh`（= `tools/emitter-gate/` 的变体；期望 15/14/14/14/13/10）。
-- **`/tmp/repro-chunk.sh`**：在玩家存档副本上做 8192 格填/清并转储 A/B（本轮抓 NPE 用的就是这个）。
+- **四档验收（本表就是用这个跑出来的）**：`bash tools/rig/final207.sh` —— 我们 vs ScalableLux 两方，四档依次跑；
+  换引擎改脚本里的 `US`，换输出目录改 `OUT`；一轮约 12 分钟。
+- **要带上 1.x 的三方表**：`bash tools/rig/threeway-engines.sh`（它自带负载采样与残留进程清理；**注意它仍指向 2.0.6 的
+  `ls2-npefix-rig.jar`**，用前先把 `US20_JAR` 换成新 rig jar、`OUT` 换目录）。
+- **单光源/跨区块梯度门**：`bash tools/rig/gate-gradient.sh`（期望 15/14/14/14/13/10）。
+- **批量改动 A/B**：`bash tools/rig/repro-chunk.sh`（8192 格填/清 + 转储）。
+- **残留光诊断**：`bash tools/rig/lightdump-residue.sh`（转储 A → 强制重算 → 转储 B，差就是存档里的残留）。
 - **端口卫生**：25665 原版 / 25666 scalablelux / 25667 lucistarlink / 25668；跑前 `netstat -ano | grep :25666`，有残留就按 PID `taskkill /F /T`。
 - **机器卫生**：收工前 `Stop-Process` 掉 `fabric.dli`（游戏）与 `runServer`；注意 Git Bash 的 `taskkill /F` 会失效，要用 `cmd //c`。
 
