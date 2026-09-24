@@ -687,9 +687,10 @@ public final class StarLightInterface {
         final long lucisSettleT0 = System.nanoTime();
 
         try {
-        // the image lane settles first: its regions carry the block half of the bursts it captured at setBlock
-        // time, and the flush loop below skips those chunks' block seeding (covers()) so nothing double-settles
-        if (this.lucis$imageLane != null) {
+        // the image lane settles first - but only at real settle points: a chunk-switch flush (keepOne) happens
+        // mid-apply for every chunk a burst walks through, and settling there re-packed the same regions O(chunks)
+        // times per pass (border measured 3x slower through exactly that)
+        if (this.lucis$imageLane != null && !keepOne) {
             this.lucis$imageLane.settle();
         }
         this.lucis$flushPendingEditsBody(keepOne, keepKey, settle);

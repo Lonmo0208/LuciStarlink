@@ -46,16 +46,21 @@ public final class ImageLane {
 
     private static final int REGION_CHUNKS = 1;
     private static final int HALO_CHUNKS = 1;
+    private static final int LANE_MAX_CHANGES = 2048;
+    private static final int LANE_MIN_CHANGES_PER_CHUNK = 64;
     private static final long CACHE_BYTE_BUDGET = 128L * 1024L * 1024L;
 
     private static final ConcurrentHashMap<StarLightInterface, ImageLane> LANES = new ConcurrentHashMap<>();
-    private static final java.util.Set<Long> EVICTIONS = ConcurrentHashMap.newKeySet();
 
     private final StarLightInterface owner;
     private final OwnedRegionImageCache cache = new OwnedRegionImageCache();
     private final ImageBlockLightEngine engine = new ImageBlockLightEngine();
     private final ImageMaterialCache materialCache = new ImageMaterialCache();
     private final Long2ObjectOpenHashMap<RuntimeLightChangeBuffer> pending = new Long2ObjectOpenHashMap<>();
+    private final it.unimi.dsi.fastutil.longs.LongOpenHashSet staleRegions = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
+    private final it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap qualifyCache = new it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap();
+    /** Chunk keys the current settle took over; consulted by covers() after the buffer is drained. */
+    private final it.unimi.dsi.fastutil.longs.LongOpenHashSet lastHandled = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     private int worldgenDepth;
 
     /** Live-world evidence that the lane is the one doing the work (surfaced through stats). */
@@ -150,30 +155,72 @@ public final class ImageLane {
         return !this.pending.isEmpty();
     }
 
+    /**
+     * The routing predicate, shared by the flush (which chunks' block half the lane takes) and the settle (which
+     * regions the lane applies). A region qualifies only when its burst is CONCENTRATED: some chunk carries at
+     * least {@link #LANE_MIN_CHANGES_PER_CHUNK} changes and the region stays under {@link #LANE_MAX_CHANGES}.
+     * The lane's per-region fixed cost (pack, publish, re-adopts, ~0.5-1 ms) only pays for concentrated traffic;
+     * measured on the harness shapes: dense (2048 in one chunk) wins by ~25% through the lane, while border
+     * (~5 per chunk over 19 chunks), tiny bursts (sky_hole's 25) and huge ones (structure's 4096, above the cap)
+     * are cheaper on the grouped nibble path.
+     */
+    private boolean regionQualifies(final ImageRegionBounds bounds, final RuntimeLightChangeBuffer buffered) {
+        // decision cache: the buffer only grows between settles, so (size -> verdict) is a sound memo and
+        // hasUpdates() polls during the wait must not rescan the whole buffer every call
+        final long cacheKey = bounds.coreRegionKey();
+        final long cached = this.qualifyCache.get(cacheKey);
+        if (cached != 0L && (cached >>> 1) == buffered.size()) {
+            return (cached & 1L) != 0L;
+        }
+        if (buffered == null || buffered.isEmpty() || buffered.size() > LANE_MAX_CHANGES) {
+            return false;
+        }
+        final int minChunkX = bounds.minBlockX() >> 4, minChunkZ = bounds.minBlockZ() >> 4;
+        final int width = bounds.widthBlocks();
+        final int depth = bounds.depthBlocks();
+        final int area = bounds.area();
+
+        // count changes per chunk; the cap bounds the sweep
+        final it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap perChunk =
+                new it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap();
+        for (int i = 0; i < buffered.size(); i++) {
+            final int index = RuntimeLightChangeBuffer.localIndex(buffered.get(i));
+            final int x = index % width, z = (index / width) % depth, y = index / area;
+            final long chunkKey = ImageRegionBounds.regionKey(minChunkX + (x >> 4), minChunkZ + (z >> 4));
+            perChunk.addTo(chunkKey, 1);
+        }
+        boolean verdict = false;
+        for (final it.unimi.dsi.fastutil.longs.Long2IntMap.Entry e : perChunk.long2IntEntrySet()) {
+            if (e.getIntValue() >= LANE_MIN_CHANGES_PER_CHUNK) {
+                verdict = true;
+                break;
+            }
+        }
+        this.qualifyCache.put(cacheKey, ((long) buffered.size() << 1) | (verdict ? 1L : 0L));
+        return verdict;
+    }
+
     public boolean covers(final int chunkX, final int chunkZ) {
+        final long key = ca.spottedleaf.starlight.common.util.CoordinateUtils.getChunkKey(chunkX, chunkZ);
+        if (this.lastHandled.contains(key)) {
+            return true; // settled this flush: the buffer is drained but the lane owns this chunk's block half
+        }
         if (this.pending.isEmpty()) {
             return false;
         }
         final ServerLevel level = (ServerLevel) this.owner.world;
         final ImageRegionBounds bounds =
                 ImageRegionBounds.around(new ChunkPos(chunkX, chunkZ), level, REGION_CHUNKS, HALO_CHUNKS);
-        return this.pending.containsKey(bounds.coreRegionKey());
+        return this.regionQualifies(bounds, this.pending.get(bounds.coreRegionKey()));
     }
 
     public void settle() {
+        this.lastHandled.clear();
         // hasUpdates() is also asked from the light thread, where none of this may run; the buffer simply waits
         // for the next server-thread settle point (the tick hook guarantees one per tick)
         if (!(this.owner.world instanceof ServerLevel serverLevel)
                 || !serverLevel.getChunkSource().chunkMap.mainThreadExecutor.isSameThread()) {
             return;
-        }
-
-        // writes that bypassed the lane invalidate regions wholesale; the next getOrCreate re-adopts
-        if (!EVICTIONS.isEmpty()) {
-            for (final Long key : EVICTIONS) {
-                this.cache.remove(key);
-            }
-            EVICTIONS.clear();
         }
 
         if (this.pending.isEmpty()) {
@@ -190,7 +237,31 @@ public final class ImageLane {
             }
 
             final ImageRegionBounds bounds = this.boundsFor(level, entry.getLongKey());
-            final RuntimeRegionImageState state = this.cache.getOrCreate(bounds);
+
+            // routing: a region whose burst is not concentrated stays entirely on the grouped nibble path. The
+            // flush never removed those chunks from pendingEdits, so the nibble path applies them; our own planes
+            // fall behind the world as a result, and the stale mark forces a full re-adopt before a later
+            // qualifying settle may trust them. Non-destructive on purpose: hasUpdates() reaches this many times
+            // during one wait, and evicting or clearing here would churn the mid-apply state.
+            if (!this.regionQualifies(bounds, buffer)) {
+                this.staleRegions.add(entry.getLongKey());
+                if (buffer.size() > LANE_MAX_CHANGES) {
+                    // can never qualify at this size; the entries are dead weight (nibble path owns the work)
+                    buffer.clear();
+                    this.pending.remove(entry.getLongKey());
+                }
+                continue;
+            }
+
+            final RuntimeRegionImageState state;
+
+            if (this.staleRegions.remove(entry.getLongKey())) {
+                // skipped settles let the nibble path apply changes we never mirrored: re-adopt everything
+                this.cache.remove(entry.getLongKey());
+                state = this.cache.getOrCreate(bounds);
+            } else {
+                state = this.cache.getOrCreate(bounds);
+            }
             final ImageRegionData data = state.data();
 
             if (!state.initialized()) {
@@ -209,8 +280,17 @@ public final class ImageLane {
             this.capturedChanges += buffer.size();
             this.packDirty(data, entry.getLongKey());
             buffer.clear();
+            this.pending.remove(entry.getLongKey());
+
+            // every chunk of this region is now lane-owned for the flush that follows
+            final int minChunkX = bounds.minBlockX() >> 4, minChunkZ = bounds.minBlockZ() >> 4;
+            for (int dz = -HALO_CHUNKS; dz < bounds.regionChunks() + HALO_CHUNKS; dz++) {
+                for (int dx = -HALO_CHUNKS; dx < bounds.regionChunks() + HALO_CHUNKS; dx++) {
+                    this.lastHandled.add(ca.spottedleaf.starlight.common.util.CoordinateUtils.getChunkKey(
+                            minChunkX + dx, minChunkZ + dz));
+                }
+            }
         }
-        this.pending.clear();
         this.cache.trimToSize(-1, CACHE_BYTE_BUDGET);
     }
 
@@ -411,17 +491,35 @@ public final class ImageLane {
     }
 
     // ------------------------------------------------------------------------------------------------------------
-    // eviction: anything that writes block light outside this lane re-adopts on next use
+    // external invalidation: anything that writes block light outside this lane marks sections for re-adopt
     // ------------------------------------------------------------------------------------------------------------
 
     /** Called from the base engine's write paths (any thread): this chunk's block light changed underneath us. */
     public static void onEngineBlockWrite(final int chunkX, final int chunkZ) {
-        // the chunk's own tile and the eight neighbours whose halo covers it; removal at the next settle
+        // Mark, don't evict. The first cut evicted the nine overlapping regions, and worldgen's light stages -
+        // which call this for every chunk they light - kept re-initializing the workload's region from scratch
+        // (~8 ms a pop), which showed up as 23 ms passes on sky_hole. An external mark instead re-adopts just the
+        // written chunk's sections at the next settle (~0.5 ms), which is all the correctness requires.
+        for (final ImageLane lane : LANES.values()) {
+            lane.markEngineWrite(chunkX, chunkZ);
+        }
+    }
+
+    private void markEngineWrite(final int chunkX, final int chunkZ) {
+        // the chunk's own tile and the eight neighbours whose halo covers it
         for (int dz = -1; dz <= 1; dz++) {
             for (int dx = -1; dx <= 1; dx++) {
                 final int tileX = Math.floorDiv(chunkX + dx, REGION_CHUNKS);
                 final int tileZ = Math.floorDiv(chunkZ + dz, REGION_CHUNKS);
-                EVICTIONS.add(ImageRegionBounds.regionKey(tileX, tileZ));
+                final RuntimeRegionImageState state =
+                        this.cache.getInitialized(ImageRegionBounds.regionKey(tileX, tileZ));
+
+                if (state == null) {
+                    continue;
+                }
+                for (int sectionY = this.owner.minSection; sectionY <= this.owner.maxSection; sectionY++) {
+                    state.markExternalSection(SectionPos.of(chunkX, sectionY, chunkZ).asLong(), false);
+                }
             }
         }
     }
