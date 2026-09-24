@@ -6,6 +6,93 @@ the 1.x branch's own changelog; for what belongs to whom see [NOTICE](NOTICE) an
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 
+## 2.0.7 — 2026-09-24
+
+**`dense_chunk_patch` and `sky_hole` are won as well — three of the four cells now beat both predecessors on the
+engine metric.** The lever was where the light work runs, not what it does.
+
+**The measurement that found it.** The harness records the apply phase and the wait phase separately, and on
+`dense_chunk_patch` they read:
+
+| | apply | wait | per change (apply) |
+|---|---|---|---|
+| before | **20.8 ms** | 0.01 ms | 3388 ns |
+| ScalableLux | 2.2 ms | 9.8 ms | 543 ns |
+
+That is the whole story: this engine computes the light **inside the `setBlock` loop**, because the edit buffer
+flushed every 256 changes and every flush settles its share with a full cache setup, a drain and a publish — and a
+drain walks the light that is already there. One 4096-change burst therefore repeated that walk sixteen times, in the
+apply phase, while ScalableLux handed the same work to the light thread once.
+
+**The change: `LUCIS_PENDING_FLUSH_SIZE` 256 → 8192** (a system-property override stays). One burst now settles once.
+Measured on the same harness: apply 20.8 → 2.5 ms, `minPass` 5.91 → **3.56 ms** against ScalableLux's 4.32. The tick
+hook still settles every tick, so a larger buffer can cost at most one tick of latency — never correctness.
+
+**The change that was tried and rejected**: removing the flush that happens when the burst walks into a new chunk.
+It looked right for `block_toggle_border` (many chunks, few changes each) and won that cell by 0.2 ms — but
+`sky_hole` went 0.55 → 1.32 ms and `dense` 3.56 → 4.42 ms in the same two-round interleaved comparison, so it was
+reverted. Recorded here because the reasoning is attractive and the measurement says no.
+
+**`block_toggle_border` remains lost (5.58 vs ScalableLux's 4.16), and it is now the only unexplained number in this
+project.** On it the two engines produce byte-identical light *and* an identical world-state hash, run propagation code
+that is ScalableLux's verbatim (checked both as source and as compiled bytecode, which is the same size), and the
+bytecode-instrumentation, the inline lane, the sky strategy, the buffer size, the bulk-relight path, position boxing,
+GC/allocation (JFR: 73 vs 67 young collections) and the mixin layer (all mixins semantically identical to upstream)
+have each been measured and ruled out. The engine spends ~1.5x more per BFS pop than its own upstream on identical
+work, and that is where the next attempt has to start.
+## 2.0.7 — 2026-09-24
+
+**`dense_chunk_patch` and `sky_hole` are won as well — three of the four cells now beat both predecessors on the
+engine metric.** The lever was where the light work runs, not what it does.
+
+**The measurement that found it.** The harness records the apply phase and the wait phase separately, and on
+`dense_chunk_patch` they read:
+
+| | apply | wait | per change (apply) |
+|---|---|---|---|
+| before | **20.8 ms** | 0.01 ms | 3388 ns |
+| ScalableLux | 2.2 ms | 9.8 ms | 543 ns |
+
+That is the whole story: this engine computes the light **inside the `setBlock` loop**, because the edit buffer
+flushed every 256 changes and every flush settles its share with a full cache setup, a drain and a publish — and a
+drain walks the light that is already there. One 4096-change burst therefore repeated that walk sixteen times, in the
+apply phase, while ScalableLux handed the same work to the light thread once.
+
+**The change: `LUCIS_PENDING_FLUSH_SIZE` 256 → 8192** (a system-property override stays). One burst now settles once.
+Measured on the same harness: apply 20.8 → 2.5 ms, `minPass` 5.91 → **3.56 ms** against ScalableLux's 4.32. The tick
+hook still settles every tick, so a larger buffer can cost at most one tick of latency — never correctness.
+
+**The change that was tried and rejected**: removing the flush that happens when the burst walks into a new chunk.
+It looked right for `block_toggle_border` (many chunks, few changes each) and won that cell by 0.2 ms — but
+`sky_hole` went 0.55 → 1.32 ms and `dense` 3.56 → 4.42 ms in the same two-round interleaved comparison, so it was
+reverted. Recorded here because the reasoning is attractive and the measurement says no.
+
+**`block_toggle_border` remains lost (5.58 vs ScalableLux's 4.16), and it is now the only unexplained number in this
+project.** On it the two engines produce byte-identical light *and* an identical world-state hash, run propagation code
+that is ScalableLux's verbatim (checked both as source and as compiled bytecode, which is the same size), and the
+bytecode-instrumentation, the inline lane, the sky strategy, the buffer size, the bulk-relight path, position boxing,
+GC/allocation (JFR: 73 vs 67 young collections) and the mixin layer (all mixins semantically identical to upstream)
+have each been measured and ruled out. The engine spends ~1.5x more per BFS pop than its own upstream on identical
+work, and that is where the next attempt has to start.
+
+### Acceptance after 2.0.7 (same session, interleaved, 3 rounds each)
+
+| workload | LuciStarlink 2.0.7 | ScalableLux | 1.x (its own window) |
+|---|---|---|---|
+| `structure_cube` | **3.09 ms** | 4.77 ms | 2.87 ms |
+| `dense_chunk_patch` | **3.72 ms** | 3.93 ms | 2.36 ms |
+| `sky_hole` | **0.61 ms** | 0.95 ms | 0.81 ms |
+| `block_toggle_border` | 5.62 ms | **4.12 ms** | 0.76 ms |
+
+**Against ScalableLux: three cells won, one lost.** Structure's fingerprint is still `sky=905931078dfc5ace`
+(bit-identical to vanilla and to ScalableLux) in every run.
+
+**Against the 1.x line: it still leads the engine metric on three cells** — its region-batched engine does small
+synchronous work in a way this one does not — while trailing on the player axis by 20–35 ms on three of four
+(1.x 67/72/86 ms against 49–51 ms here and for ScalableLux). Its light is identical to neither vanilla nor
+ScalableLux; ours is identical to both.
+
+
 ## 2.0.6 — 2026-09-24
 
 **Fixes the defect behind the reported light loss after large edits**: the block-light half of every burst past the

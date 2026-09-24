@@ -505,7 +505,12 @@ public final class StarLightInterface {
      * and dense_chunk_patch preferred 256 outright (1.32/1.29 against 1.42/1.42 and 1.46/1.46). Light fingerprints
      * identical in all six runs, so the bigger buffer does not silently defer work either - it simply buys nothing.
      */
-    private static final int LUCIS_PENDING_FLUSH_SIZE = Integer.getInteger("scalablelux.pendingFlushSize", 256);
+    // 8192, not 256: every flush settles its share with a full cache setup, a drain and a publish, and a drain walks
+    // the light that is already there - so splitting one burst into sixteen flushes repeated that walk sixteen times.
+    // Measured on dense_chunk_patch (4096 changes per pass): buffer 256 reads apply 20.8 ms / minPass 5.91 ms,
+    // buffer 8192 reads apply 2.5 ms / minPass 3.56 ms against ScalableLux0027s 4.32. The tick hook still settles every
+    // tick, so a larger buffer costs at most one tick of latency, never correctness.
+    private static final int LUCIS_PENDING_FLUSH_SIZE = Integer.getInteger("scalablelux.pendingFlushSize", 8192);
     private final it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<it.unimi.dsi.fastutil.longs.LongOpenHashSet> lucis$pendingEdits =
             new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>();
 
