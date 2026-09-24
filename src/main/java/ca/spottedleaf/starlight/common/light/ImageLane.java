@@ -66,6 +66,8 @@ public final class ImageLane {
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet lastHandled = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     private int worldgenDepth;
     private long capturesSinceSettle;
+    private long lastCaptureChunkKey = Long.MIN_VALUE;
+    private ImageRegionBounds lastCaptureBounds;
 
     /** Live-world evidence that the lane is the one doing the work (surfaced through stats). */
     public long settleCount;
@@ -133,13 +135,23 @@ public final class ImageLane {
         final ChunkAccess chunk = this.owner.getAnyChunkNow(chunkPos.x, chunkPos.z);
 
         if (chunk == null || !chunk.getPersistedStatus().isOrAfter(net.minecraft.world.level.chunk.status.ChunkStatus.LIGHT)) {
+            this.lastCaptureChunkKey = Long.MIN_VALUE;
             return;
         }
         if (!LightEngine.hasDifferentLightProperties(level, pos, oldState, newState)) {
             return;
         }
 
-        final ImageRegionBounds bounds = ImageRegionBounds.around(chunkPos, level, REGION_CHUNKS, HALO_CHUNKS);
+        // dense bursts arrive chunk-by-chunk (2048 changes in one chunk), so the per-change bounds construction
+        // - a record allocation plus four level calls - is hoisted behind a chunk-key check
+        final long chunkKey = ImageRegionBounds.regionKey(chunkPos.x, chunkPos.z);
+        ImageRegionBounds bounds = this.lastCaptureChunkKey == chunkKey ? this.lastCaptureBounds : null;
+
+        if (bounds == null) {
+            bounds = ImageRegionBounds.around(chunkPos, level, REGION_CHUNKS, HALO_CHUNKS);
+            this.lastCaptureBounds = bounds;
+            this.lastCaptureChunkKey = chunkKey;
+        }
         final int localX = pos.getX() - bounds.minBlockX();
         final int localY = pos.getY() - bounds.minBuildY();
         final int localZ = pos.getZ() - bounds.minBlockZ();
@@ -521,15 +533,24 @@ public final class ImageLane {
             if (!nibble.isInitialisedUpdating()) {
                 return false;
             }
+        } else if (!nibble.isInitialisedUpdating()) {
+            // allocate the storage and mark the array dirty through the owning API; everything below then
+            // overwrites the whole 2048-byte array, so the one-cell write is purely the allocation handle
+            nibble.set(0, light[baseY * area + minZ * width + minX] & 0xF);
         }
 
+        // paired direct write: the section's cells are fully owned by the region, so each packed byte carries two
+        // region levels (even x low, odd x high - the inverse of adoptSectionData). One array pass instead of 4096
+        // set() calls measured as the difference between a 2-3 ms and a ~0.5 ms pack on dense_chunk_patch.
+        final byte[] packed = nibble.storageUpdating;
         for (int y = 0; y < 16; y++) {
             final int yBase = (baseY + y) * area;
             for (int z = 0; z < 16; z++) {
                 final int rowBase = yBase + (minZ + z) * width + minX;
-                final int packedBase = (y << 8) | (z << 4);
-                for (int x = 0; x < 16; x++) {
-                    nibble.set(packedBase | x, light[rowBase + x] & 0xF);
+                final int packedRow = ((y << 8) | (z << 4)) >> 1;
+                for (int x = 0; x < 16; x += 2) {
+                    packed[packedRow + (x >> 1)] =
+                            (byte) ((light[rowBase + x] & 0xF) | ((light[rowBase + x + 1] & 0xF) << 4));
                 }
             }
         }
