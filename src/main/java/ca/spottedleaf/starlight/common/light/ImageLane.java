@@ -59,6 +59,8 @@ public final class ImageLane {
     private static final int LANE_MAX_CHANGES = Integer.getInteger("scalablelux.imageLaneMaxChanges", 2048);
     /** Below this, a single-region burst stays on the synchronous nibble path (sky_hole's shape). */
     private static final int LANE_MIN_CHANGES = Integer.getInteger("scalablelux.imageLaneMinChanges", 64);
+    /** A small burst spread over at least this many regions still takes the lane (border's shape: 19 regions). */
+    private static final int LANE_MIN_REGIONS = Integer.getInteger("scalablelux.imageLaneMinRegions", 8);
     private static final long CACHE_BYTE_BUDGET = 128L * 1024L * 1024L;
 
     private static final ConcurrentHashMap<StarLightInterface, ImageLane> LANES = new ConcurrentHashMap<>();
@@ -219,11 +221,38 @@ public final class ImageLane {
         // nibble grouped path runs inline in the same flush, so the async overwrite that exclusive ownership
         // exists to prevent cannot happen.
         //
-        // A region the lane has ALREADY adopted stays lane-owned whatever the burst size: handing it to the
-        // other path would let that path write light the lane's planes do not know about.
-        if (buffered.size() < LANE_MIN_CHANGES && this.pending.size() == 1
-                && this.cache.getInitialized(bounds.coreRegionKey()) == null) {
+        // The discriminator is the number of REGIONS, measured on the two shapes that disagree: sky_hole's 25
+        // changes reach 1-4 regions and the lane's per-region machinery costs more than it saves (2.79 ms against
+        // 0.82 on the nibble path), while border's ~5 changes per chunk reach 19 regions and the lane wins there
+        // (3.9 against ~4.5 when the same bursts went to the nibble path). Small and narrow -> nibble, small but
+        // wide -> lane.
+        //
+        // A region the lane adopted earlier can be handed BACK: the skip branch drops its state and marks it
+        // stale, so nothing stale is ever read and the nibble path owns the changes from then on. Keeping it
+        // lane-owned forever was the earlier rule, and it is what made sky_hole stay slow once a warmup burst had
+        // adopted its region.
+        if (buffered.size() < LANE_MIN_CHANGES && this.pending.size() < LANE_MIN_REGIONS) {
             return false;
+        }
+
+        // Neighbourhood must be past LIGHT. A region whose 3x3 neighbourhood is still generating takes worldgen
+        // writes (features into loaded chunks fire the capture funnel), and lan-ing those costs the lane's
+        // per-region machinery while the base engine is already handling that chunk's light - measured as 1.2-1.7
+        // ms of materialization plus 0.7-1.0 ms of external re-adopts PER PASS on sky_hole, whose box sits inside
+        // the harness's still-generating ring. Generating chunks stay on the base engine's own path, exactly as
+        // they are with the lane off.
+        final int tileX = (int) (bounds.coreRegionKey() & 0xFFFFFFFFL);
+        final int tileZ = (int) (bounds.coreRegionKey() >> 32);
+
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                final ChunkAccess neighbour = this.owner.getAnyChunkNow(tileX + dx, tileZ + dz);
+
+                if (neighbour == null
+                        || !neighbour.getPersistedStatus().isOrAfter(net.minecraft.world.level.chunk.status.ChunkStatus.LIGHT)) {
+                    return false;
+                }
+            }
         }
 
         return true;
