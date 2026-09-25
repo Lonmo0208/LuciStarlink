@@ -5,6 +5,7 @@ import ca.spottedleaf.starlight.common.debug.LuxProfiler;
 import ca.spottedleaf.starlight.common.light.image.ImageBlockLightEngine;
 import ca.spottedleaf.starlight.common.light.image.ImageMaterial;
 import ca.spottedleaf.starlight.common.light.image.ImageMaterialCache;
+import ca.spottedleaf.starlight.common.light.image.ImageMaterialPlanes;
 import ca.spottedleaf.starlight.common.light.image.ImageRegionBounds;
 import ca.spottedleaf.starlight.common.light.image.ImageRegionData;
 import ca.spottedleaf.starlight.common.light.image.OwnedRegionImageCache;
@@ -44,6 +45,8 @@ public final class ImageLane {
 
     /** Off unless asked for; the fuse in docs/IMAGE-LANE-PLAN.md decides when it flips. */
     public static final boolean ENABLED = Boolean.getBoolean("scalablelux.imageLane");
+    /** Per-settle trace (region, changes, materialized sections); off unless asked for. */
+    public static final boolean LANE_DEBUG = Boolean.getBoolean("scalablelux.imageLaneDebug");
 
     // Region tile size: 4x4 core chunks plus a 1-chunk halo. The tile decides how many region settles a scattered
     // burst pays: border walks ~19 chunks, which at 1-chunk tiles meant 19 inits + 19 packs + 19 publishes a pass
@@ -76,6 +79,7 @@ public final class ImageLane {
     public long capturedChanges;
     public long packedSections;
     public long materializedSections;
+    public long matzThisSettle;
     public long initializedRegions;
     public long captureAttempts;
     public long captureAccepted;
@@ -298,8 +302,14 @@ public final class ImageLane {
             LuxProfiler.laneExternalNanos += System.nanoTime() - lucisExtT0;
 
             final long lucisMatzT0 = System.nanoTime();
+            this.matzThisSettle = 0L;
             this.materializeForChanges(data, level, buffer);
             LuxProfiler.laneMaterializeNanos += System.nanoTime() - lucisMatzT0;
+            if (LANE_DEBUG) {
+            System.out.println("SETTLEDBG region=" + entry.getLongKey() + " changes=" + buffer.size()
+                    + " matzSections=" + this.matzThisSettle + " cached=" + this.cache.size()
+                    + " totalMatz=" + this.materializedSections);
+            }
 
             final long lucisBfsT0 = System.nanoTime();
             this.engine.applyChanges(data, buffer);
@@ -449,6 +459,7 @@ public final class ImageLane {
             this.materializeSection(data, level, chunkX, chunkZ, sectionY, sectionIndex, pos);
             data.markLightMaterialized(linear);
             this.materializedSections++;
+            this.matzThisSettle++;
         }
     }
 
@@ -477,62 +488,40 @@ public final class ImageLane {
             data.adoptSectionData(cx, cz, sectionIndex, nibble.storageUpdating, false);
         }
 
-        // materials: air sections are zero already; anything else is read cell by cell, once
+        // materials: air sections are zero already; anything else comes from the CHUNK-LEVEL material plane,
+        // which is extracted once per section and reused by every region that needs it (a scattered change
+        // reaches sections that up to nine neighbouring regions materialized separately, and each pass reaches
+        // new y bands - measured as ~760 section extractions a pass on border, ~10 ms of the settle)
         final LevelChunkSection section = sectionIndex < sections.length ? sections[sectionIndex] : null;
         if (section != null && !section.hasOnlyAir()) {
-            this.extractMaterials(data, level, chunkX, chunkZ, sectionY, section, pos);
+            final ImageMaterialPlanes.Plane plane = ImageMaterialPlanes.get(level, section, chunkX, sectionY, chunkZ,
+                    this.materialCache, pos);
+            this.copyPlane(data, plane, chunkX, chunkZ, sectionIndex);
         }
     }
 
-    private void extractMaterials(final ImageRegionData data, final ServerLevel level,
-                                  final int chunkX, final int chunkZ, final int sectionY,
-                                  final LevelChunkSection section, final BlockPos.MutableBlockPos pos) {
-        // Homogeneity certificates (1.x's LuxRegionExtractor rule, ported): a section whose palette certifies a
-        // single material class is bulk-filled instead of visited cell by cell. Air fills nothing (the plane is
-        // already zero); an all-opaque, zero-emission section fills opacity 15. Both are exact with respect to
-        // the per-cell material rules, and they are what makes a section cost ~1 us instead of ~100 us.
-        if (section.hasOnlyAir()) {
-            return;
-        }
-
-        final int baseX = chunkX << 4;
-        final int baseZ = chunkZ << 4;
-        final int baseY = sectionY << 4;
+    /** Copies a plane's 4096 cells into the region's padded planes. Two array-level loops, no per-cell lookups. */
+    private void copyPlane(final ImageRegionData data, final ImageMaterialPlanes.Plane plane,
+                           final int chunkX, final int chunkZ, final int localSection) {
+        final int baseX = (chunkX << 4) + 1;
+        final int baseZ = (chunkZ << 4) + 1;
+        final int baseY = (localSection << 4) + 1;
         final int width = data.paddedWidth;
         final int area = data.paddedArea;
-
-        if (!section.maybeHas(state -> !(state.getLightEmission() == 0
-                && !state.useShapeForLightOcclusion()
-                && state.getLightBlock(level, BlockPos.ZERO) == 15))) {
-            // every palette entry is position-independent, full-opacity and emits nothing: one fill per row.
-            // The predicate's three clauses are exactly what the per-cell material rule needs to yield
-            // opacity 15 / emission 0 for every cell - a shape-dependent or glass state fails it and falls
-            // through to the cell walk, so the certificate can never disagree with the per-cell result.
-            for (int y = 0; y < 16; y++) {
-                final int yBase = ((baseY + y) + 1) * area;
-                for (int z = 0; z < 16; z++) {
-                    final int rowBase = yBase + ((baseZ + z) + 1) * width + (baseX + 1);
-                    java.util.Arrays.fill(data.opacity, rowBase, rowBase + 16, (byte) 15);
-                    java.util.Arrays.fill(data.emission, rowBase, rowBase + 16, (byte) 0);
-                }
-            }
-            return;
-        }
+        final byte[] opacity = data.opacity;
+        final byte[] emission = data.emission;
 
         for (int y = 0; y < 16; y++) {
             for (int z = 0; z < 16; z++) {
-                for (int x = 0; x < 16; x++) {
-                    pos.set(baseX + x, baseY + y, baseZ + z);
-                    final BlockState state = section.getBlockState(x, y, z);
-                    final int packed = this.materialCache.lookupLight(level, state, pos);
-                    final int index = data.index(baseX + x, baseY + y, baseZ + z);
+                final int rowBase = (baseY + y) * area + (baseZ + z) * width + baseX;
+                final int planeBase = (y << 8) | (z << 4);
 
-                    data.opacity[index] = ImageMaterial.opacity(packed);
-                    data.emission[index] = ImageMaterial.emission(packed);
-                }
+                System.arraycopy(plane.opacity, planeBase, opacity, rowBase, 16);
+                System.arraycopy(plane.emission, planeBase, emission, rowBase, 16);
             }
         }
     }
+
 
     /** Re-adopts one section's light from the authoritative nibbles (external invalidation). */
     private void adoptSection(final ImageRegionData data, final long packedSectionPos) {
