@@ -292,3 +292,20 @@ border，与 SL 交错（该窗口 SL=4.08/4.13）：
    **1.x 完全不付这笔**：它的区域图像**就是**存储，没有"派生"这一步。这就是 border 差距的机制。
    关掉它需要"格粒度的部分物化"——但 reach 盒是 33³ 格 > 16³ 的 section，所以按 section 提取已经是更便宜的粒度，
    格粒度路径必须先赢过 palette 走查（而不是赢过填充）。
+
+### 区块级材质平面（`cb93a8c`）——**border 的物化成本砍 6-17 倍**
+
+结算级 trace（`-Dscalablelux.imageLaneDebug`）推翻了"物化是一次性首触"的读数：**每个 pass 都会新触达新的 y 波段与光环区块**
+（~760 section/pass），且**同一 section 会被最多 9 个相邻 1 区块区域各走一遍**。
+
+修法 = `ImageMaterialPlanes`（一个 section 的 opacity/emission 字节，提取一次、跨区域跨 pass 复用；上限 4096 section =
+32 MB，超限整体清空——代价是一次重新提取、绝不可能静默出错）+ **精确性靠新 `LevelChunkSectionMixin`**：
+`setBlockState` 的两个描述符（§18 的"唯一写入漏斗"）把改动的那一格**直接写进平面**；`recalcBlockCounts` 丢弃平面；
+区块重载导致 section 对象更换 → identity 检查失败 → 重建。**平面精确跟随写入，不是近似。**
+
+border 实测（与 SL 交错，该窗口 SL 4.06/4.07）：**matz 6178/2067 → 656/361 µs、结算 8.53/4.43 → 3.92/3.17 ms、
+minPass 10.28/5.87 → 5.61/4.88**。tile 扫描复现（1×1 ≈ 2×2、4×4 更差）→ 默认保持 1×1。
+**border 仍落后 SL 约 20-38%，但其最大单项已是 BFS（1.4-1.6 ms）——那是 SL 也在跑的同一段 BFS**，
+所以剩余差距是我们的每结算打包/发布 + 较慢的 apply，不再有"材质派生"这一项。
+调试坑：padded 基址必须用**局部** section 索引（overworld minBuildY=-64 会让世界基址为负 → arraycopy 越界消失）、
+perl 处理两行签名会复制行、`gradlew | head` 仍会 SIGPIPE 打断构建。
