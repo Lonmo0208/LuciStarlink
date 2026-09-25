@@ -50,7 +50,6 @@ public final class ImageLane {
     // Routing thresholds, property-tunable so the shape question can be probed without a rebuild (the border
     // attempt-cost split ran with imageLaneMaxChanges=0: the lane enabled but never taking traffic).
     private static final int LANE_MAX_CHANGES = Integer.getInteger("scalablelux.imageLaneMaxChanges", 2048);
-    private static final int LANE_MIN_CHANGES_PER_CHUNK = Integer.getInteger("scalablelux.imageLaneMinPerChunk", 64);
     private static final long CACHE_BYTE_BUDGET = 128L * 1024L * 1024L;
 
     private static final ConcurrentHashMap<StarLightInterface, ImageLane> LANES = new ConcurrentHashMap<>();
@@ -61,7 +60,6 @@ public final class ImageLane {
     private final ImageMaterialCache materialCache = new ImageMaterialCache();
     private final Long2ObjectOpenHashMap<RuntimeLightChangeBuffer> pending = new Long2ObjectOpenHashMap<>();
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet staleRegions = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
-    private final it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap qualifyCache = new it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap();
     /** Chunk keys the current settle took over; consulted by covers() after the buffer is drained. */
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet lastHandled = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     private int worldgenDepth;
@@ -188,49 +186,17 @@ public final class ImageLane {
 
     /**
      * The routing predicate, shared by the flush (which chunks' block half the lane takes) and the settle (which
-     * regions the lane applies). A region qualifies only when its burst is CONCENTRATED: some chunk carries at
-     * least {@link #LANE_MIN_CHANGES_PER_CHUNK} changes and the region stays under {@link #LANE_MAX_CHANGES}.
-     * The lane's per-region fixed cost (pack, publish, re-adopts, ~0.5-1 ms) only pays for concentrated traffic;
-     * measured on the harness shapes: dense (2048 in one chunk) wins by ~25% through the lane, while border
-     * (~5 per chunk over 19 chunks), tiny bursts (sky_hole's 25) and huge ones (structure's 4096, above the cap)
-     * are cheaper on the grouped nibble path.
+     * regions the lane applies). A region qualifies when its whole burst stays under {@link #LANE_MAX_CHANGES}:
+     * the lane then owns EVERY captured change in it. There is deliberately no per-chunk floor any more: a region
+     * whose burst is small would otherwise be dispatched to the base queue, and the base task executes on the
+     * light thread with seeds captured BEFORE the lane's settle - its decrease wave zeroes the lane's field in
+     * its window and rebuilds only its own seeds' contribution (measured: the gate's patch read 1/0/0 after the
+     * lane had packed 15s). Correctness first: the lane handles what it captured, the base queue never touches
+     * a lane-adopted region. structure_cube (4096 > the cap) stays on the grouped nibble path, which is
+     * synchronous in the same flush and therefore race-free.
      */
     private boolean regionQualifies(final ImageRegionBounds bounds, final RuntimeLightChangeBuffer buffered) {
-        if (buffered == null || buffered.isEmpty() || buffered.size() > LANE_MAX_CHANGES) {
-            return false;
-        }
-        // decision cache: the buffer only grows between settles, so (size -> verdict) is a sound memo and
-        // hasUpdates() polls during the wait must not rescan the whole buffer every call
-        final long cacheKey = bounds.coreRegionKey();
-        final long cached = this.qualifyCache.get(cacheKey);
-        if (cached != 0L && (cached >>> 1) == buffered.size()) {
-            return (cached & 1L) != 0L;
-        }
-        final int minChunkX = bounds.minBlockX() >> 4, minChunkZ = bounds.minBlockZ() >> 4;
-        // the buffer's indices are PADDED (the moat is one cell thick): decode with the padded strides and
-        // subtract the pad before mapping a cell back to its chunk
-        final int width = bounds.paddedWidth();
-        final int depth = bounds.paddedDepth();
-        final int area = bounds.paddedArea();
-
-        // count changes per chunk; the cap bounds the sweep
-        final it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap perChunk =
-                new it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap();
-        for (int i = 0; i < buffered.size(); i++) {
-            final int index = RuntimeLightChangeBuffer.localIndex(buffered.get(i));
-            final int x = index % width, z = (index / width) % depth, y = index / area;
-            final long chunkKey = ImageRegionBounds.regionKey(minChunkX + ((x - 1) >> 4), minChunkZ + ((z - 1) >> 4));
-            perChunk.addTo(chunkKey, 1);
-        }
-        boolean verdict = false;
-        for (final it.unimi.dsi.fastutil.longs.Long2IntMap.Entry e : perChunk.long2IntEntrySet()) {
-            if (e.getIntValue() >= LANE_MIN_CHANGES_PER_CHUNK) {
-                verdict = true;
-                break;
-            }
-        }
-        this.qualifyCache.put(cacheKey, ((long) buffered.size() << 1) | (verdict ? 1L : 0L));
-        return verdict;
+        return buffered != null && !buffered.isEmpty() && buffered.size() <= LANE_MAX_CHANGES;
     }
 
     public boolean covers(final int chunkX, final int chunkZ) {
@@ -326,6 +292,62 @@ public final class ImageLane {
             this.settleCount++;
             this.capturedChanges += buffer.size();
             this.packDirty(data, entry.getLongKey());
+
+            if (this.settleCount == 1) {
+                // TEMP diagnostic: did the BFS light the region it was handed?
+                int emitters = 0;
+                int lit10 = 0;
+                int maxLight = 0;
+                int airCells = 0;
+                for (int i = 0; i < data.paddedVolume; i++) {
+                    final int em = data.emission[i] & 0xF;
+                    if (em >= 14) {
+                        emitters++;
+                    }
+                    final int levelV = data.blockLight[i] & 0xF;
+                    if (levelV > maxLight) {
+                        maxLight = levelV;
+                    }
+                    if (levelV >= 10) {
+                        lit10++;
+                    }
+                    if (data.opacity[i] == 0 && em == 0) {
+                        airCells++;
+                    }
+                }
+                System.out.println("LANEDUMP key=" + entry.getLongKey() + " changes=" + buffer.size()
+                        + " emitters14=" + emitters + " lit10=" + lit10 + " maxLight=" + maxLight
+                        + " airCells=" + airCells + " opacityMaxAtEmitters="
+                        + data.opacity[data.blockLight.length - 1]);
+                System.out.println("LANEDUMP2 opacity0-15hist:");
+                final int[] hist = new int[16];
+                for (int i = 0; i < data.paddedVolume; i++) {
+                    hist[data.opacity[i] & 0xF]++;
+                }
+                for (int v = 0; v < 16; v++) {
+                    if (hist[v] > 0) {
+                        System.out.println("  opacity=" + v + " cells=" + hist[v]);
+                    }
+                }
+                // TEMP: region row vs packed nibble row along the emitter line (world y=-37, z=-16)
+                final ChunkAccess dumpChunk = this.owner.getAnyChunkNow(0, -1);
+                if (dumpChunk != null) {
+                    final SWMRNibbleArray[] dn = ((ExtendedChunk) dumpChunk).scalablelux$getBlockNibbles();
+                    final SWMRNibbleArray dNib = dn[1];
+                    final int ly = 27, lz = 0, rowY = ly + 1;
+                    final StringBuilder regionRow = new StringBuilder("LANEDUMP region-row x=12..27: ");
+                    final StringBuilder nibbleRow = new StringBuilder("LANEDUMP nibble-row x=12..27: ");
+                    for (int x = 12; x <= 27; x++) {
+                        final int ri = (rowY) * data.paddedArea + (lz + 1) * data.paddedWidth + (x + 1);
+                        regionRow.append(data.blockLight[ri] & 0xF).append(',');
+                        if (dNib != null && dNib.isInitialisedUpdating()) {
+                            nibbleRow.append(dNib.getUpdating((ly & 15) << 8 | (lz & 15) << 4 | (x & 15))).append(',');
+                        }
+                    }
+                    System.out.println(regionRow.toString());
+                    System.out.println(nibbleRow.toString());
+                }
+            }
             buffer.clear();
 
             // every chunk of this region is now lane-owned for the flush that follows

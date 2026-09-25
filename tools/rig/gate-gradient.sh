@@ -37,6 +37,21 @@ lucistarlink light 14 -36 -14
 lucistarlink light 17 -36 -14
 lucistarlink stats
 say GATE-READ
+lucistarlink relight 2
+schedule function emittertest:read2 4s
+EOF
+cat > $DP/data/emittertest/function/read2.mcfunction <<'EOF'
+say GATE-READ2
+lucistarlink light -1 -37 -16 
+lucistarlink light 0 -37 -16
+lucistarlink light 1 -37 -16
+lucistarlink light 4 -37 -16
+lucistarlink light 7 -37 -16
+lucistarlink light 10 -37 -16
+lucistarlink light 12 -36 -14
+lucistarlink light 14 -36 -14
+lucistarlink light 17 -36 -14
+say GATE-READ2-DONE
 stop
 EOF
 timeout 280 ./gradlew runServerDiag --console=plain > "$LOG" 2>&1
