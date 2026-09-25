@@ -75,6 +75,7 @@ public final class ImageLane {
     public long settleCount;
     public long capturedChanges;
     public long packedSections;
+    public long materializedSections;
     public long initializedRegions;
     public long captureAttempts;
     public long captureAccepted;
@@ -98,7 +99,8 @@ public final class ImageLane {
     public String laneStats() {
         return "attempts=" + this.captureAttempts + " accepted=" + this.captureAccepted + " settles=" + this.settleCount + " captured=" + this.capturedChanges
                 + " packed=" + this.packedSections + " regions=" + this.initializedRegions
-                + " pending=" + this.pending.size() + " cached=" + this.cache.size();
+                + " pending=" + this.pending.size() + " cached=" + this.cache.size()
+                + " matzSecs=" + this.materializedSections;
     }
 
     // capture (server thread, from ServerLevel.onBlockStateChange)
@@ -446,6 +448,7 @@ public final class ImageLane {
             final int sectionIndex = linear / data.sectionsPerPlane;
             this.materializeSection(data, level, chunkX, chunkZ, sectionY, sectionIndex, pos);
             data.markLightMaterialized(linear);
+            this.materializedSections++;
         }
     }
 
