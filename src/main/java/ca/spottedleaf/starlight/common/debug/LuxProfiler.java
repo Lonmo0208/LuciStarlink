@@ -165,6 +165,10 @@ public final class LuxProfiler {
     public static long laneSettleNanos;
     public static long laneSettleRuns;
     public static long laneSettlePolls;
+    public static long laneMaterializeNanos;
+    public static long laneExternalNanos;
+    public static long laneBfsNanos;
+    public static long lanePackNanos;
     /** Sections actually published (one {@code onLightUpdate} each), split by layer - the publish is the one phase
      *  that reads 0.16 ms in the base's per-chunk task and is unmeasured in the inline lane. */
     public static long publishSectionsBlock;
@@ -286,6 +290,10 @@ public final class LuxProfiler {
         laneSettleNanos = 0;
         laneSettleRuns = 0;
         laneSettlePolls = 0;
+        laneMaterializeNanos = 0;
+        laneExternalNanos = 0;
+        laneBfsNanos = 0;
+        lanePackNanos = 0;
         publishSectionsSky = 0;
         settleCalls = 0;
         settleNanos = 0;
@@ -372,7 +380,9 @@ public final class LuxProfiler {
                 + " publishSectionsBlock=" + publishSectionsBlock
                 + " publishSectionsSky=" + publishSectionsSky
                 + " laneCaptureNanos=" + laneCaptureNanos
-                + " laneSettleNanos=" + laneSettleNanos + " laneSettleRuns=" + laneSettleRuns + " laneSettlePolls=" + laneSettlePolls
+                + " laneSettleNanos=" + laneSettleNanos
+                + " matzNanos=" + laneMaterializeNanos + " extNanos=" + laneExternalNanos
+                + " bfsNanos=" + laneBfsNanos + " packNanos=" + lanePackNanos + " laneSettleRuns=" + laneSettleRuns + " laneSettlePolls=" + laneSettlePolls
                 + " settleCalls=" + settleCalls
                 + " settleNanos=" + settleNanos
                 + " settleRecomputeCalls=" + settleRecomputeCalls

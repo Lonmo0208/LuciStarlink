@@ -282,20 +282,33 @@ public final class ImageLane {
             final ImageRegionData data = state.data();
 
             if (!state.initialized()) {
-                this.initialize(data, level);
+                // a fresh region materializes nothing eagerly; the sections its changes can reach are adopted
+                // by materializeForChanges below, and stay current through the external-mark re-adopts
                 state.markInitialized(level);
                 this.initializedRegions++;
             }
 
             // sections a neighbouring region's job published since our last settle: re-adopt before computing
+            final long lucisExtT0 = System.nanoTime();
             for (final RuntimeRegionImageState.ExternalSection external : state.drainExternalSections()) {
                 this.adoptSection(data, external.packedSectionPos());
             }
+            LuxProfiler.laneExternalNanos += System.nanoTime() - lucisExtT0;
 
+            final long lucisMatzT0 = System.nanoTime();
+            this.materializeForChanges(data, level, buffer);
+            LuxProfiler.laneMaterializeNanos += System.nanoTime() - lucisMatzT0;
+
+            final long lucisBfsT0 = System.nanoTime();
             this.engine.applyChanges(data, buffer);
+            LuxProfiler.laneBfsNanos += System.nanoTime() - lucisBfsT0;
+
             this.settleCount++;
             this.capturedChanges += buffer.size();
+
+            final long lucisPackT0 = System.nanoTime();
             this.packDirty(data, entry.getLongKey());
+            LuxProfiler.lanePackNanos += System.nanoTime() - lucisPackT0;
 
             if (this.settleCount == 1) {
                 // TEMP diagnostic: did the BFS light the region it was handed?
@@ -395,54 +408,113 @@ public final class ImageLane {
     // ------------------------------------------------------------------------------------------------------------
 
     private void initialize(final ImageRegionData data, final ServerLevel level) {
-        final ImageRegionBounds bounds = data.bounds;
-        final int minChunkX = bounds.minBlockX() >> 4;
-        final int minChunkZ = bounds.minBlockZ() >> 4;
-        final int chunksX = bounds.widthBlocks() >> 4;
-        final int chunksZ = bounds.depthBlocks() >> 4;
+        // Lazy materialization: a fresh region adopts NOTHING. Each settle materializes only the sections within
+        // 16 blocks of its own changes (light travels ≤15, so the BFS can never reach an unmaterialized cell), and
+        // materialized sections stay current across settles through the external-mark re-adopts. This is what
+        // makes scattered traffic affordable: border's 19 chunks materialize ~60 sections instead of eagerly
+        // adopting all 216 + extracting hundreds of thousands of block states.
+        data.clearDirty();
+    }
+
+    /** Materializes (adopts light + extracts materials) every section within reach of the buffered changes. */
+    private void materializeForChanges(final ImageRegionData data, final ServerLevel level,
+                                       final RuntimeLightChangeBuffer buffer) {
+        final BitSet reach = new BitSet(data.sectionsPerPlane * ((data.bounds.sectionCount() + 31) >> 5) * 32);
+        final int width = data.bounds.widthBlocks();
+        final int depth = data.bounds.depthBlocks();
+        final int area = data.paddedArea;
+        final int pw = data.paddedWidth;
+
+        for (int i = 0; i < buffer.size(); i++) {
+            final int index = RuntimeLightChangeBuffer.localIndex(buffer.get(i));
+            final int x = index % pw - 1, z = (index / pw) % depth, y = index / area;
+            data.markSectionsWithinReach(x, y, z, 16, reach);
+        }
+
+        final int minChunkX = data.bounds.minBlockX() >> 4;
+        final int minChunkZ = data.bounds.minBlockZ() >> 4;
         final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 
-        for (int cz = 0; cz < chunksZ; cz++) {
-            for (int cx = 0; cx < chunksX; cx++) {
-                final int chunkX = minChunkX + cx;
-                final int chunkZ = minChunkZ + cz;
-                final ChunkAccess chunk = this.owner.getAnyChunkNow(chunkX, chunkZ);
-
-                if (chunk == null) {
-                    continue; // unloaded halo reads as air/dark: the base engine's own cache-miss semantics
-                }
-
-                final SWMRNibbleArray[] nibbles = ((ExtendedChunk) chunk).scalablelux$getBlockNibbles();
-                final LevelChunkSection[] sections = chunk.getSections();
-
-                for (int sectionIndex = 0; sectionIndex < nibbles.length && sectionIndex < bounds.sectionCount(); sectionIndex++) {
-                    final SWMRNibbleArray nibble = nibbles[sectionIndex];
-                    final int sectionY = bounds.minSectionY() + sectionIndex;
-
-                    // light: mirror the authoritative nibbles (absent storage reads as zero)
-                    if (nibble != null && nibble.isInitialisedUpdating()) {
-                        data.adoptSectionData(cx, cz, sectionIndex, nibble.storageUpdating, false);
-                    }
-                    data.markLightMaterialized(data.sectionLinearIndex(chunkX << 4, sectionY, chunkZ << 4));
-
-                    // materials: air sections are zero already; anything else is read cell by cell, once
-                    final LevelChunkSection section = sectionIndex < sections.length ? sections[sectionIndex] : null;
-                    if (section == null || section.hasOnlyAir()) {
-                        continue;
-                    }
-                    this.extractMaterials(data, level, chunkX, chunkZ, sectionY, section, pos);
-                }
+        for (int linear = reach.nextSetBit(0); linear >= 0; linear = reach.nextSetBit(linear + 1)) {
+            if (data.isLightMaterialized(linear)) {
+                continue;
             }
+            final int sectionY = data.bounds.minSectionY() + linear / data.sectionsPerPlane;
+            final int rem = linear % data.sectionsPerPlane;
+            final int chunkX = minChunkX + (rem % data.sectionWidth);
+            final int chunkZ = minChunkZ + (rem / data.sectionWidth);
+            final int sectionIndex = linear / data.sectionsPerPlane;
+            this.materializeSection(data, level, chunkX, chunkZ, sectionY, sectionIndex, pos);
+            data.markLightMaterialized(linear);
         }
-        data.clearDirty();
+    }
+
+    /** Adopts one section's light from the nibbles and extracts its materials from the chunk's states. */
+    private void materializeSection(final ImageRegionData data, final ServerLevel level,
+                                    final int chunkX, final int chunkZ, final int sectionY, final int sectionIndex,
+                                    final BlockPos.MutableBlockPos pos) {
+        final int cx = chunkX - (data.bounds.minBlockX() >> 4);
+        final int cz = chunkZ - (data.bounds.minBlockZ() >> 4);
+        final ChunkAccess chunk = this.owner.getAnyChunkNow(chunkX, chunkZ);
+
+        if (chunk == null) {
+            // unloaded halo reads as air/dark: the base engine's own cache-miss semantics. Marked materialized
+            // so we do not retry every settle; when the chunk loads, the base engine's light() fires the
+            // external-mark path and the section re-adopts.
+            data.markLightMaterialized(data.sectionLinearIndex(chunkX << 4, sectionY, chunkZ << 4));
+            return;
+        }
+
+        final SWMRNibbleArray[] nibbles = ((ExtendedChunk) chunk).scalablelux$getBlockNibbles();
+        final LevelChunkSection[] sections = chunk.getSections();
+
+        // light: mirror the authoritative nibbles (absent storage reads as zero)
+        final SWMRNibbleArray nibble = sectionIndex < nibbles.length ? nibbles[sectionIndex] : null;
+        if (nibble != null && nibble.isInitialisedUpdating()) {
+            data.adoptSectionData(cx, cz, sectionIndex, nibble.storageUpdating, false);
+        }
+
+        // materials: air sections are zero already; anything else is read cell by cell, once
+        final LevelChunkSection section = sectionIndex < sections.length ? sections[sectionIndex] : null;
+        if (section != null && !section.hasOnlyAir()) {
+            this.extractMaterials(data, level, chunkX, chunkZ, sectionY, section, pos);
+        }
     }
 
     private void extractMaterials(final ImageRegionData data, final ServerLevel level,
                                   final int chunkX, final int chunkZ, final int sectionY,
                                   final LevelChunkSection section, final BlockPos.MutableBlockPos pos) {
+        // Homogeneity certificates (1.x's LuxRegionExtractor rule, ported): a section whose palette certifies a
+        // single material class is bulk-filled instead of visited cell by cell. Air fills nothing (the plane is
+        // already zero); an all-opaque, zero-emission section fills opacity 15. Both are exact with respect to
+        // the per-cell material rules, and they are what makes a section cost ~1 us instead of ~100 us.
+        if (section.hasOnlyAir()) {
+            return;
+        }
+
         final int baseX = chunkX << 4;
         final int baseZ = chunkZ << 4;
         final int baseY = sectionY << 4;
+        final int width = data.paddedWidth;
+        final int area = data.paddedArea;
+
+        if (!section.maybeHas(state -> !(state.getLightEmission() == 0
+                && !state.useShapeForLightOcclusion()
+                && state.getLightBlock(level, BlockPos.ZERO) == 15))) {
+            // every palette entry is position-independent, full-opacity and emits nothing: one fill per row.
+            // The predicate's three clauses are exactly what the per-cell material rule needs to yield
+            // opacity 15 / emission 0 for every cell - a shape-dependent or glass state fails it and falls
+            // through to the cell walk, so the certificate can never disagree with the per-cell result.
+            for (int y = 0; y < 16; y++) {
+                final int yBase = ((baseY + y) + 1) * area;
+                for (int z = 0; z < 16; z++) {
+                    final int rowBase = yBase + ((baseZ + z) + 1) * width + (baseX + 1);
+                    java.util.Arrays.fill(data.opacity, rowBase, rowBase + 16, (byte) 15);
+                    java.util.Arrays.fill(data.emission, rowBase, rowBase + 16, (byte) 0);
+                }
+            }
+            return;
+        }
 
         for (int y = 0; y < 16; y++) {
             for (int z = 0; z < 16; z++) {
