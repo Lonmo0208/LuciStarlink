@@ -247,3 +247,11 @@ relight 前后对照 + 区域转储 + 行转储三层定位：世界状态对、
 （三格对 SL 双口径全胜）、border 4.55/4.69 vs 3.90/3.89 ✗（唯一未过线：散布流量的每区域税 ~0.7 ms）**。
 下一窗口：border 的区域合并（REGION_CHUNKS 加大使 19 区块塌缩）或减重打包；然后 dense/structure 对 1.x
 的 2.30/2.83；玩家口径轮数验证。
+
+### tile 调参（`d615818`）——**4×4 实测过重，默认回到 1×1，阈值全部属性化**
+
+REGION_CHUNKS/HALO_CHUNKS 现在是系统属性。4×4 tile 的实验被测量否决：全高区域 ~3.7M 格 × 4 平面（~15 MB），
+init 要采纳 864 个 section + 提取 ~130 万次方块状态（~26 ms），border 直接撞 harness 超时。**border 的正解是
+1.x 式的懒式 per-section 物化**（`markSectionsWithinReach`/`materializedLightSections` 已移植未接线）。
+另：border2x 内联脚本的 rig jar 被 harness 的 mods 同步清掉（expected-mod 校验失败）——**跑测量用归档脚本原样，
+别写内联变体**。
