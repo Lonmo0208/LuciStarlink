@@ -45,8 +45,12 @@ public final class ImageLane {
     /** Off unless asked for; the fuse in docs/IMAGE-LANE-PLAN.md decides when it flips. */
     public static final boolean ENABLED = Boolean.getBoolean("scalablelux.imageLane");
 
-    private static final int REGION_CHUNKS = 1;
-    private static final int HALO_CHUNKS = 1;
+    // Region tile size: 4x4 core chunks plus a 1-chunk halo. The tile decides how many region settles a scattered
+    // burst pays: border walks ~19 chunks, which at 1-chunk tiles meant 19 inits + 19 packs + 19 publishes a pass
+    // (~0.7 ms of pure tax); at 4x4 the same walk collapses into 2-4 regions. Bigger tiles cost memory (4 planes of
+    // (4+2)^2*16*384 bytes ≈ 8.8 MB each) and a longer first-init, both amortized over the tile lifetime.
+    private static final int REGION_CHUNKS = Integer.getInteger("scalablelux.imageLaneRegionChunks", 1);
+    private static final int HALO_CHUNKS = Integer.getInteger("scalablelux.imageLaneHaloChunks", 1);
     // Routing thresholds, property-tunable so the shape question can be probed without a rebuild (the border
     // attempt-cost split ran with imageLaneMaxChanges=0: the lane enabled but never taking traffic).
     private static final int LANE_MAX_CHANGES = Integer.getInteger("scalablelux.imageLaneMaxChanges", 2048);
