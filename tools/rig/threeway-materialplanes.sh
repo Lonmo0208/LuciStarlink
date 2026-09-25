@@ -6,9 +6,9 @@
 set -uo pipefail
 ROOT=/e/LuciStarlin/LuciStarlink
 MODS="$ROOT/run-benchmark-scalablelux/mods"
-OUT=/e/LuciStarlin/sl-jar/threeway208; mkdir -p "$OUT"
+OUT=/e/LuciStarlin/sl-jar/threeway-criteria; mkdir -p "$OUT"
 LOADLOG="$OUT/load-samples.txt"; : > "$LOADLOG"
-US20_JAR=/e/LuciStarlin/sl-jar/ls2-dispatch-rig.jar
+US20_JAR=/e/LuciStarlin/sl-jar/ls2-imagelane-rig.jar
 SL_JAR=/e/LuciStarlin/ScalableLux-neoforge-build/ScalableLux-Master/build/libs/ScalableLux-neoforge-0.3.0-alpha.0.8-all.jar
 P='-Dlucistarlink.benchmark.prepareRing=8 -Dlucistarlink.benchmark.quiesceSettleMs=1000 -Dlucistarlink.benchmark.globalEngineBarrier=false'
 # --- hardened jar staging (2026-09-26) ---------------------------------------------------------------
@@ -35,7 +35,7 @@ stage_jar() { # $1 = jar to place; $2 = MODS dir
   echo "STAGE-FAILED for $1" >&2
   return 1
 }
-US20_P="$P -Dscalablelux.ownEdit=true -Dscalablelux.recomputeSky=true"
+US20_P="$P -Dscalablelux.imageLane=true"
 export JAVA_HOME='C:\Users\Administrator\.gradle\jdks\eclipse_adoptium-21-amd64-windows.2'
 export PATH="/c/Users/Administrator/.gradle/jdks/eclipse_adoptium-21-amd64-windows.2/bin:$PATH"
 export JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStoreType=WINDOWS-ROOT
@@ -58,7 +58,7 @@ run_one() {
   esac
   kill_strays
   rm -rf "$dir"/world* 2>/dev/null
-  : # jar staged by stage_jar
+  : # jar staged by stage_jar below
   [ -n "$jar" ] && stage_jar "$jar" "$MODS"
   local tag; tag="$side-$wl-r$rep"
   local out="$OUT/$tag.jsonl"; local log="$OUT/$tag.log"

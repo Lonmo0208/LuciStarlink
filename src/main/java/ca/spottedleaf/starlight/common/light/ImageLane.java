@@ -57,6 +57,8 @@ public final class ImageLane {
     // Routing thresholds, property-tunable so the shape question can be probed without a rebuild (the border
     // attempt-cost split ran with imageLaneMaxChanges=0: the lane enabled but never taking traffic).
     private static final int LANE_MAX_CHANGES = Integer.getInteger("scalablelux.imageLaneMaxChanges", 2048);
+    /** Below this, a single-region burst stays on the synchronous nibble path (sky_hole's shape). */
+    private static final int LANE_MIN_CHANGES = Integer.getInteger("scalablelux.imageLaneMinChanges", 64);
     private static final long CACHE_BYTE_BUDGET = 128L * 1024L * 1024L;
 
     private static final ConcurrentHashMap<StarLightInterface, ImageLane> LANES = new ConcurrentHashMap<>();
@@ -206,7 +208,25 @@ public final class ImageLane {
      * synchronous in the same flush and therefore race-free.
      */
     private boolean regionQualifies(final ImageRegionBounds bounds, final RuntimeLightChangeBuffer buffered) {
-        return buffered != null && !buffered.isEmpty() && buffered.size() <= LANE_MAX_CHANGES;
+        if (buffered == null || buffered.isEmpty() || buffered.size() > LANE_MAX_CHANGES) {
+            return false;
+        }
+
+        // Small single-region bursts belong on the SYNCHRONOUS nibble path (the grouped settle in the same
+        // flush), not the lane: sky_hole's 25 changes in one chunk cost the lane 2.79 ms against 0.82 ms there,
+        // because the lane's per-region machinery (settle, pack, publish, external re-adopts) dominates a tiny
+        // burst while the grouped path settles it with one setup and one drain. This is not the queue - the
+        // nibble grouped path runs inline in the same flush, so the async overwrite that exclusive ownership
+        // exists to prevent cannot happen.
+        //
+        // A region the lane has ALREADY adopted stays lane-owned whatever the burst size: handing it to the
+        // other path would let that path write light the lane's planes do not know about.
+        if (buffered.size() < LANE_MIN_CHANGES && this.pending.size() == 1
+                && this.cache.getInitialized(bounds.coreRegionKey()) == null) {
+            return false;
+        }
+
+        return true;
     }
 
     public boolean covers(final int chunkX, final int chunkZ) {

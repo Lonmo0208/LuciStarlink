@@ -10,11 +10,35 @@ export JAVA_HOME='C:\Users\Administrator\.gradle\jdks\eclipse_adoptium-21-amd64-
 export PATH="/c/Users/Administrator/.gradle/jdks/eclipse_adoptium-21-amd64-windows.2/bin:$PATH"
 export JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStoreType=WINDOWS-ROOT
 P='-Dlucistarlink.benchmark.prepareRing=8 -Dlucistarlink.benchmark.quiesceSettleMs=1000 -Dlucistarlink.benchmark.globalEngineBarrier=false'
+# --- hardened jar staging (2026-09-26) ---------------------------------------------------------------
+# On Windows a leftover java (a benchmark server that has not finished exiting) still holds the jar in
+# mods/, and BOTH `rm -f` and `cp -f` then fail SILENTLY: the server starts on the PREVIOUS engine's jar and
+# aborts with "Lux benchmark expected mod is not loaded: <mod>", producing an empty result file that looks
+# like a slow run. Stage by md5 and retry, killing strays in between.
+kill_strays() {
+  powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | Where-Object { \$_.CommandLine -match 'gameDir|fml.modFolders|run-benchmark' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }" >/dev/null 2>&1
+  for port in 25665 25666 25667 25668; do
+    for pid in $(netstat -ano 2>/dev/null | grep -E ":$port .*LISTENING" | awk '{print $5}' | sort -u); do cmd //c "taskkill /F /PID $pid" >/dev/null 2>&1; done
+  done
+  sleep 3
+}
+stage_jar() { # $1 = jar to place; $2 = MODS dir
+  local want; want=$(md5sum "$1" | cut -d' ' -f1)
+  for attempt in 1 2 3 4 5 6; do
+    rm -f "$2"/*.jar 2>/dev/null
+    cp -f "$1" "$2/" 2>/dev/null
+    local got; got=$(md5sum "$2/$(basename "$1")" 2>/dev/null | cut -d' ' -f1)
+    if [ "$got" = "$want" ] && [ "$(ls "$2" | wc -l)" = "1" ]; then return 0; fi
+    kill_strays
+  done
+  echo "STAGE-FAILED for $1" >&2
+  return 1
+}
 one() {
   local label="$1" jar="$2" mod="$3" wl="$4"
   for pid in $(netstat -ano | grep -E ":25666 .*LISTENING" | awk '{print $5}' | sort -u); do cmd //c "taskkill /F /PID $pid" >/dev/null 2>&1; done
   sleep 1; rm -rf "$ROOT/run-benchmark-scalablelux"/world* 2>/dev/null
-  rm -f "$MODS"/*.jar; cp -f "$jar" "$MODS/"
+  stage_jar "$jar" "$MODS" || { echo "  $label STAGE-FAILED"; return; }
   local fp=""; [ "$wl" = structure_cube ] && fp='-PbenchmarkLightFingerprint=-40,32,-40,55,96,55'
   ( cd "$ROOT" && timeout 400 ./gradlew runBenchmarkScalableLuxServer -PbenchmarkWorkload="$wl" \
       -PbenchmarkPasses=3 -PbenchmarkWarmupPasses=2 -PbenchmarkOutput="$OUT/$label.jsonl" \
