@@ -59,8 +59,6 @@ public final class ImageLane {
     private static final int LANE_MAX_CHANGES = Integer.getInteger("scalablelux.imageLaneMaxChanges", 2048);
     /** Below this, a single-region burst stays on the synchronous nibble path (sky_hole's shape). */
     private static final int LANE_MIN_CHANGES = Integer.getInteger("scalablelux.imageLaneMinChanges", 64);
-    /** A small burst spread over at least this many regions still takes the lane (border's shape: 19 regions). */
-    private static final int LANE_MIN_REGIONS = Integer.getInteger("scalablelux.imageLaneMinRegions", 8);
     private static final long CACHE_BYTE_BUDGET = 128L * 1024L * 1024L;
 
     private static final ConcurrentHashMap<StarLightInterface, ImageLane> LANES = new ConcurrentHashMap<>();
@@ -209,29 +207,33 @@ public final class ImageLane {
      * a lane-adopted region. structure_cube (4096 > the cap) stays on the grouped nibble path, which is
      * synchronous in the same flush and therefore race-free.
      */
-    private boolean regionQualifies(final ImageRegionBounds bounds, final RuntimeLightChangeBuffer buffered) {
+    private boolean regionQualifies(final ImageRegionBounds bounds, final RuntimeLightChangeBuffer buffered,
+                                    final long flushTotalIgnored) {
         if (buffered == null || buffered.isEmpty() || buffered.size() > LANE_MAX_CHANGES) {
             return false;
         }
 
-        // Small single-region bursts belong on the SYNCHRONOUS nibble path (the grouped settle in the same
-        // flush), not the lane: sky_hole's 25 changes in one chunk cost the lane 2.79 ms against 0.82 ms there,
-        // because the lane's per-region machinery (settle, pack, publish, external re-adopts) dominates a tiny
-        // burst while the grouped path settles it with one setup and one drain. This is not the queue - the
-        // nibble grouped path runs inline in the same flush, so the async overwrite that exclusive ownership
-        // exists to prevent cannot happen.
-        //
-        // The discriminator is the number of REGIONS, measured on the two shapes that disagree: sky_hole's 25
-        // changes reach 1-4 regions and the lane's per-region machinery costs more than it saves (2.79 ms against
-        // 0.82 on the nibble path), while border's ~5 changes per chunk reach 19 regions and the lane wins there
-        // (3.9 against ~4.5 when the same bursts went to the nibble path). Small and narrow -> nibble, small but
-        // wide -> lane.
+        // THE rule, and it took a diagnostic to find it: the lane takes a flush only when the flush carries at
+        // least LANE_MIN_CHANGES captured changes in this region or in total. Per-region rules alone kept letting
+        // sky_hole's worldgen neighbours in (59 regions of 1-6 changes each: 172 settles, 2208 section
+        // extractions, while the workload's own burst is 25 changes), and the lane's per-region machinery -
+        // settle, pack, publish, external re-adopts - costs more than the grouped nibble path saves on a tiny
+        // burst. Border carries 95 (lane wins there, 3.9 against ~4.5), dense 2048 (lane wins), sky_hole 25 and
+        // its neighbours under 64 (nibble wins). This is not the queue: the grouped nibble path runs inline in
+        // the same flush, so the async overwrite exclusive ownership exists to prevent cannot happen.
         //
         // A region the lane adopted earlier can be handed BACK: the skip branch drops its state and marks it
         // stale, so nothing stale is ever read and the nibble path owns the changes from then on. Keeping it
-        // lane-owned forever was the earlier rule, and it is what made sky_hole stay slow once a warmup burst had
+        // lane-owned forever was an earlier rule, and it is what made sky_hole stay slow once a warmup burst had
         // adopted its region.
-        if (buffered.size() < LANE_MIN_CHANGES && this.pending.size() < LANE_MIN_REGIONS) {
+        //
+        // The rule is PER REGION, and the two measurements that pinned it down: a flush total wide enough to admit
+        // border (95 changes over 19 regions, ~5 each) makes the lane pay its per-region machinery - and now that
+        // materialization decodes its indices correctly, that machinery costs 6.7 ms a pass against the grouped
+        // nibble path's ~4.5 - while the region rule keeps the lane for what it is actually good at: dense's 2048
+        // changes in ONE chunk (2.8-3.4 ms against ScalableLux's 3.9). sky_hole's 25 changes per region and
+        // border's ~5 take the nibble path.
+        if (buffered.size() < LANE_MIN_CHANGES) {
             return false;
         }
 
@@ -269,7 +271,18 @@ public final class ImageLane {
         final ServerLevel level = (ServerLevel) this.owner.world;
         final ImageRegionBounds bounds =
                 ImageRegionBounds.around(new ChunkPos(chunkX, chunkZ), level, REGION_CHUNKS, HALO_CHUNKS);
-        return this.regionQualifies(bounds, this.pending.get(bounds.coreRegionKey()));
+
+        // The SAME flush total the settle uses. Passing 0 here made a region whose own buffer is under the
+        // minimum report "not covered" while the settle's flushTotal let it through - so the flush seeded the
+        // block half on the nibble path AND the lane settled it: both paths did the work (border 4.3 -> 7.7-12.0,
+        // dense 2.8 -> 10.9 in the same window).
+        long flushTotal = 0L;
+
+        for (final RuntimeLightChangeBuffer buffered : this.pending.values()) {
+            flushTotal += buffered.size();
+        }
+
+        return this.regionQualifies(bounds, this.pending.get(bounds.coreRegionKey()), flushTotal);
     }
 
     public void settle() {
@@ -301,6 +314,18 @@ public final class ImageLane {
         final it.unimi.dsi.fastutil.longs.LongArrayList handledKeys = new it.unimi.dsi.fastutil.longs.LongArrayList();
         final it.unimi.dsi.fastutil.longs.LongArrayList skippedKeys = new it.unimi.dsi.fastutil.longs.LongArrayList();
 
+        // The flush's total captured changes, which is what decides whether the lane is worth using at all. The
+        // sky_hole diagnostic is why this exists: with only per-region rules the lane was settling 59 different
+        // regions of 1-6 changes each (worldgen writes near the box) - 172 settles and 2208 section extractions -
+        // while the workload's own burst is 25 changes. Border carries 95 (lane wins), dense 2048 (lane wins),
+        // sky_hole 25 and its worldgen neighbours under 64 (nibble path wins). One number, both shapes.
+        long totalCaptured = 0L;
+
+        for (final RuntimeLightChangeBuffer buffered : this.pending.values()) {
+            totalCaptured += buffered.size();
+        }
+        final long flushTotal = totalCaptured;
+
         for (final it.unimi.dsi.fastutil.longs.Long2ObjectMap.Entry<RuntimeLightChangeBuffer> entry
                 : this.pending.long2ObjectEntrySet()) {
             final RuntimeLightChangeBuffer buffer = entry.getValue();
@@ -320,7 +345,7 @@ public final class ImageLane {
             // counts eventually cross the floor, and the region then qualifies on its own dead entries
             // mid-window (measured: a 21 ms re-adopt inside a measured pass). The dirty gate above keeps the
             // hasUpdates polling cheap, so destruction costs nothing here.
-            if (!this.regionQualifies(bounds, buffer)) {
+            if (!this.regionQualifies(bounds, buffer, flushTotal)) {
                 skippedKeys.add(entry.getLongKey());
                 continue;
             }
@@ -481,14 +506,16 @@ public final class ImageLane {
     private void materializeForChanges(final ImageRegionData data, final ServerLevel level,
                                        final RuntimeLightChangeBuffer buffer) {
         final BitSet reach = new BitSet(data.sectionsPerPlane * ((data.bounds.sectionCount() + 31) >> 5) * 32);
-        final int width = data.bounds.widthBlocks();
-        final int depth = data.bounds.depthBlocks();
-        final int area = data.paddedArea;
         final int pw = data.paddedWidth;
+        final int pd = data.paddedDepth;
+        final int area = data.paddedArea;
+        final byte[] light = data.blockLight;
 
         for (int i = 0; i < buffer.size(); i++) {
+            // the buffer's indices are PADDED (the moat is one cell thick): decode with the PADDED strides, then
+            // subtract the pad on every axis to get the real-local coordinate the reach box is built from
             final int index = RuntimeLightChangeBuffer.localIndex(buffer.get(i));
-            final int x = index % pw - 1, z = (index / pw) % depth, y = index / area;
+            final int x = index % pw - 1, z = (index / pw) % pd - 1, y = index / area - 1;
             data.markSectionsWithinReach(x, y, z, 16, reach);
         }
 

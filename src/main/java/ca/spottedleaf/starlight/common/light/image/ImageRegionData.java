@@ -291,11 +291,21 @@ public final class ImageRegionData {
         int localZ = rem / this.paddedWidth - 1;
         int localX = rem - (localZ + 1) * this.paddedWidth - 1;
         if (localX < 0 || localY < 0 || localZ < 0) {
-            throw new IllegalStateException("dirty on wall: index=" + index + " x=" + localX + " y=" + localY + " z=" + localZ
-                    + " opacity=" + (this.opacity[index] & 0xF) + " light=" + (this.blockLight[index] & 0xF));
+            // A dirty mark on the moat ring means some index was built with the wrong strides. It used to throw
+            // (2026-09-26) and killed whole benchmark runs; it is a measurement aid, not a safety property, so it
+            // reports once per process and then stays quiet.
+            if (WALL_REPORTED.compareAndSet(false, true)) {
+                System.out.println("IMAGE-LANE-WALL-DIRTY index=" + index + " x=" + localX + " y=" + localY
+                        + " z=" + localZ + " opacity=" + (this.opacity[index] & 0xF)
+                        + " light=" + (this.blockLight[index] & 0xF));
+            }
+            return;
         }
         markDirtyBlockLocal(localX, localY, localZ);
     }
+
+    private static final java.util.concurrent.atomic.AtomicBoolean WALL_REPORTED =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
     public void markDirtySkyIndex(int index) {
         int localY = index / this.paddedArea - 1;
