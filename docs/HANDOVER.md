@@ -255,3 +255,20 @@ init 要采纳 864 个 section + 提取 ~130 万次方块状态（~26 ms），bo
 1.x 式的懒式 per-section 物化**（`markSectionsWithinReach`/`materializedLightSections` 已移植未接线）。
 另：border2x 内联脚本的 rig jar 被 harness 的 mods 同步清掉（expected-mod 校验失败）——**跑测量用归档脚本原样，
 别写内联变体**。
+
+### 懒式物化 + 同质证书（`f0a535f`）——**dense 的 1.x 判据是窗口依赖的，未站稳**
+
+分段计数器（matzNanos 等已保留）点出成本：border 结算 9.2 ms 里 7.6 ms、structure 里 4.4 ms、dense 里 1.8 ms 都是
+**逐格材质提取**（~100 µs/section）。两刀：(1) 懒式物化（新区域不预采纳，每次结算只物化"自己改动 ±16 格"内的
+section，已物化的靠外部重采纳保鲜）；(2) **同质证书**（1.x `LuxRegionExtractor` 规则）：全空气不填、palette 认证
+"位置无关 + 全不透明 + 零发光"的 section 整行填 15——谓词三个子句正是逐格规则成立的条件，形状方块/玻璃会落到
+逐格路径，**证书不可能与逐格结果不一致**。提取 ~100 µs → ~1 µs/section。
+
+**单次读数**：dense 2.15 对 1.x 的 2.30（首次过线）、border 回到 4.73 平。**但同窗口 3 轮交错（重负载窗口）**：
+dense 我们 3.14/6.21/5.69 对 1.x 2.37/2.30/3.16（输）、border 我们 6.6-10.1 对 SL 4.07-4.25（输）。
+拆开看：**我们的引擎部分（minPass − apply）轻载 1.87 ms、重载涨到 ~5 ms，而 1.x 稳定 ~1.0**——通道的同步结算
+（物化+采纳+BFS+打包+发布）对负载远更敏感，这才是真正的剩余差距，而不是峰值数字。
+
+判据现状：**引擎 vs 1.x——sky_hole 已赢（3/3，两个窗口）；dense/border 未站稳（窗口依赖）；玩家 vs SL——轻载赢、
+重载输**。下一手段（dense 引擎部分的剩下 ~2×）：packDirty 里的发布路径（每脏 section 一次 onLightUpdate）、
+每结算的区域生命周期，以及端到端测出"负载敏感"到底来自材质提取的缓存未命中、发布、还是服务器线程竞争。
