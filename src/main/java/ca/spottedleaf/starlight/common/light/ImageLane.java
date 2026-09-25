@@ -74,6 +74,8 @@ public final class ImageLane {
     public long capturedChanges;
     public long packedSections;
     public long initializedRegions;
+    public long captureAttempts;
+    public long captureAccepted;
 
     private ImageLane(final StarLightInterface owner) {
         this.owner = owner;
@@ -92,7 +94,7 @@ public final class ImageLane {
     }
 
     public String laneStats() {
-        return "settles=" + this.settleCount + " captured=" + this.capturedChanges
+        return "attempts=" + this.captureAttempts + " accepted=" + this.captureAccepted + " settles=" + this.settleCount + " captured=" + this.capturedChanges
                 + " packed=" + this.packedSections + " regions=" + this.initializedRegions
                 + " pending=" + this.pending.size() + " cached=" + this.cache.size();
     }
@@ -122,6 +124,7 @@ public final class ImageLane {
 
     private void onBlockStateChangeInner(final ServerLevel level, final BlockPos pos,
                                          final BlockState oldState, final BlockState newState) {
+        this.captureAttempts++;
         // captures land in plain thread-unsafe maps, and worldgen workers reach vanilla block writes too:
         // anything off the server main thread is not lane traffic
         if (!(this.owner.world instanceof ServerLevel serverLevel)
@@ -161,7 +164,7 @@ public final class ImageLane {
             return;
         }
 
-        final int index = localX + localZ * bounds.widthBlocks() + localY * bounds.area();
+        final int index = (localY + 1) * bounds.paddedArea() + (localZ + 1) * bounds.paddedWidth() + (localX + 1);
         final int oldPacked = this.materialCache.lookupLight(level, oldState, pos);
         final int newPacked = this.materialCache.lookupLight(level, newState, pos);
 
@@ -171,6 +174,7 @@ public final class ImageLane {
 
         this.pending.computeIfAbsent(bounds.coreRegionKey(), key -> new RuntimeLightChangeBuffer())
                 .addMaterial(index, oldPacked, newPacked);
+        this.captureAccepted++;
         this.capturesSinceSettle++;
     }
 
@@ -203,9 +207,11 @@ public final class ImageLane {
             return (cached & 1L) != 0L;
         }
         final int minChunkX = bounds.minBlockX() >> 4, minChunkZ = bounds.minBlockZ() >> 4;
-        final int width = bounds.widthBlocks();
-        final int depth = bounds.depthBlocks();
-        final int area = bounds.area();
+        // the buffer's indices are PADDED (the moat is one cell thick): decode with the padded strides and
+        // subtract the pad before mapping a cell back to its chunk
+        final int width = bounds.paddedWidth();
+        final int depth = bounds.paddedDepth();
+        final int area = bounds.paddedArea();
 
         // count changes per chunk; the cap bounds the sweep
         final it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap perChunk =
@@ -213,7 +219,7 @@ public final class ImageLane {
         for (int i = 0; i < buffered.size(); i++) {
             final int index = RuntimeLightChangeBuffer.localIndex(buffered.get(i));
             final int x = index % width, z = (index / width) % depth, y = index / area;
-            final long chunkKey = ImageRegionBounds.regionKey(minChunkX + (x >> 4), minChunkZ + (z >> 4));
+            final long chunkKey = ImageRegionBounds.regionKey(minChunkX + ((x - 1) >> 4), minChunkZ + ((z - 1) >> 4));
             perChunk.addTo(chunkKey, 1);
         }
         boolean verdict = false;
@@ -450,9 +456,9 @@ public final class ImageLane {
             // the section's light was reset on the engine side: clear our copy
             final int minX = (sp.x() << 4) - data.bounds.minBlockX();
             final int minZ = (sp.z() << 4) - data.bounds.minBlockZ();
-            final int baseY = sectionIndex << 4;
-            final int width = data.bounds.widthBlocks();
-            final int area = data.bounds.area();
+            final int baseY = (sectionIndex << 4) + 1;
+            final int width = data.paddedWidth;
+            final int area = data.paddedArea;
             for (int y = 0; y < 16; y++) {
                 for (int z = 0; z < 16; z++) {
                     final int rowBase = (baseY + y) * area + (minZ + z) * width + minX;
@@ -506,11 +512,11 @@ public final class ImageLane {
      * keeps the SWMR dirty state); returns whether anything was written. The caller then syncs the visible layer. */
     private boolean writeSection(final SWMRNibbleArray nibble, final ImageRegionData data,
                                  final int chunkX, final int chunkZ, final int sectionIndex) {
-        final int minX = (chunkX << 4) - data.bounds.minBlockX();
-        final int minZ = (chunkZ << 4) - data.bounds.minBlockZ();
-        final int baseY = sectionIndex << 4;
-        final int width = data.bounds.widthBlocks();
-        final int area = data.bounds.area();
+            final int minX = (chunkX << 4) - data.bounds.minBlockX() + 1;
+            final int minZ = (chunkZ << 4) - data.bounds.minBlockZ() + 1;
+            final int baseY = (sectionIndex << 4) + 1;
+            final int width = data.paddedWidth;
+            final int area = data.paddedArea;
         final byte[] light = data.blockLight;
 
         boolean any = false;

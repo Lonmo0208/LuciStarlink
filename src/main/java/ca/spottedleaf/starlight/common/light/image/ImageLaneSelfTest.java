@@ -31,9 +31,10 @@ public final class ImageLaneSelfTest {
 
         final long fuzzErrors = fuzz(engine, random);
         final String price = price(engine);
+        final String roundTrip = roundTrip();
 
-        System.out.println("IMAGE-LANE-SELFTEST fuzzErrors=" + fuzzErrors + " " + price
-                + " verdict=" + (fuzzErrors == 0 ? "PASS" : "FAIL"));
+        System.out.println("IMAGE-LANE-SELFTEST fuzzErrors=" + fuzzErrors + " " + price + " " + roundTrip
+                + " verdict=" + (fuzzErrors == 0 && roundTrip.contains("roundTripErrors=0") ? "PASS" : "FAIL"));
     }
 
     // ------------------------------------------------------------------------------------------------------------
@@ -45,7 +46,7 @@ public final class ImageLaneSelfTest {
         final int cases = 400;
         // the fuzz box: one core chunk with a one-chunk halo on every side (the lane's own default shape),
         // 40 blocks tall so the vertical faces have room for interior changes too
-        final int w = 48, d = 48, h = 40;
+        final int w = 48, d = 48, h = 48;
 
         for (int c = 0; c < cases; c++) {
             final ImageRegionData a = randomRegion(random, w, d, h);
@@ -97,7 +98,7 @@ public final class ImageLaneSelfTest {
         final ImageBlockLightEngine engine = new ImageBlockLightEngine();
         final ImageRegionData a = cloneRegion(pre);
         final ImageRegionData b = cloneRegion(pre);
-        final int area = w * d;
+        final ImageRegionData probe = a; // padded-index helper for the decode
         int step = 0;
 
         for (final int[][] burst : new int[][][]{burstA, burstB}) {
@@ -112,10 +113,10 @@ public final class ImageLaneSelfTest {
 
                 int mx = -1, my = -1, mz = -1;
                 outer:
-                for (int y = 1; y < h - 1; y++) {
-                    for (int z = 1; z < d - 1; z++) {
-                        for (int x = 1; x < w - 1; x++) {
-                            final int index = y * area + z * w + x;
+                for (int y = 0; y < h; y++) {
+                    for (int z = 0; z < d; z++) {
+                        for (int x = 0; x < w; x++) {
+                            final int index = probe.localIndex(x, y, z);
                             if ((a.blockLight[index] & 0xF) != (b.blockLight[index] & 0xF)) {
                                 mx = x; my = y; mz = z;
                                 break outer;
@@ -125,21 +126,10 @@ public final class ImageLaneSelfTest {
                 }
                 if (mx >= 0) {
                     System.out.println("IMAGE-LANE-MIN case=" + caseId + " step=" + step
-                            + " change at " + (burst[0][i] % w) + "," + (burst[0][i] / area) + "," + ((burst[0][i] / w) % d)
+                            + " change at " + probe.localX(burst[0][i]) + "," + probe.localY(burst[0][i]) + "," + probe.localZ(burst[0][i])
                             + " -> opacity=" + op[0] + " emission=" + em[0]
                             + " mismatchAt=" + mx + "," + my + "," + mz);
-                    for (int y = Math.max(0, my - 1); y <= Math.min(h - 1, my + 1); y++) {
-                        for (int z = Math.max(0, mz - 1); z <= Math.min(d - 1, mz + 1); z++) {
-                            final StringBuilder line = new StringBuilder();
-                            for (int x = Math.max(0, mx - 2); x <= Math.min(w - 1, mx + 2); x++) {
-                                final int index = y * area + z * w + x;
-                                line.append(String.format("[%d,%d,%d o=%d e=%d pre=%d A=%d B=%d] ", x, y, z,
-                                        a.opacity[index] & 0xF, a.emission[index] & 0xF,
-                                        preLight[index] & 0xF, a.blockLight[index] & 0xF, b.blockLight[index] & 0xF));
-                            }
-                            System.out.println("  " + line);
-                        }
-                    }
+                    dumpNeighbourhood(a, b, burstA, new int[][]{new int[0], new int[0], new int[0]}, w, d, h, caseId);
                     return;
                 }
             }
@@ -164,10 +154,10 @@ public final class ImageLaneSelfTest {
                 engine.compute(b);
                 int mx = -1, my = -1, mz = -1;
                 outerPair:
-                for (int y = 1; y < h - 1; y++) {
-                    for (int z = 1; z < d - 1; z++) {
-                        for (int x = 1; x < w - 1; x++) {
-                            final int idx = y * area + z * w + x;
+                for (int y = 0; y < h; y++) {
+                    for (int z = 0; z < d; z++) {
+                        for (int x = 0; x < w; x++) {
+                            final int idx = a2.localIndex(x, y, z);
                             if ((a2.blockLight[idx] & 0xF) != (b.blockLight[idx] & 0xF)) {
                                 mx = x; my = y; mz = z;
                                 break outerPair;
@@ -184,7 +174,7 @@ public final class ImageLaneSelfTest {
                         for (int z = Math.max(0, mz - 1); z <= Math.min(d - 1, mz + 1); z++) {
                             final StringBuilder line = new StringBuilder();
                             for (int x = Math.max(0, mx - 2); x <= Math.min(w - 1, mx + 2); x++) {
-                                final int idx = y * area + z * w + x;
+                                final int idx = a2.localIndex(x, y, z);
                                 line.append(String.format("[%d,%d,%d o=%d e=%d pre=%d A=%d B=%d] ", x, y, z,
                                         a2.opacity[idx] & 0xF, a2.emission[idx] & 0xF,
                                         beforePair.blockLight[idx] & 0xF, a2.blockLight[idx] & 0xF, b.blockLight[idx] & 0xF));
@@ -206,13 +196,12 @@ public final class ImageLaneSelfTest {
                                           final int[][] burstA, final int[][] burstB,
                                           final int w, final int d, final int h, final int caseId) {
         // find the first mismatching cell
-        final int area = w * d;
         int mx = -1, my = -1, mz = -1;
         outer:
-        for (int y = 1; y < h - 1; y++) {
-            for (int z = 1; z < d - 1; z++) {
-                for (int x = 1; x < w - 1; x++) {
-                    final int index = y * area + z * w + x;
+        for (int y = 0; y < h; y++) {
+            for (int z = 0; z < d; z++) {
+                for (int x = 0; x < w; x++) {
+                    final int index = a.localIndex(x, y, z);
                     if ((a.blockLight[index] & 0xF) != (b.blockLight[index] & 0xF)) {
                         mx = x; my = y; mz = z;
                         break outer;
@@ -228,7 +217,7 @@ public final class ImageLaneSelfTest {
             for (int z = Math.max(0, mz - 1); z <= Math.min(d - 1, mz + 1); z++) {
                 final StringBuilder line = new StringBuilder();
                 for (int x = Math.max(0, mx - 2); x <= Math.min(w - 1, mx + 2); x++) {
-                    final int index = y * area + z * w + x;
+                    final int index = a.localIndex(x, y, z);
                     line.append(String.format("[%d o=%d e=%d A=%d B=%d] ", x,
                             a.opacity[index] & 0xF, a.emission[index] & 0xF,
                             a.blockLight[index] & 0xF, b.blockLight[index] & 0xF));
@@ -239,7 +228,7 @@ public final class ImageLaneSelfTest {
         for (final int[][] burst : new int[][][]{burstA, burstB}) {
             for (int i = 0; i < burst[0].length; i++) {
                 final int index = burst[0][i];
-                final int x = index % w, z = (index / w) % d, y = index / area;
+                final int x = a.localX(index), z = a.localZ(index), y = a.localY(index);
                 if (Math.abs(x - mx) <= 4 && Math.abs(y - my) <= 4 && Math.abs(z - mz) <= 4) {
                     System.out.println("  change(" + (burst == burstA ? "A" : "B") + ") at " + x + "," + y + "," + z
                             + " -> opacity=" + burst[1][i] + " emission=" + burst[2][i]);
@@ -260,11 +249,17 @@ public final class ImageLaneSelfTest {
     private static ImageRegionData randomRegion(final Random random, final int w, final int d, final int h) {
         final ImageRegionData region = new ImageRegionData(bounds(w, d, h));
 
-        for (int index = 0; index < region.bounds.volume(); index++) {
-            final int roll = random.nextInt(100);
-            // mostly air, some walls, rare emitters - the shape real terrain has
-            region.opacity[index] = (byte) (roll < 70 ? 0 : (roll < 90 ? 15 : random.nextInt(16)));
-            region.emission[index] = (byte) (roll >= 97 ? 1 + random.nextInt(15) : 0);
+        // fill real cells only: the moat ring must keep its opacity-15 walls and zero light
+        for (int y = 0; y < h; y++) {
+            for (int z = 0; z < d; z++) {
+                for (int x = 0; x < w; x++) {
+                    final int index = region.localIndex(x, y, z);
+                    final int roll = random.nextInt(100);
+                    // mostly air, some walls, rare emitters - the shape real terrain has
+                    region.opacity[index] = (byte) (roll < 70 ? 0 : (roll < 90 ? 15 : random.nextInt(16)));
+                    region.emission[index] = (byte) (roll >= 97 ? 1 + random.nextInt(15) : 0);
+                }
+            }
         }
 
         return region;
@@ -283,9 +278,8 @@ public final class ImageLaneSelfTest {
             final int x = 15 + random.nextInt(w - 30);
             final int y = 15 + random.nextInt(h - 30);
             final int z = 15 + random.nextInt(d - 30);
-            final int index = (y * d + z) * w + x;
 
-            indices[i] = index;
+            indices[i] = region.localIndex(x, y, z);
             newOpacity[i] = random.nextInt(100) < 60 ? 0 : (random.nextInt(100) < 70 ? 15 : random.nextInt(16));
             newEmission[i] = random.nextInt(100) < 85 ? 0 : 1 + random.nextInt(15);
         }
@@ -295,7 +289,7 @@ public final class ImageLaneSelfTest {
 
     private static ImageRegionData cloneRegion(final ImageRegionData source) {
         final ImageRegionData region = new ImageRegionData(source.bounds);
-        final int volume = source.bounds.volume();
+        final int volume = source.paddedVolume;
         System.arraycopy(source.blockLight, 0, region.blockLight, 0, volume);
         System.arraycopy(source.opacity, 0, region.opacity, 0, volume);
         System.arraycopy(source.emission, 0, region.emission, 0, volume);
@@ -303,51 +297,44 @@ public final class ImageLaneSelfTest {
     }
 
     private static void copyLight(final ImageRegionData source, final ImageRegionData target) {
-        System.arraycopy(source.blockLight, 0, target.blockLight, 0, source.bounds.volume());
+        System.arraycopy(source.blockLight, 0, target.blockLight, 0, source.paddedVolume);
     }
 
     private static void applyMaterialTo(final ImageRegionData target, final ImageRegionData source) {
-        System.arraycopy(source.opacity, 0, target.opacity, 0, source.bounds.volume());
-        System.arraycopy(source.emission, 0, target.emission, 0, source.bounds.volume());
+        System.arraycopy(source.opacity, 0, target.opacity, 0, source.paddedVolume);
+        System.arraycopy(source.emission, 0, target.emission, 0, source.paddedVolume);
     }
 
     private static long compareInterior(final ImageRegionData incremental, final ImageRegionData oracle,
                                         final byte[] lightBefore, final int w, final int d, final int h,
                                         final int caseId) {
-        final int area = w * d;
         long errors = 0L;
 
-        for (int y = 1; y < h - 1; y++) {
-            for (int z = 1; z < d - 1; z++) {
-                final int rowBase = y * area + z * w;
-                for (int x = 1; x < w - 1; x++) {
-                    final int index = rowBase + x;
-                    if ((incremental.blockLight[index] & 0xF) != (oracle.blockLight[index] & 0xF)) {
+        // real interior and real faces, through the padded index mapping
+        for (int y = 0; y < h; y++) {
+            for (int z = 0; z < d; z++) {
+                for (int x = 0; x < w; x++) {
+                    final int index = incremental.localIndex(x, y, z);
+                    final boolean face = x == 0 || x == w - 1 || z == 0 || z == d - 1 || y == 0 || y == h - 1;
+                    if (!face) {
+                        if ((incremental.blockLight[index] & 0xF) != (oracle.blockLight[index] & 0xF)) {
+                            errors++;
+                            if (errors <= 8L) {
+                                System.out.println("IMAGE-LANE-MISMATCH case=" + caseId
+                                        + " at " + x + "," + y + "," + z
+                                        + " incremental=" + (incremental.blockLight[index] & 0xF)
+                                        + " oracle=" + (oracle.blockLight[index] & 0xF));
+                            }
+                        }
+                    } else if ((incremental.blockLight[index] & 0xF) != (lightBefore[index] & 0xF)) {
                         errors++;
                         if (errors <= 8L) {
-                            System.out.println("IMAGE-LANE-MISMATCH case=" + caseId
+                            System.out.println("IMAGE-LANE-BOUNDARY-VIOLATION case=" + caseId
                                     + " at " + x + "," + y + "," + z
-                                    + " incremental=" + (incremental.blockLight[index] & 0xF)
-                                    + " oracle=" + (oracle.blockLight[index] & 0xF));
+                                    + " before=" + (lightBefore[index] & 0xF)
+                                    + " after=" + (incremental.blockLight[index] & 0xF));
                         }
                     }
-                }
-            }
-        }
-
-        // the boundary must hold the light it entered with
-        for (int index = 0; index < incremental.bounds.volume(); index++) {
-            final int x = index % w;
-            final int z = (index / w) % d;
-            final int y = index / area;
-            final boolean boundary = x == 0 || x == w - 1 || z == 0 || z == d - 1 || y == 0 || y == h - 1;
-            if (boundary && (incremental.blockLight[index] & 0xF) != (lightBefore[index] & 0xF)) {
-                errors++;
-                if (errors <= 8L) {
-                    System.out.println("IMAGE-LANE-BOUNDARY-VIOLATION case=" + caseId
-                            + " at " + x + "," + y + "," + z
-                            + " before=" + (lightBefore[index] & 0xF)
-                            + " after=" + (incremental.blockLight[index] & 0xF));
                 }
             }
         }
@@ -363,21 +350,25 @@ public final class ImageLaneSelfTest {
         final int w = 112, d = 112, h = 48;
         final ImageRegionData region = new ImageRegionData(bounds(w, d, h));
         final Random materialRandom = new Random(7L);
-        final int area = w * d;
 
         // ground: a bumpy stone plane around the lower third, air above - the corridor sits on it
         for (int z = 0; z < d; z++) {
             for (int x = 0; x < w; x++) {
                 final int ground = 12 + (int) (Math.abs(Math.sin(x * 0.3) + Math.cos(z * 0.23)) * 4.0);
                 for (int y = 0; y <= ground && y < h; y++) {
-                    region.opacity[y * area + z * w + x] = 15;
+                    region.opacity[region.localIndex(x, y, z)] = 15;
                 }
             }
         }
-        // scattered opacity so the BFS has to think
-        for (int index = 0; index < region.bounds.volume(); index++) {
-            if (region.opacity[index] == 0 && materialRandom.nextInt(20) == 0) {
-                region.opacity[index] = (byte) (1 + materialRandom.nextInt(14));
+        // scattered opacity so the BFS has to think (real cells only; the moat stays at 15)
+        for (int y = 0; y < h; y++) {
+            for (int z = 0; z < d; z++) {
+                for (int x = 0; x < w; x++) {
+                    final int index = region.localIndex(x, y, z);
+                    if (region.opacity[index] == 0 && materialRandom.nextInt(20) == 0) {
+                        region.opacity[index] = (byte) (1 + materialRandom.nextInt(14));
+                    }
+                }
             }
         }
 
@@ -387,23 +378,24 @@ public final class ImageLaneSelfTest {
         final int[] newEmission = new int[95];
         int n = 0;
         for (int t = 0; t < 48 && n < 95; t++, n++) {
-            final int index = (14 + (t & 15)) * area + (16 + t * 2) * w + 56;
-            indices[n] = index; newOpacity[n] = 0; newEmission[n] = 15;
+            indices[n] = region.localIndex(56, 14 + (t & 15), 16 + t * 2);
+            newOpacity[n] = 0; newEmission[n] = 15;
         }
         for (int t = 0; t < 48 && n < 95; t++, n++) {
-            final int index = (14 + ((t * 3) & 15)) * area + 56 * w + (16 + t * 2);
-            indices[n] = index; newOpacity[n] = 0; newEmission[n] = 15;
+            indices[n] = region.localIndex(16 + t * 2, 14 + ((t * 3) & 15), 56);
+            newOpacity[n] = 0; newEmission[n] = 15;
         }
 
         // pre-state: oracle with the glowstone absent
         engine.compute(region);
         final byte[] lightSnapshot = region.blockLight.clone();
         final byte[] opacitySnapshot = region.opacity.clone();
+        final int cells = region.paddedVolume;
 
         // JIT warmup
         for (int round = 0; round < 30; round++) {
-            System.arraycopy(lightSnapshot, 0, region.blockLight, 0, region.bounds.volume());
-            System.arraycopy(opacitySnapshot, 0, region.opacity, 0, region.bounds.volume());
+            System.arraycopy(lightSnapshot, 0, region.blockLight, 0, cells);
+            System.arraycopy(opacitySnapshot, 0, region.opacity, 0, cells);
             region.clearDirty();
             engine.applyChanges(region, indices, newOpacity, newEmission);
         }
@@ -415,8 +407,8 @@ public final class ImageLaneSelfTest {
         final CRC32 crc = new CRC32();
 
         for (int round = 0; round < rounds; round++) {
-            System.arraycopy(lightSnapshot, 0, region.blockLight, 0, region.bounds.volume());
-            System.arraycopy(opacitySnapshot, 0, region.opacity, 0, region.bounds.volume());
+            System.arraycopy(lightSnapshot, 0, region.blockLight, 0, cells);
+            System.arraycopy(opacitySnapshot, 0, region.opacity, 0, cells);
             region.clearDirty();
 
             final long t0 = System.nanoTime();
@@ -453,5 +445,63 @@ public final class ImageLaneSelfTest {
                 + " lit=" + lit + "/" + indices.length
                 + " dirtySections=" + region.dirtyBlockSections.cardinality()
                 + " crc=" + crc.getValue();
+    }
+
+    /**
+     * Nibble round-trip: adopt synthetic section nibbles into the padded region, then write them back through the
+     * exact mapping writeSection uses - every adopted cell must come back bit-identical. A one-cell (one-nibble)
+     * misalignment anywhere in the padded adopt/pack mapping shows up here as a scattered mismatch, without
+     * needing a live world.
+     */
+    private static String roundTrip() {
+        final int w = 48, d = 48, h = 48;
+        final ImageRegionData region = new ImageRegionData(bounds(w, d, h));
+        final Random random = new Random(99L);
+        final byte[][] original = new byte[9 * 3][];
+        int slot = 0;
+        int errors = 0;
+
+        for (int sectionIndex = 0; sectionIndex < 3; sectionIndex++) {
+            for (int cz = 0; cz < 3; cz++) {
+                for (int cx = 0; cx < 3; cx++) {
+                    final byte[] packed = new byte[2048];
+                    random.nextBytes(packed);
+                    original[slot++] = packed.clone();
+                    region.adoptSectionData(cx, cz, sectionIndex, packed, false);
+                }
+            }
+        }
+
+        // write back with writeSection's mapping (region -> packed), then compare per slot
+        slot = 0;
+        for (int sectionIndex = 0; sectionIndex < 3; sectionIndex++) {
+            for (int cz = 0; cz < 3; cz++) {
+                for (int cx = 0; cx < 3; cx++) {
+                    final int minX = (cx << 4) + 1, minZ = (cz << 4) + 1, baseY = (sectionIndex << 4) + 1;
+                    final int width = region.paddedWidth;
+                    final int area = region.paddedArea;
+                    final byte[] light = region.blockLight;
+                    final byte[] packed = new byte[2048];
+                    for (int y = 0; y < 16; y++) {
+                        final int yBase = (baseY + y) * area;
+                        for (int z = 0; z < 16; z++) {
+                            final int rowBase = yBase + (minZ + z) * width + minX;
+                            final int packedRow = ((y << 8) | (z << 4)) >> 1;
+                            for (int x = 0; x < 16; x += 2) {
+                                packed[packedRow + (x >> 1)] =
+                                        (byte) ((light[rowBase + x] & 0xF) | ((light[rowBase + x + 1] & 0xF) << 4));
+                            }
+                        }
+                    }
+                    for (int i = 0; i < 2048; i++) {
+                        if (packed[i] != original[slot][i]) {
+                            errors++;
+                        }
+                    }
+                    slot++;
+                }
+            }
+        }
+        return "roundTripCells=" + (slot * 2048) + " roundTripErrors=" + errors;
     }
 }

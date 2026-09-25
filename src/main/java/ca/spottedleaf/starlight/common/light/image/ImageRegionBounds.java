@@ -36,6 +36,18 @@ public record ImageRegionBounds(
                 maxBuildY, minSectionY, sectionCount, heightBlocks, area, volume);
     }
 
+    public int paddedWidth() {
+        return this.widthBlocks + 2;
+    }
+
+    public int paddedDepth() {
+        return this.depthBlocks + 2;
+    }
+
+    public int paddedArea() {
+        return (this.widthBlocks + 2) * (this.depthBlocks + 2);
+    }
+
     public int minBlockX() {
         return (originChunkX - haloChunks) << 4;
     }

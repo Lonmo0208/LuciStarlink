@@ -23,12 +23,28 @@ public final class ImageRegionData {
     public final int offsetPosY;
     public final int offsetNegY;
 
+    // The moat: every plane is padded by one cell on all six faces. The pad carries opacity 15 and light 0, so
+    // propagation naturally dies at the region edge and the BFS hot loops run without any bounds checks or
+    // coordinate decodes - the whole per-pop cost is opacity read, light read, compare, write. Padded space
+    // arithmetic: real-local (x,y,z) lives at padded (x+1, y+1, z+1); real (width,depth,height) become
+    // (paddedWidth-2, paddedDepth-2, paddedHeight-2).
+    public final int paddedWidth;
+    public final int paddedDepth;
+    public final int paddedHeight;
+    public final int paddedArea;
+    public final int paddedVolume;
+
     public ImageRegionData(ImageRegionBounds bounds) {
         this.bounds = bounds;
-        this.opacity = new byte[bounds.volume()];
-        this.emission = new byte[bounds.volume()];
-        this.blockLight = new byte[bounds.volume()];
-        this.skyLight = new byte[bounds.volume()];
+        this.paddedWidth = bounds.widthBlocks() + 2;
+        this.paddedDepth = bounds.depthBlocks() + 2;
+        this.paddedHeight = bounds.heightBlocks() + 2;
+        this.paddedArea = this.paddedWidth * this.paddedDepth;
+        this.paddedVolume = this.paddedArea * this.paddedHeight;
+        this.opacity = new byte[this.paddedVolume];
+        this.emission = new byte[this.paddedVolume];
+        this.blockLight = new byte[this.paddedVolume];
+        this.skyLight = new byte[this.paddedVolume];
         int sectionCapacity = bounds.widthBlocks() / 16 * bounds.depthBlocks() / 16 * bounds.sectionCount();
         this.dirtyBlockSections = new BitSet(sectionCapacity);
         this.dirtySkySections = new BitSet(sectionCapacity);
@@ -38,17 +54,44 @@ public final class ImageRegionData {
         this.coreLocalChunkEnd = bounds.haloChunks() + bounds.regionChunks();
         this.offsetPosX = 1;
         this.offsetNegX = -1;
-        this.offsetPosZ = bounds.widthBlocks();
-        this.offsetNegZ = -bounds.widthBlocks();
-        this.offsetPosY = bounds.area();
-        this.offsetNegY = -bounds.area();
+        this.offsetPosZ = this.paddedWidth;
+        this.offsetNegZ = -this.paddedWidth;
+        this.offsetPosY = this.paddedArea;
+        this.offsetNegY = -this.paddedArea;
+        this.fillWalls();
     }
 
+    /** Opacity 15 on the pad: a spreading wave loses 15 levels entering it, so it never writes and never enqueues. */
+    private void fillWalls() {
+        final byte wall = 15;
+        final int pw = this.paddedWidth, pd = this.paddedDepth, ph = this.paddedHeight;
+        for (int y = 0; y < ph; y++) {
+            for (int z = 0; z < pd; z++) {
+                final int rowBase = y * this.paddedArea + z * pw;
+                this.opacity[rowBase] = wall;
+                this.opacity[rowBase + pw - 1] = wall;
+            }
+        }
+        for (int y = 0; y < ph; y++) {
+            for (int x = 0; x < pw; x++) {
+                this.opacity[y * this.paddedArea + x] = wall;
+                this.opacity[y * this.paddedArea + (pd - 1) * pw + x] = wall;
+            }
+        }
+        for (int z = 0; z < pd; z++) {
+            for (int x = 0; x < pw; x++) {
+                this.opacity[z * pw + x] = wall;
+                this.opacity[(ph - 1) * this.paddedArea + z * pw + x] = wall;
+            }
+        }
+    }
+
+    /** Region-local index of a real-local cell (unpadded coordinates in, padded index out). */
     public int index(int worldX, int worldY, int worldZ) {
         int localX = worldX - bounds.minBlockX();
         int localY = worldY - bounds.minBuildY();
         int localZ = worldZ - bounds.minBlockZ();
-        return localX + localZ * bounds.widthBlocks() + localY * bounds.area();
+        return (localY + 1) * this.paddedArea + (localZ + 1) * this.paddedWidth + (localX + 1);
     }
 
     /**
@@ -62,7 +105,7 @@ public final class ImageRegionData {
     }
 
     public int localIndex(int localX, int localY, int localZ) {
-        return localX + localZ * bounds.widthBlocks() + localY * bounds.area();
+        return (localY + 1) * this.paddedArea + (localZ + 1) * this.paddedWidth + (localX + 1);
     }
 
     public boolean isInside(int worldX, int worldY, int worldZ) {
@@ -228,32 +271,37 @@ public final class ImageRegionData {
         return sky ? skyLight : blockLight;
     }
 
+    /** Padded index -> real-local coordinate (the pad is one cell thick on every face). */
     public int localX(int index) {
-        return index % bounds.widthBlocks();
+        return index % this.paddedWidth - 1;
     }
 
     public int localY(int index) {
-        return index / bounds.area();
+        return index / this.paddedArea - 1;
     }
 
     public int localZ(int index) {
-        int rem = index - localY(index) * bounds.area();
-        return rem / bounds.widthBlocks();
+        int rem = index - (localY(index) + 1) * this.paddedArea;
+        return rem / this.paddedWidth - 1;
     }
 
     public void markDirtyBlockIndex(int index) {
-        int localY = index / bounds.area();
-        int rem = index - localY * bounds.area();
-        int localZ = rem / bounds.widthBlocks();
-        int localX = rem - localZ * bounds.widthBlocks();
+        int localY = index / this.paddedArea - 1;
+        int rem = index - (localY + 1) * this.paddedArea;
+        int localZ = rem / this.paddedWidth - 1;
+        int localX = rem - (localZ + 1) * this.paddedWidth - 1;
+        if (localX < 0 || localY < 0 || localZ < 0) {
+            throw new IllegalStateException("dirty on wall: index=" + index + " x=" + localX + " y=" + localY + " z=" + localZ
+                    + " opacity=" + (this.opacity[index] & 0xF) + " light=" + (this.blockLight[index] & 0xF));
+        }
         markDirtyBlockLocal(localX, localY, localZ);
     }
 
     public void markDirtySkyIndex(int index) {
-        int localY = index / bounds.area();
-        int rem = index - localY * bounds.area();
-        int localZ = rem / bounds.widthBlocks();
-        int localX = rem - localZ * bounds.widthBlocks();
+        int localY = index / this.paddedArea - 1;
+        int rem = index - (localY + 1) * this.paddedArea;
+        int localZ = rem / this.paddedWidth - 1;
+        int localX = rem - (localZ + 1) * this.paddedWidth - 1;
         markDirtySkyLocal(localX, localY, localZ);
     }
 
@@ -274,13 +322,13 @@ public final class ImageRegionData {
      * engine storage without recomputing light.
      */
     public void adoptSectionData(int localChunkX, int localChunkZ, int sectionIndex, byte[] packed, boolean sky) {
-        int minSectionBaseX = localChunkX << 4;
-        int minSectionBaseZ = localChunkZ << 4;
-        int width = bounds.widthBlocks();
-        int area = bounds.area();
+        int minSectionBaseX = (localChunkX << 4) + 1;
+        int minSectionBaseZ = (localChunkZ << 4) + 1;
+        int width = this.paddedWidth;
+        int area = this.paddedArea;
         byte[] target = sky ? skyLight : blockLight;
         for (int y = 0; y < 16; y++) {
-            int yBase = (sectionIndex << 4 | y) * area;
+            int yBase = ((sectionIndex << 4 | y) + 1) * area;
             for (int z = 0; z < 16; z++) {
                 int rowBase = yBase + (minSectionBaseZ + z) * width + minSectionBaseX;
                 int packedBase = (y << 8) | (z << 4);
@@ -315,15 +363,15 @@ public final class ImageRegionData {
      * 只清 emission 是保守一侧：最坏情况是邻居贴着边界放光源时我们这侧略暗，比出一圈亮斑轻得多。
      */
     public void clearHaloEmission(int originChunkX, int originChunkZ, int chunkCount) {
-        int xStart = (originChunkX << 4) - bounds.minBlockX();
-        int zStart = (originChunkZ << 4) - bounds.minBlockZ();
+        int xStart = (originChunkX << 4) - bounds.minBlockX() + 1;
+        int zStart = (originChunkZ << 4) - bounds.minBlockZ() + 1;
         int span = chunkCount << 4;
         int xEnd = xStart + span;
         int zEnd = zStart + span;
-        int width = bounds.widthBlocks();
-        int depth = bounds.depthBlocks();
-        int area = bounds.area();
-        for (int y = 0; y < bounds.heightBlocks(); y++) {
+        int width = this.paddedWidth;
+        int depth = this.paddedDepth;
+        int area = this.paddedArea;
+        for (int y = 1; y <= bounds.heightBlocks(); y++) {
             int yBase = y * area;
             if (zStart > 0) {
                 java.util.Arrays.fill(emission, yBase, yBase + zStart * width, (byte) 0);
@@ -349,12 +397,12 @@ public final class ImageRegionData {
      * 多清一块 halo 就只能让传播把实心方块当空气，少清一块自有区块就会把旧材质留下来。
      */
     public void clearMaterialsForChunks(int originChunkX, int originChunkZ, int chunkCount) {
-        int xStart = (originChunkX << 4) - bounds.minBlockX();
-        int zStart = (originChunkZ << 4) - bounds.minBlockZ();
+        int xStart = (originChunkX << 4) - bounds.minBlockX() + 1;
+        int zStart = (originChunkZ << 4) - bounds.minBlockZ() + 1;
         int span = chunkCount << 4;
-        int width = bounds.widthBlocks();
-        int area = bounds.area();
-        for (int y = 0; y < bounds.heightBlocks(); y++) {
+        int width = this.paddedWidth;
+        int area = this.paddedArea;
+        for (int y = 1; y <= bounds.heightBlocks(); y++) {
             int yBase = y * area;
             for (int z = 0; z < span; z++) {
                 int rowBase = yBase + (zStart + z) * width + xStart;
@@ -368,6 +416,7 @@ public final class ImageRegionData {
         java.util.Arrays.fill(opacity, (byte) 0);
         java.util.Arrays.fill(emission, (byte) 0);
         clearLight();
+        this.fillWalls(); // the material wipe erases the moat; restore it before anything propagates
         // 物化标记必须一起清：不清的话采纱失败回退到全量计算的路径会先在清零的基线上算，
         // 而 materializeReach 看到 isLightMaterialized=true 会跳过这些 section，永远不补 halo 材质。
         clearLightMaterialized();

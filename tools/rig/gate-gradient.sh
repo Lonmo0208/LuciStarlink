@@ -21,6 +21,7 @@ setblock 2 -37 -16 air
 setblock 2 -37 -16 glowstone
 setblock 5 -37 -16 air
 setblock 5 -37 -16 glowstone
+fill 10 -37 -16 13 -34 -13 minecraft:glowstone
 say GATE-PLACED
 schedule function emittertest:read 6s
 EOF
@@ -31,6 +32,9 @@ lucistarlink light 1 -37 -16
 lucistarlink light 4 -37 -16
 lucistarlink light 7 -37 -16
 lucistarlink light 10 -37 -16
+lucistarlink light 12 -36 -14
+lucistarlink light 14 -36 -14
+lucistarlink light 17 -36 -14
 lucistarlink stats
 say GATE-READ
 stop

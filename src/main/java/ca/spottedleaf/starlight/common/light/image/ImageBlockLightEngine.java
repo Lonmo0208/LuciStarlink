@@ -86,7 +86,8 @@ public final class ImageBlockLightEngine {
 
     /**
      * The oracle: re-derive the interior from the region's emissions, with boundary cells kept at the light they
-     * entered with and treated as fixed sources. The fuzz compares this against {@link #applyChanges}.
+     * entered with and treated as fixed sources. The fuzz compares this against {@link #applyChanges}. All loops
+     * walk real cells (padded coordinates 1..w), and the moat ring around them is never touched.
      */
     public void compute(final ImageRegionData data) {
         final IntBucketQueue queue = this.addQueue;
@@ -96,15 +97,16 @@ public final class ImageBlockLightEngine {
 
         final byte[] light = data.blockLight;
         final byte[] emission = data.emission;
-        final int w = data.bounds.widthBlocks();
-        final int d = data.bounds.depthBlocks();
-        final int h = data.bounds.heightBlocks();
-        final int area = data.bounds.area();
+        final int w = data.paddedWidth;
+        final int d = data.paddedDepth;
+        final int h = data.paddedHeight;
+        final int area = data.paddedArea;
 
-        for (int y = 1; y < h - 1; y++) {
-            for (int z = 1; z < d - 1; z++) {
+        // real interior: padded coordinates 2..w-3 (the real faces sit at padded 1 and w-2)
+        for (int y = 2; y < h - 2; y++) {
+            for (int z = 2; z < d - 2; z++) {
                 final int rowBase = y * area + z * w;
-                for (int x = 1; x < w - 1; x++) {
+                for (int x = 2; x < w - 2; x++) {
                     final int index = rowBase + x;
                     final int em = emission[index] & 0xF;
                     light[index] = (byte) em;
@@ -116,15 +118,19 @@ public final class ImageBlockLightEngine {
             }
         }
 
-        // boundary cells re-spread the light they entered with (the sky-window rule)
-        for (int index = 0; index < data.bounds.volume(); index++) {
-            final int x = index % w;
-            final int z = (index / w) % d;
-            final int y = index / area;
-            if (x == 0 || x == w - 1 || z == 0 || z == d - 1 || y == 0 || y == h - 1) {
-                final int lightLevel = light[index] & 0xF;
-                if (lightLevel > 1) {
-                    queue.enqueue(lightLevel, index);
+        // real boundary cells re-spread the light they entered with (the sky-window rule)
+        final int xFace = w - 2, zFace = d - 2, yFace = h - 2;
+        for (int y = 1; y <= yFace; y++) {
+            for (int z = 1; z <= zFace; z++) {
+                final int rowBase = y * area + z * w;
+                for (int x = 1; x <= xFace; x++) {
+                    if (x == 1 || x == xFace || z == 1 || z == zFace || y == 1 || y == yFace) {
+                        final int index = rowBase + x;
+                        final int lightLevel = light[index] & 0xF;
+                        if (lightLevel > 1) {
+                            queue.enqueue(lightLevel, index);
+                        }
+                    }
                 }
             }
         }
@@ -138,17 +144,15 @@ public final class ImageBlockLightEngine {
         while ((packed = removals.poll()) != Integer.MIN_VALUE) {
             final int index = packed >>> REMOVAL_LEVEL_BITS;
             final int removedLevel = packed & REMOVAL_LEVEL_MASK;
-            final int y = index / data.bounds.area();
-            final int rem = index - y * data.bounds.area();
-            final int z = rem / data.bounds.widthBlocks();
-            final int x = rem - z * data.bounds.widthBlocks();
 
-            this.tryRemoveNeighbor(data, queue, removals, removedLevel, x + 1, y, z, index + data.offsetPosX);
-            this.tryRemoveNeighbor(data, queue, removals, removedLevel, x - 1, y, z, index + data.offsetNegX);
-            this.tryRemoveNeighbor(data, queue, removals, removedLevel, x, y, z + 1, index + data.offsetPosZ);
-            this.tryRemoveNeighbor(data, queue, removals, removedLevel, x, y, z - 1, index + data.offsetNegZ);
-            this.tryRemoveNeighbor(data, queue, removals, removedLevel, x, y + 1, z, index + data.offsetPosY);
-            this.tryRemoveNeighbor(data, queue, removals, removedLevel, x, y - 1, z, index + data.offsetNegY);
+            // the moat needs no coordinates and no bounds checks: every out-of-region neighbour is a wall cell
+            // with opacity 15 and light 0, so both the spread and the removal walks die there on their own
+            this.tryRemoveNeighbor(data, queue, removals, removedLevel, index + data.offsetPosX);
+            this.tryRemoveNeighbor(data, queue, removals, removedLevel, index + data.offsetNegX);
+            this.tryRemoveNeighbor(data, queue, removals, removedLevel, index + data.offsetPosZ);
+            this.tryRemoveNeighbor(data, queue, removals, removedLevel, index + data.offsetNegZ);
+            this.tryRemoveNeighbor(data, queue, removals, removedLevel, index + data.offsetPosY);
+            this.tryRemoveNeighbor(data, queue, removals, removedLevel, index + data.offsetNegY);
 
             // 1.x rule: a cell the walk zeroed re-seeds itself from its own emitter
             final int em = data.emission[index] & 0xF;
@@ -162,17 +166,12 @@ public final class ImageBlockLightEngine {
     }
 
     private void tryRemoveNeighbor(final ImageRegionData data, final IntBucketQueue queue, final IntRingQueue removals,
-                                   final int removedLevel, final int nextX, final int nextY, final int nextZ, final int nextIndex) {
-        if (nextX < 0 || nextX >= data.bounds.widthBlocks() || nextZ < 0 || nextZ >= data.bounds.depthBlocks()
-                || nextY < 0 || nextY >= data.bounds.heightBlocks()) {
-            return;
-        }
-
+                                   final int removedLevel, final int nextIndex) {
         final byte[] light = data.blockLight;
         final int neighborLight = light[nextIndex] & 0xF;
 
         if (neighborLight == 0) {
-            return;
+            return; // also stops on the moat: wall cells hold light 0 and opacity 15
         }
 
         // The base engine's rule (StarLightEngine.performLightDecrease): a neighbour survives only when it is
@@ -229,32 +228,23 @@ public final class ImageBlockLightEngine {
                 continue;
             }
 
-            final int y = index / data.bounds.area();
-            final int rem = index - y * data.bounds.area();
-            final int z = rem / data.bounds.widthBlocks();
-            final int x = rem - z * data.bounds.widthBlocks();
-
-            this.spreadTo(data, queue, current, x + 1, y, z, index + data.offsetPosX);
-            this.spreadTo(data, queue, current, x - 1, y, z, index + data.offsetNegX);
-            this.spreadTo(data, queue, current, x, y, z + 1, index + data.offsetPosZ);
-            this.spreadTo(data, queue, current, x, y, z - 1, index + data.offsetNegZ);
-            this.spreadTo(data, queue, current, x, y + 1, z, index + data.offsetPosY);
-            this.spreadTo(data, queue, current, x, y - 1, z, index + data.offsetNegY);
+            // the moat: no coordinate decode, no bounds checks - the wall cells (opacity 15, light 0) stop every
+            // walk that would leave the region, so the six strides are always safe to touch
+            this.spreadTo(data, queue, current, index + data.offsetPosX);
+            this.spreadTo(data, queue, current, index + data.offsetNegX);
+            this.spreadTo(data, queue, current, index + data.offsetPosZ);
+            this.spreadTo(data, queue, current, index + data.offsetNegZ);
+            this.spreadTo(data, queue, current, index + data.offsetPosY);
+            this.spreadTo(data, queue, current, index + data.offsetNegY);
         }
     }
 
-    private void spreadTo(final ImageRegionData data, final IntBucketQueue queue, final int current,
-                          final int nextX, final int nextY, final int nextZ, final int nextIndex) {
-        if (nextX < 0 || nextX >= data.bounds.widthBlocks() || nextZ < 0 || nextZ >= data.bounds.depthBlocks()
-                || nextY < 0 || nextY >= data.bounds.heightBlocks()) {
-            return;
-        }
-
+    private void spreadTo(final ImageRegionData data, final IntBucketQueue queue, final int current, final int nextIndex) {
         final int candidate = current - ImageRegionData.propagationCost(data.opacity[nextIndex] & 0xF);
 
         if (candidate > (data.blockLight[nextIndex] & 0xF)) {
             data.blockLight[nextIndex] = (byte) candidate;
-            data.markDirtyBlockLocal(nextX, nextY, nextZ);
+            data.markDirtyBlockIndex(nextIndex);
             if (candidate > 1) {
                 queue.enqueue(candidate, nextIndex);
             }
