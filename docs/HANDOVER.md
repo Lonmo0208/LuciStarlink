@@ -543,5 +543,43 @@ classpath 上的 1.x harness 被丢掉 → `dev.lucistarlink.test.LuxServerBench
 格子上是**冗余**的。而门的 `/fill`、以及真实游戏里的 `/fill`、结构生成、世界编辑工具，**只有** own-edit 这一条路 ——
 所以那个 bug 只在真实玩法里出现，判据表永远照不到它。
 
-**结论**：这次修复对判据表是"零光值变化、可忽略的成本"；它的价值全在判据表之外（玩家真的会看到新盖的屋顶下还是亮的）。
+**结论**：这次修复对判据表是"零光值变化"；它的价值全在判据表之外（玩家真的会看到新盖的屋顶下还是亮的）。
+
+### 10.10 判据差距的**相位归因**（2026-09-27，第一份能指出"钱花在哪"的分解）
+
+harness 的 jsonl 每轮都带 `applyMillis` / `waitMillis` / `nsPerChangeApplyOnly` / `nsPerChangeWaitOnly`。
+把判据表那一轮（§10.8）的三引擎按相位摊开，**每改动的纳秒**：
+
+| 格 | applyOnly 我们/SL/1.x | waitOnly 我们/SL/1.x |
+|---|---|---|
+| structure_cube | **802** / 663 / 548 | **81** / 671 / 245 |
+| dense_chunk_patch | **669** / 445 / 488 | **45** / 2049 / 291 |
+| block_toggle_border | 1510 / 982 / 1741 | **54 767** / 48 011 / **6 256** |
+| sky_hole | 7215 / 3983 / 6365 | 35 689 / 38 257 / 25 778 |
+
+读法（这是第一次把 5.7× / 2.4× / 2.0× 落到具体相位上）：
+
+- **structure / dense 输在 apply 相位**（每改动 +139 / +224 ns）：这就是 setBlock 循环里**两条漏斗**（图像通道捕获 +
+  own-edit 缓冲）的净成本。SL 只有一条队列漏斗，1.x 的 inline 安装比 SL 还便宜（548）。
+  **注意 waitOnly 我们反而最好（81 对 671）** —— 我们把天空那一半推迟了，等待就短。
+- **border 输在 wait 相位**（每改动 54.8 µs 对 1.x 的 6.3 µs，8.7×）：那 95 处散改动由我们的 grouped nibble 路径结算，
+  一次改动引起约 1000 次 BFS pop（48 ns/pop），而 1.x 是约 787 pop × 8 ns。**所以 border 的 5.7× = 每 pop 贵 6 倍
+  + pop 数略多**，不是 plumbing。
+- **sky_hole** 两个相位都在 SL 与 1.x 之间（0.72 反超 1.x 的 0.86 就是这么来的）。
+
+**顺手记下的两条可疑点（都还没动手）**：
+
+1. `ImageMaterial.LIGHT_MASK = 0xFF` 只含 opacity+emission，**不含 flags**（FLAG_OCCLUDES/GLASS/SKYLIGHT_DOWN），
+   而通道的捕获用 `hasSameLight` 做去重。于是"只翻转 flag 不改 opacity/emission"的改动会被**丢掉**，镜像里那一格的
+   material 就旧了（后续 BFS 用错的 flag）。层里已经有 `hasSameRuntimeProperties`（用 RUNTIME_RELEVANT_MASK）——
+   要么捕获该用它，要么证明 flag 翻转必然伴随 opacity 变化。**默认关闭的通道才有，但这是真问题。**
+2. `LightEngine.hasDifferentLightProperties`（通道捕获的预过滤）**不能删**：它比 `LIGHT_MASK` 多比较
+   "是否用形状遮挡"，删了会漏改动 —— 所以 apply 相位那 +139 ns 里它必须留着。
+
+**修复代价的最终口径**（两轮交错 A/B §10.8 + 本节的相位数据）：重算自身每次多花 0.15-0.4 ms；但 structure 的
+minPass 差额约 1.5-2 ms/pass 落在 apply 与 wait **都测不到**的区间里（即 barrier 等的"引擎已结算"那段），方向与
+"重算现在真的写暗格 + 推邻居 + 发布"一致。要把它清零，只有让重算**在该 chunk 由基座队列同时接管时不要跑** ——
+但"基座也接管"必须是**证明**而不是启发式（计数比较就是启发式，会重犯我刚修的那类错）。可用的证明方向：own-edit
+推迟天空时，把那些位置**同时**入基座队列，让基底的 `propagateBlockChanges` 负责（它对两个方向都正确），然后
+彻底不跑重算 —— 代价是基底每位置约 1.2 µs 的播种（dense 2048 处 ≈ 2.4 ms），要先量过再选。
 
