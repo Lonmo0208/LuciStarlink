@@ -43,6 +43,15 @@ lucistarlink light 11 -38 -14
 lucistarlink light 11 -35 -14
 lucistarlink light 11 -34 -13
 lucistarlink light 14 -37 -16
+lucistarlink light 9 -38 -14
+lucistarlink light 10 -38 -14
+lucistarlink light 12 -38 -14
+lucistarlink light 13 -38 -14
+lucistarlink light 14 -38 -14
+lucistarlink light 11 -38 -16
+lucistarlink light 11 -38 -12
+lucistarlink light 11 -39 -14
+lucistarlink light 11 -40 -14
 lucistarlink stats
 say GATE-READ
 lucistarlink relight 2
@@ -63,6 +72,15 @@ lucistarlink light 11 -38 -14
 lucistarlink light 11 -35 -14
 lucistarlink light 11 -34 -13
 lucistarlink light 14 -37 -16
+lucistarlink light 9 -38 -14
+lucistarlink light 10 -38 -14
+lucistarlink light 12 -38 -14
+lucistarlink light 13 -38 -14
+lucistarlink light 14 -38 -14
+lucistarlink light 11 -38 -16
+lucistarlink light 11 -38 -12
+lucistarlink light 11 -39 -14
+lucistarlink light 11 -40 -14
 say GATE-READ2-DONE
 stop
 EOF

@@ -857,6 +857,27 @@ public final class SkyStarLightEngine extends StarLightEngine {
             }
         }
         System.arraycopy(light, 0, before, 0, cells);
+        // START FROM DARK, not from what is stored. Seeding the window with the current light made this routine
+        // increase-only: the sweep sets 15 down an open column and the BFS only ever raises a cell, so any cell that
+        // had to get DARKER kept its old value - a cell whose opacity just rose to 15, and every cell below it that
+        // the new blocker now shadows. Measured 2026-09-26 on a 4x4x4 glowstone /fill: the whole patch read sky=15
+        // (a full relight gives 0) and the cell underneath read 15 where the relight gives 13 - i.e. sky shining
+        // through a roof that was just built, for every bulk placement (/fill, structures, world edit).
+        //
+        // The two slabs at yLo and yHi are deliberately kept: any path from a change to them crosses >= 16 levels,
+        // which a field of at most 15 cannot do, so their values are provably not affected by this edit - and they are
+        // the only cells whose light can enter from outside the window (the cell above yHi is read through the "== 15"
+        // shortcut, so a slab lit from above by less than daylight would not be re-derived either).
+        //
+        // The install step below already does the right thing for a cell that ended up darker: it writes the nibble
+        // and pushes the cell into the DECREASE queue when it sits on the chunk boundary, so neighbours re-light too.
+        for (int col = 0; col < 256; col++) {
+            final int colBase = col * height;
+
+            for (int inner = 1; inner < height - 1; inner++) {
+                light[colBase + inner] = 0;
+            }
+        }
         final long tExpand = System.nanoTime();
 
         // ---- 1b) run bottoms for the one-block halo, computed ONCE per settle. The shell asks for a neighbour's run
@@ -915,22 +936,36 @@ public final class SkyStarLightEngine extends StarLightEngine {
                 if (runBottom == Integer.MIN_VALUE) {
                     continue;
                 }
-                // Exact neighbour runs from the cached table (filled above): a neighbour column whose run ends higher - a
-                // wall, an overhang, the side of a cube - is dark at heights where this one is lit, and those cells have to
-                // be seeded or the light never spills sideways. The first version tested only "is the neighbour lit at MY
-                // run bottom", which misses exactly that case.
-                final int lowestNeighbour = Math.min(
-                        Math.min(runs[(z + 1) * 18 + x], runs[(z + 1) * 18 + (x + 2)]),
-                        Math.min(runs[z * 18 + (x + 1)], runs[(z + 2) * 18 + (x + 1)]));
-
+                // Seed EVERY lit cell of the run, not just the ones whose neighbours reach as high. The old bound
+                // (`y <= lowestNeighbour`, the highest-ending neighbour run) was a cost trick that also threw away the
+                // sources a shadowed pocket needs: the BFS has no upward direction, so a cell that is open at y=-38
+                // in one column can only light its neighbour at the same height from a seed at that height. Measured
+                // 2026-09-26 under a 4x4x4 /fill: with the bound, the 4x4 shadow at y=-38 read a flat 12 where the
+                // canonical field has 14/13/13/14 (distance 1/2/2/1 from the open columns). Seeding all of them
+                // reproduces the canonical values; the extra seeds are cells the BFS would have visited anyway.
                 queue[tail++] = base + (runBottom - yLo);
-                for (int y = runBottom + 1; y <= lowestNeighbour && y <= yHi; y++) {
+                for (int y = runBottom + 1; y <= yHi; y++) {
                     final int i = base + (y - yLo);
 
                     if ((light[i] & 0xFF) == 15) {
                         queue[tail++] = i;
                     }
                 }
+            }
+        }
+        // The two preserved slabs are the window's outer boundary and the only light that enters it from outside, so
+        // they seed the BFS at their own level. They are deliberately not cleared (see the note at the copy above).
+        for (int col = 0; col < 256; col++) {
+            final int colBase = col * height;
+            final int boundary = light[colBase] & 0xFF;
+
+            if (boundary > 1) {
+                queue[tail++] = colBase;
+            }
+            final int top = light[colBase + height - 1] & 0xFF;
+
+            if (top > 1) {
+                queue[tail++] = colBase + height - 1;
             }
         }
         int head = 0;
