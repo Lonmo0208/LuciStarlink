@@ -662,3 +662,29 @@ minPass 里占的份额小于本窗口的分辨率（apply 只占 dense 读数�
 **到这里，"换个路由就能赢"的空间已经全部量完并关闭**：通道上 border 更差、inline 更差、基座队列是现状、
 粘性归属在 2026-09-25 因 sky_hole 变慢被否。剩下唯一能动的是**引擎核心本身**（下降波的每次检查成本 / 把基座的
 存储换掉），而那条路 2026-09-21 已被自己的预登记熔断关掉（`docs/OWN-ENGINE.md`：每 section 提取 185 µs）。
+
+### 10.14 度量学：我们的 `minPass` 和 SL/1.x **不是同一种记账**（2026-09-27，四次控制运行）
+
+harness 的完成判定是 `waitForPendingTasks(chunk)` 的 future + `controller().hasPendingRuntimeWork()`
+（`LuxServerBenchmark.waitForLight`）。**我们的层不排队**（own-edit 就地缓冲、通道就地结算），所以那个 future
+**立刻完成** → `waitMillis`≈0 → 而 `elapsed`（= `minPass`）里剩下的时间只是跨 tick 的空转，既不是 apply 也不是
+我们引擎的工作。dense 第 5 轮（µs）：
+
+| 配置 | minPass | elapsed | apply | wait | 未计入 |
+|---|---|---|---|---|---|
+| 通道开 + ownEdit 开（现状 = 发布配置） | 4.76 ms | 4759 | 1058 | **3** | **3698** |
+| `-Dscalablelux.imageLane=false` | 7.09 | 8416 | 1350 | 6 | 7060 |
+| `-Dscalablelux.ownEdit=false` | 5.20 | 5200 | 1174 | **3851** | 175 |
+| 两个都关（纯基座） | 4.46 | 4459 | 1055 | 3233 | 171 |
+| SL（同轮对照） | 3.86 | 4028 | 878 | **2977** | 173 |
+
+**SL 的读数 `apply + wait ≈ elapsed`（未计入 5%）；我们开着 own-edit 时 wait≈0、80% 的 elapsed 无法归因。**
+结论有三条，都要随数字一起说：
+
+1. **引擎口径上我们和 SL/1.x 不可直接比**：同一台机器、同一协议下，`minPass` 对我们的配置量的是"引擎早早报完成 +
+   跨 tick 空转"，对 SL 量的是"引擎异步做完"。apples-to-apples 的那一列是 `ownEdit=false`：
+   **dense 5.20 对 SL 3.92（1.33×）**，比 §10.8 那张表（4.76 / 1.20×）更不利于我们 —— 也就是说那张表**略微高估**了我们。
+2. **通道本身是赚的**：`imageLane=false` 7.09 对现状 4.76（dense），通道值 2.3 ms；纯基座 4.46 说明**我们这层净成本约
+   +0.3 ms（7%）**，其余差距是基座的。
+3. **"80% 未归因"不等于有隐藏工作**：它是记账结构，不是我们的引擎在偷偷干活（`settleNanos` 只测到 ~1.06 ms/pass）。
+   但**引用引擎口径时必须写明这一条**，否则对着 SL 的 5% 未归因读数做差会把差距算错。
