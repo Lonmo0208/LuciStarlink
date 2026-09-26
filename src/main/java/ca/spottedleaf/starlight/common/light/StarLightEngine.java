@@ -1254,7 +1254,9 @@ public abstract class StarLightEngine {
 
             // where does the ~70 ns per queue entry go? Split decode+dispatch from the neighbour examination, sampled
             // so the timers stay out of the reading (see docs/NEW-ENGINE-TEARDOWN.md §15).
-            final boolean lucisSample = LuxProfiler.sample();
+            // The profiler check goes in front of sample(): with the profiler off - the configuration every criterion
+            // run uses - sample() was still a static increment and a mask on every single pop.
+            final boolean lucisSample = LuxProfiler.enabled() && LuxProfiler.sample();
             final long lucisPopT0 = lucisSample ? System.nanoTime() : 0L;
             final int posX = ((int)queueValue & 63) + decodeOffsetX;
             final int posZ = (((int)queueValue >>> 6) & 63) + decodeOffsetZ;
