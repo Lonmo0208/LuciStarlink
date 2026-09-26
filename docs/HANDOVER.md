@@ -567,6 +567,22 @@ harness 的 jsonl 每轮都带 `applyMillis` / `waitMillis` / `nsPerChangeApplyO
   + pop 数略多**，不是 plumbing。
 - **sky_hole** 两个相位都在 SL 与 1.x 之间（0.72 反超 1.x 的 0.86 就是这么来的）。
 
+**⚠ 本节措辞的更正（同日晚些时候，读 harness 的单轮日志后）**：apply 与 wait **并不能解释 minPass 的全部**，
+harness 的读数还有**第三块**，而且是最大的一块。dense 第 5 轮（2048 处改动，微秒）：
+
+| 引擎 | elapsed（pass 起点 → 引擎报告完成） | apply | 剩余（引擎的 apply 后处理） |
+|---|---|---|---|
+| 我们 | 4759 | 1058 | **~3600** |
+| SL | 4028 | 878 | **~3148** |
+| 1.x | 2331 | 910 | **~1413** |
+
+`minPassNanos` = `passStart → max(waitCompleteNanos, publish 标记)`（见 `LuxServerBenchmark.waitLight`），而
+`waitMillis` 只是其中显式等待那一小段。**所以 dense/structure 的读数主要是"引擎自己把光算完"那段**：我们 3.6 ms
+对 SL 3.1 对 1.x 1.4 —— 即 **引擎计算本身 1.15× SL、2.5× 1.x**，apply 相位（1.06 对 0.88 对 0.91）只占读数约 22%。
+border 同理：95 处 × 54.8 µs = 5.2 ms 的 apply 后处理对 1.x 的 95 × 6.3 µs = 0.6 ms。**一句话：四格的引擎口径差距
+几乎全在"引擎把一批改动算完"的时间里，也就是 BFS 的每 pop 成本 + 结算机制；不是 harness 的循环、不是两条漏斗。**
+（下面 §10.12 的 apply 相位微调也因此只值个位数百分比。）
+
 **顺手记下的两条可疑点（都还没动手）**：
 
 1. `ImageMaterial.LIGHT_MASK = 0xFF` 只含 opacity+emission，**不含 flags**（FLAG_OCCLUDES/GLASS/SKYLIGHT_DOWN），
@@ -604,4 +620,26 @@ minPass 差额约 1.5-2 ms/pass 落在 apply 与 wait **都测不到**的区间�
 **结论**：① border 继续走 nibble 路径，通道不要碰它；② §10.10 的"通道 per-region tax ~105 µs"不是靠调参数能消掉的，
 border 的 5.7× 只能在 **nibble BFS 的每次 pop（48 ns 对 1.x 的 ~8 ns）** 上想办法 —— 与 2026-09-24 那轮"唯一剩下的路
 是自己拥有存储与更新循环"的结论一致，而那条路已被自己的预登记保险丝关掉（`docs/OWN-ENGINE.md`）。
+
+### 10.12 通道捕获路径的三处微调（`5f05186e`）——门绿、指纹不变，**但这个窗口量不出收益**
+
+按 §10.10 的 apply 相位归因做的三件小事（都在 `ImageLane` 的捕获热路径上）：
+
+1. **`System.nanoTime()` 计时对只在 profiler 打开时跑**：`onBlockStateChange` 每次方块改动都要两次 nanoTime，
+   纯instrumentation；判据运行不开 profiler，所以这里直接省掉。
+2. **不再 `new ChunkPos(pos)`**（每次改动一个对象）：改用 `pos.getX() >> 4` 这类整数。
+3. **材质对记忆（`ImageMaterialCache.lookupLightPair`）**：一次性填充是**同一种转移重复几千次**（air→glowstone），
+   每次两次 `lookupLight`（注册表 id + 缓存探针 + 位解包/属性读）换成一次身份比较命中；只有**位置无关**的材质才记忆
+   （缓存里的 DYNAMIC_OPACITY 位已经记录了这件事，动态状态永不记忆，所以记忆一定是精确的）。
+
+**证据**：门（22 探针在 relight 前后一致）绿、四格指纹仍是 `905931078dfc5ace`；直接计数器 `laneCaptureNanos` 在同一
+profiler 区间里 dense **338 100 → 249 600 ns（−26%）**、structure 345 300 → 334 000（−3%）。
+**但判据表量不出来**：`tools/rig/trim-ab2.sh`（3 轮、每轮换序、structure+dense）读到 structure 7.58 → 8.07、
+dense 6.43 → 5.94（一坏一好），applyOnly 1101 → 1124 / 820 → 851（噪声内）。**这个窗口本身是废的**：同一个 build
+的 minPass 在轮次之间从 5.0 摆到 9.8 ms（比判据那一轮整体慢 1.5×，机器上有视频/QQ 在跑）。
+
+**结论**：这三处是**纯减少工作量**（少两次 nanoTime、少一个分配、少一次缓存查询），代码级上不可能更慢；但它们在
+minPass 里占的份额小于本窗口的分辨率（apply 只占 dense 读数的 ~22%，捕获又只占 apply 的一部分）。**保留，但标记为
+"待干净窗口复测"**；判据表里不要引用它。
+
 

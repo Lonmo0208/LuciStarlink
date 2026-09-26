@@ -67,6 +67,8 @@ public final class ImageLane {
     private final OwnedRegionImageCache cache = new OwnedRegionImageCache();
     private final ImageBlockLightEngine engine = new ImageBlockLightEngine();
     private final ImageMaterialCache materialCache = new ImageMaterialCache();
+    /** Reusable (old, new) material pair for the capture path; the capture is server-thread only. */
+    private final int[] materialPair = new int[2];
     private final Long2ObjectOpenHashMap<RuntimeLightChangeBuffer> pending = new Long2ObjectOpenHashMap<>();
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet staleRegions = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     /** Chunk keys the current settle took over; consulted by covers() after the buffer is drained. */
@@ -124,6 +126,13 @@ public final class ImageLane {
 
     public void onBlockStateChange(final ServerLevel level, final BlockPos pos,
                                    final BlockState oldState, final BlockState newState) {
+        // The timing pair is two System.nanoTime() calls on EVERY block change in the world, and this hook is on the
+        // engine metric's apply phase (measured +139 ns a change against the pristine base). It is instrumentation,
+        // so it only runs when the profiler is on - which the criterion runs leave off.
+        if (!LuxProfiler.enabled()) {
+            this.onBlockStateChangeInner(level, pos, oldState, newState);
+            return;
+        }
         final long lucisCaptureT0 = System.nanoTime();
         try {
         this.onBlockStateChangeInner(level, pos, oldState, newState);
@@ -144,8 +153,10 @@ public final class ImageLane {
         if (this.worldgenDepth > 0) {
             return;
         }
-        final ChunkPos chunkPos = new ChunkPos(pos);
-        final ChunkAccess chunk = this.owner.getAnyChunkNow(chunkPos.x, chunkPos.z);
+        // ints, not a ChunkPos: this runs per change and the allocation is pure garbage on a 4096-block burst
+        final int chunkX = pos.getX() >> 4;
+        final int chunkZ = pos.getZ() >> 4;
+        final ChunkAccess chunk = this.owner.getAnyChunkNow(chunkX, chunkZ);
 
         if (chunk == null || !chunk.getPersistedStatus().isOrAfter(net.minecraft.world.level.chunk.status.ChunkStatus.LIGHT)) {
             this.lastCaptureChunkKey = Long.MIN_VALUE;
@@ -157,11 +168,11 @@ public final class ImageLane {
 
         // dense bursts arrive chunk-by-chunk (2048 changes in one chunk), so the per-change bounds construction
         // - a record allocation plus four level calls - is hoisted behind a chunk-key check
-        final long chunkKey = ImageRegionBounds.regionKey(chunkPos.x, chunkPos.z);
+        final long chunkKey = ImageRegionBounds.regionKey(chunkX, chunkZ);
         ImageRegionBounds bounds = this.lastCaptureChunkKey == chunkKey ? this.lastCaptureBounds : null;
 
         if (bounds == null) {
-            bounds = ImageRegionBounds.around(chunkPos, level, REGION_CHUNKS, HALO_CHUNKS);
+            bounds = ImageRegionBounds.around(new ChunkPos(chunkX, chunkZ), level, REGION_CHUNKS, HALO_CHUNKS);
             this.lastCaptureBounds = bounds;
             this.lastCaptureChunkKey = chunkKey;
         }
@@ -175,8 +186,12 @@ public final class ImageLane {
         }
 
         final int index = (localY + 1) * bounds.paddedArea() + (localZ + 1) * bounds.paddedWidth() + (localX + 1);
-        final int oldPacked = this.materialCache.lookupLight(level, oldState, pos);
-        final int newPacked = this.materialCache.lookupLight(level, newState, pos);
+        // memoized: a fill repeats one transition thousands of times, and this pair of lookups is the largest single
+        // item in the lane's per-change cost
+        final int[] pair = this.materialPair;
+        this.materialCache.lookupLightPair(level, pos, oldState, newState, pair);
+        final int oldPacked = pair[0];
+        final int newPacked = pair[1];
 
         if (ImageMaterial.hasSameLight(oldPacked, newPacked)) {
             return;
