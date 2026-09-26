@@ -6,6 +6,54 @@ the 1.x branch's own changelog; for what belongs to whom see [NOTICE](NOTICE) an
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 
+## 2.0.9 — 2026-09-27
+
+**A correctness defect a player would have seen: a bulk edit left the sky light of the affected cells exactly as it
+was before.** `/fill`ing a 4×4×4 glowstone patch into a sky-lit area read `sky=15` for the whole patch — the interior
+of a solid block, which must be 0 — and the cell underneath read 15 where the correct value is 13. A full relight
+(`/lucistarlink relight`) repaired it, so no save-and-reload check could see it, but in the world it is **sunlight
+shining through a roof that was just built**. Reproduced six times. The same shape reaches the engine through `/fill`,
+structure generation, world-edit tools and any mod that places many blocks at once.
+
+**Cause.** A bulk edit's sky half is deferred to a windowed recompute (`SkyStarLightEngine.settleSkyWindow`), and that
+routine seeded its working field from the *current* stored light and then only ever raised values: the open part of a
+column is set to 15, and the BFS writes a neighbour only `if (target > light[nIndex])`. Any cell that had to become
+*darker* kept its old value, and `performLightDecrease` had nothing to drain because its queue was never seeded. The
+routine was increase-only while claiming to be a canonical recompute.
+
+**Fix (three changes, all in `settleSkyWindow`):**
+
+- the window's interior is cleared before the sweep, so the field is rebuilt from the world's material instead of
+  edited on top of the old light. The two slabs at the window's `yLo`/`yHi` are deliberately kept: any path from a
+  change to them crosses at least 16 levels, which a field of at most 15 cannot do, so their values are provably
+  unaffected by the edit — and the cell above `yHi` is only read through the "== 15" shortcut, so a slab lit from above
+  by less than daylight would not be re-derived if it were cleared.
+- every lit cell of a column's run is seeded, not only those up to the highest-ending neighbour run. That bound was a
+  cost trick, and it also dropped the sources a shadowed pocket needs: this BFS has no upward direction, so a cell open
+  at, say, y=-38 can only light its neighbour at the same height from a seed at that height. With the bound in place
+  the 4×4 shadow under the test patch read a flat 12 where the canonical field has 14/13/13/14.
+- the two preserved slabs seed the BFS at their own level: they are the window's outer boundary and the only light that
+  enters it from outside.
+
+**Acceptance.** The correctness gate (`tools/rig/gate-gradient.sh`) now reads **the same values before and after a full
+relight** on all 22 probes — interior 0, the shadow pocket 14/13/13/14, the cell below 13, the open columns 15. The
+deferred recompute is finally equivalent to the full relight whose name it borrows. All four workload fingerprints are
+unchanged (`sky=905931078dfc5ace`; this release fingerprints all four workloads, not only `structure_cube`).
+
+**Cost, measured rather than assumed.** An interleaved same-window A/B of the two builds (two rounds, order reversed)
+reads the fixed build 14–15% slower on `structure_cube`, 24–36% on `dense_chunk_patch`, 22–40% on `sky_hole`, and
+ambiguous on `block_toggle_border`; the player axis is identical on both sides (49–50 ms, all four). The recompute's
+own cost is not the cause — it measures 0.13–0.21 ms a call — the extra time is the *correct* work it now performs
+(writing the darkened cells, pushing the neighbour updates), which parts of the base pipeline had been skipping. The
+light is right, so the fix stays.
+
+**Also in this release** (work removals on the capture path; gate-green, the four fingerprints unchanged, and below the
+resolution of a loaded window on the benchmark metrics — recorded as that rather than claimed): the per-change
+`System.nanoTime()` pair now runs only with the profiler on, the capture no longer allocates a `ChunkPos` per change,
+and a material pair memo (`ImageMaterialCache.lookupLightPair`) collapses the two per-change material lookups for the
+uniform transitions a fill produces — only pairs whose materials are position-independent are memoized, so a hit is
+always exact (measured −26% of the capture on `dense_chunk_patch`).
+
 ## 2.0.8 — 2026-09-24
 
 **`block_toggle_border` is no longer lost.** It was this engine's worst cell (5.62–6.37 ms against ScalableLux's

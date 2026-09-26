@@ -19,12 +19,12 @@
 | 项 | 值 |
 |---|---|
 | 工作树 | `E:\LuciStarlin\LuciStarlink-LS-V2`（= `master` = `LS-V2` 分支的 worktree） |
-| 当前 tip | **代码发布点 = `v2.0.8`（`32b1524`）**，CI 全绿；其后的提交只有测量插桩（`b65f5d9`：settle 阶段计时，无行为改动），本节以下所有数字都属于 2.0.8 的引擎 |
-| 分支 | `master` = `LS-V2`（同名同内容）；`1x-line` = `472d897`（1.x 线 + 测试台，未动） |
-| tag | `v2.0.1` … `v2.0.8`（1.x 的 11 个 `v1.2.x` 未动） |
-| 本地产物 | `E:\LuciStarlin\sl-jar\lucistarlink-2.0.8-release.jar`，md5 `f46ee515964f32d8da6c196e6cdc1c47`（**发布件不上 GitHub**，只推 tag） |
-| 测量用的 rig jar | `sl-jar/ls2-dispatch-rig.jar`（mod id `lucistarlinkrig`）。**已逐类校验 = 2.0.8 的引擎**：92 个 class 里 91 个与发布 jar 逐字节相同，唯一差异是入口类名（`LuciStarlinkRigEntrypoint` / `LuciStarlinkEntrypoint`，由 mod id 决定） |
-| 远端的 2.0 线 tag | `v2.0.1`（首版）、`v2.0.2/.3/.4`（光照修复链）、`v2.0.5`（border 拿回）、`v2.0.6`（大批量方块光 NPE）、`v2.0.7`（flush 缓冲 8192）、`v2.0.8`（border 真正修好：小 burst 走回引擎队列） |
+| 当前版本 | **2.0.9**（`gradle.properties` 的 `mod_version`）。发布件：`sl-jar/lucistarlink-2.0.9-release.jar`，md5 `9eaba4294a0a8eece6b7628943195548`（mod id `lucistarlink`） |
+| rig jar | `sl-jar/ls2-imagelane-rig.jar`（`-Pmod_id=lucistarlinkrig`，md5 `5f05186e`）。**任何一次普通 `./gradlew build` 都会把 `build/libs/*.jar` 覆盖成发布版**，跑 rig 前必须用 `threeway-materialplanes.sh` 的 `build_rig_jar`（或 `./gradlew build -Pmod_id=lucistarlinkrig`）重出 |
+| 分支 | `master` = `LS-V2`（同名同内容）；`1x-line` = `472d897`（1.x 线 + 测试台，未动）；`5a2a30c` 的 worktree 在 `E:\LuciStarlin\LS-V2-prefix`（只为 A/B 重编 pre-fix jar 用） |
+| 历史 tag | `v2.0.1` … `v2.0.8`（1.x 的 11 个 `v1.2.x` 未动） |
+| 2.0.9 的内容 | 天光下降修复（`3543718`）+ 捕获路径三处减负（`5f05186e`）+ `sample()` 门控（`2ca2e59`）+ README/CHANGELOG 换成同协议可比的四格表并**撤回 2.0.5 那张表**（`769bc75`） |
+| 必须知道的一句 | 2.0 的引擎是 **ScalableLux 的**，我们那层 26 文件 / +1512−76；`docs/HANDOVER.md` §10 是 2026-09-26/27 的全部测量与撤回记录（含"哪条路由已被实测否决"：通道上 border、inline、flush 总量、粘性归属） |
 
 ## 2. 2.0.8 的成绩（**两轮交替**，本机负载窗口；同一窗口里 2.0.7 的旧数字不可跨窗口比较）
 
