@@ -44,6 +44,7 @@ public final class ImageMaterialPlanes {
         public final int chunkZ;
         public final int sectionY;
         public final LevelChunkSection section;
+        public volatile long lastUseNanos = System.nanoTime();
         public final byte[] opacity = new byte[4096];
         public final byte[] emission = new byte[4096];
 
@@ -70,11 +71,12 @@ public final class ImageMaterialPlanes {
         final Plane existing = PLANES.get(section);
 
         if (existing != null && existing.section == section) {
+            existing.lastUseNanos = System.nanoTime();
             return existing;
         }
 
         if (PLANES.size() >= MAX_SECTIONS) {
-            PLANES.clear();
+            evictOldestHalf();
         }
 
         final Plane plane = new Plane(level, section, chunkX, sectionY, chunkZ);
@@ -100,6 +102,24 @@ public final class ImageMaterialPlanes {
 
         PLANES.put(section, plane);
         return plane;
+    }
+
+    /**
+     * Evicts the older half of the store instead of clearing it wholesale. Clearing cost one re-extraction per
+     * section on the next use, and with worldgen continuously filling the bound the store was clearing often
+     * enough that a pass re-extracted ~32 mixed sections (border measured 3.2 ms of materialization a pass with
+     * the planes nominally in place). Evicting half keeps the working set alive.
+     */
+    private static void evictOldestHalf() {
+        final java.util.ArrayList<Plane> all = new java.util.ArrayList<>(PLANES.values());
+
+        all.sort(java.util.Comparator.comparingLong(plane -> plane.lastUseNanos));
+
+        final int toRemove = Math.max(1, all.size() / 2);
+
+        for (int i = 0; i < toRemove; i++) {
+            PLANES.remove(all.get(i).section, all.get(i));
+        }
     }
 
     /**

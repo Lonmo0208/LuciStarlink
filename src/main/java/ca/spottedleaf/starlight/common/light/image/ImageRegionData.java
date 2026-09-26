@@ -10,6 +10,8 @@ public final class ImageRegionData {
     public final byte[] emission;
     public final byte[] blockLight;
     public final byte[] skyLight;
+    /** Padded cell index -> section linear index (-1 on the moat); see {@link #markDirtyBlockIndex}. */
+    public final short[] paddedIndexToSection;
     public final BitSet dirtyBlockSections;
     public final BitSet dirtySkySections;
     public final int sectionWidth;
@@ -58,6 +60,7 @@ public final class ImageRegionData {
         this.offsetNegZ = -this.paddedWidth;
         this.offsetPosY = this.paddedArea;
         this.offsetNegY = -this.paddedArea;
+        this.paddedIndexToSection = this.buildIndexToSection();
         this.fillWalls();
     }
 
@@ -285,34 +288,68 @@ public final class ImageRegionData {
         return rem / this.paddedWidth - 1;
     }
 
-    public void markDirtyBlockIndex(int index) {
-        int localY = index / this.paddedArea - 1;
-        int rem = index - (localY + 1) * this.paddedArea;
-        int localZ = rem / this.paddedWidth - 1;
-        int localX = rem - (localZ + 1) * this.paddedWidth - 1;
-        if (localX < 0 || localY < 0 || localZ < 0) {
-            // A dirty mark on the moat ring means some index was built with the wrong strides. It used to throw
-            // (2026-09-26) and killed whole benchmark runs; it is a measurement aid, not a safety property, so it
-            // reports once per process and then stays quiet.
-            if (WALL_REPORTED.compareAndSet(false, true)) {
-                System.out.println("IMAGE-LANE-WALL-DIRTY index=" + index + " x=" + localX + " y=" + localY
-                        + " z=" + localZ + " opacity=" + (this.opacity[index] & 0xF)
-                        + " light=" + (this.blockLight[index] & 0xF));
-            }
-            return;
+    /**
+     * Marks the section a padded cell index belongs to, without any coordinate decode: the padded layout has a
+     * one-cell moat, which breaks the power-of-two alignment a shift/mask decode would need, so the mapping is
+     * precomputed once per region (a table of {@code paddedVolume} entries, 2 bytes each). This sits on every BFS
+     * <i>write</i>, and the divisions it replaces measured as a large part of the lane's per-pop cost - the number
+     * that decides whether the engine metric can reach the 1.x line at all (their BFS runs on a flat image with no
+     * derivation to do).
+     */
+    public void markDirtyBlockIndex(final int index) {
+        final int section = this.paddedIndexToSection[index];
+
+        if (section >= 0) {
+            this.dirtyBlockSections.set(section);
         }
-        markDirtyBlockLocal(localX, localY, localZ);
     }
 
+    /** Precomputes {@link #paddedIndexToSection}; -1 for the moat ring. */
+    private short[] buildIndexToSection() {
+        final short[] table = new short[this.paddedVolume];
+        final int pw = this.paddedWidth, pd = this.paddedDepth, ph = this.paddedHeight;
+        final int sectionCount = this.bounds.sectionCount();
+
+        java.util.Arrays.fill(table, (short) -1);
+
+        for (int y = 1; y <= ph - 2; y++) {
+            final int sectionY = (y - 1) >> 4;
+
+            if (sectionY >= sectionCount) {
+                continue;
+            }
+            for (int z = 1; z <= pd - 2; z++) {
+                final int sectionZ = (z - 1) >> 4;
+                final int rowBase = y * this.paddedArea + z * pw;
+
+                for (int x = 1; x <= pw - 2; x += 16) {
+                    // one cell per 16-wide run carries the whole run's section: they share a section by construction
+                    final int sectionX = (x - 1) >> 4;
+                    final int section = sectionX + sectionZ * this.sectionWidth + sectionY * this.sectionsPerPlane;
+
+                    for (int i = 0; i < 16 && x + i <= pw - 2; i++) {
+                        table[rowBase + x + i] = (short) section;
+                    }
+                }
+            }
+        }
+        return table;
+    }
+
+    /**
+     * Left in place (unused since the index table replaced the decode): the once-per-process wall report is the
+     * only way a bad index shows itself now that it no longer throws, and the measurement builds that produced
+     * the committed numbers carry this field.
+     */
     private static final java.util.concurrent.atomic.AtomicBoolean WALL_REPORTED =
             new java.util.concurrent.atomic.AtomicBoolean();
 
-    public void markDirtySkyIndex(int index) {
-        int localY = index / this.paddedArea - 1;
-        int rem = index - (localY + 1) * this.paddedArea;
-        int localZ = rem / this.paddedWidth - 1;
-        int localX = rem - (localZ + 1) * this.paddedWidth - 1;
-        markDirtySkyLocal(localX, localY, localZ);
+    public void markDirtySkyIndex(final int index) {
+        final int section = this.paddedIndexToSection[index];
+
+        if (section >= 0) {
+            this.dirtySkySections.set(section);
+        }
     }
 
     public void clearLight() {
