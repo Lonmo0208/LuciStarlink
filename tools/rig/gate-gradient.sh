@@ -4,8 +4,12 @@ set -uo pipefail
 export JAVA_HOME='C:\Users\Administrator\.gradle\jdks\eclipse_adoptium-21-amd64-windows.2'
 export PATH="/c/Users/Administrator/.gradle/jdks/eclipse_adoptium-21-amd64-windows.2/bin:$PATH"
 cd /e/LuciStarlin/LuciStarlink-LS-V2
-export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStoreType=WINDOWS-ROOT ${1:-}"
-LOG=/tmp/gate205.log
+# $1 = engine knobs, e.g. "-Dscalablelux.ownEdit=false". They go through Gradle (-PslArgs), NOT JAVA_TOOL_OPTIONS:
+# the Gradle daemon owns the environment of the forked server, so a shell-exported variable is dropped and the run
+# silently measures the DEFAULT configuration (i.e. the control run is not a control). Fixed 2026-09-26.
+export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStoreType=WINDOWS-ROOT"
+export SLARGS="${1:-}"
+LOG=/tmp/gate205.log; : > "$LOG"
 SRC="run/saves/新的世界"
 rm -rf run-diag/world; cp -r "$SRC" run-diag/world
 DP=run-diag/world/datapacks/emittertest
@@ -35,6 +39,10 @@ lucistarlink light 10 -37 -16
 lucistarlink light 12 -36 -14
 lucistarlink light 14 -36 -14
 lucistarlink light 17 -36 -14
+lucistarlink light 11 -38 -14
+lucistarlink light 11 -35 -14
+lucistarlink light 11 -34 -13
+lucistarlink light 14 -37 -16
 lucistarlink stats
 say GATE-READ
 lucistarlink relight 2
@@ -51,9 +59,14 @@ lucistarlink light 10 -37 -16
 lucistarlink light 12 -36 -14
 lucistarlink light 14 -36 -14
 lucistarlink light 17 -36 -14
+lucistarlink light 11 -38 -14
+lucistarlink light 11 -35 -14
+lucistarlink light 11 -34 -13
+lucistarlink light 14 -37 -16
 say GATE-READ2-DONE
 stop
 EOF
-timeout 280 ./gradlew runServerDiag --console=plain > "$LOG" 2>&1
+timeout 280 ./gradlew runServerDiag ${SLARGS:+-PslArgs="$SLARGS"} --console=plain > "$LOG" 2>&1
+echo "engine knobs: ${SLARGS:-<defaults>}"
 echo "=== 三个发光体（x=-1/2/5）与梯度（0,1,4,7,10）==="
 grep -aE "LuciStarlink light|GATE-READ" "$LOG" | sed 's/.*\[LuciStarlink\/\]: //;s/.*\[minecraft\/MinecraftServer\]: //' | cut -c1-100

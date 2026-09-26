@@ -371,3 +371,103 @@ grouped nibble 路径的约 4.5。`covers()` 必须与结算算同一个量（�
 **同窗口实测（与 SL 交错）**：sky_hole **0.664/0.747** 对 0.701/0.687（一胜一平——之前的 2.3-3.4 退化已消除）、
 border 4.795/4.372 对 3.855/4.262（平，第 2 轮我们赢）、dense **3.206** 对 3.872（赢）。所有门（含 4×4×4 补丁与
 强制 relight 对照）全绿。
+
+## 10. 判据复测（2026-09-26，乱序三轮）+ rig jar 的 mod_id 坑
+
+### 10.1 先记一个会让整轮运行白费的坑（本轮真的踩了两次）
+
+**rig 用的 jar 必须用 `./gradlew build -Pmod_id=lucistarlinkrig -x test` 构建。** 直接 `build`（mod id =
+`lucistarlink`）的 jar 通过 `stage_jar` 的 md5 校验照样能进 mods，然后在 FML 里**和 1.x 测量硬件的 mod 撞 id**：
+classpath 上的 1.x harness 被丢掉 → `dev.lucistarlink.test.LuxServerBenchmark` 根本没加载 → 服务端启动后**空转**
+（日志里除了 SLTELEM 只有 5 分钟一次的自动存档）→ 每个 us20 运行都以 `rc=124`（420 s 超时）结束、结果文件为空，
+**看起来像我们的引擎挂死**。识别方法：`grep -c LuxServerBenchmark <log>`，正常运行是 29，坏运行是 0。
+
+已修：`threeway-materialplanes.sh` 现在**自己构建** rig jar（校验 toml 里的 `modId` 后落到 `sl-jar/`），
+并在 `$OUT/run-started` 记下本轮起点；所有读数（单轮 printf、两张汇总表）都用 `fresh()` 过滤，**上一轮的 jsonl 不会再
+被当成新一轮的结果读**（末尾还有 12/12 的新鲜度审计）。本轮 rig jar：md5 `c2d333200c4bf912c384c04239d160b1`。
+
+### 10.2 引擎口径 `minPassNanos`（三轮中位数，ms）
+
+| 格 | us20 | sl | ls1(1.x) | 对 1.x | 对 SL |
+|---|---|---|---|---|---|
+| block_toggle_border | 4.30 | 4.17 | **0.76** | 落后 5.7× | 平（慢 3%） |
+| structure_cube | 4.44 | 4.63 | **2.71** | 落后 1.64× | 赢 4% |
+| dense_chunk_patch | 3.75 | 3.86 | **2.07** | 落后 1.81× | 赢 3% |
+| sky_hole | 0.93 | **0.76** | 0.83 | 落后 1.12× | 落后 22% |
+
+**判据 ①「引擎必须追平或超过 1.x」四格全未达标**（最好的是 sky_hole 的 1.12×，最差 border 的 5.7×）。
+**判据 ②「玩家口径必须超过 SL」四格全平**（见 10.3）。
+
+### 10.3 玩家口径 `bench.pass_wall_actual`（中位数 / 最优轮，ms）
+
+| 格 | us20 | sl | ls1(1.x) |
+|---|---|---|---|
+| border | 50 / 49 | 49 / 49 | 117 / 108 |
+| structure | 50 / 50 | 50 / 50 | 64 / 49 |
+| dense | 50 / 49 | 50 / 48 | 66 / 64 |
+| sky_hole | 50 / 50 | 50 / 47 | 92 / 79 |
+
+读数全部落在 **49-50 ms（= 20 TPS 的一个 tick）**：两个 2.0 侧都在这一个 tick 内收尾，**量具在这个区间饱和了**，
+"strictly beat" 在这四格上不可能靠这点差异体现出来（1.x 落后是因为它常常要跨到第二个 tick：64-117 ms）。
+判断与 2026-09-22 那轮（2.0 46-50 / SL 49-50 / 1.x 44-93）一致：**2.0 ≈ SL ≈ 一个 tick，1.x 1.3-2.3 个 tick**。
+
+### 10.4 这轮的结论怎么写才诚实
+
+- 正确性：us20 与 SL 在 structure_cube 的指纹都是 `905931078dfc5ace`（= vanilla），1.x 仍是它自己的
+  `641356fc41163add`；36/36 结果新鲜、全 rc=0、门全绿。**我们和前辈在"算出来的光"上没有分歧。**
+- 引擎口径落后 1.x 的原因是**架构性的**，不是这一轮没调好：1.x 的世界光存储**就是**它的平坦镜像（改动 = 写字节 + 推队列），
+  我们必须在 ScalableLux 的 nibble 存储上**先物化、再回写**（领取/物化/打包/发布四段收在每次结算里）。
+  本轮把其中两段的常数压下来（§10.5）后 border 的最优读数仍在 3.4-4.0 ms，而 1.x 是 0.76——差距不在常数上。
+  唯一"追平"的 sky_hole 恰好是最小 burst（25 处）的格子，也能说明这一点。
+- 因此 2.0 的对外口径仍是**那句老话**：玩家口径与 SL 同级（一个 tick 内）、引擎口径四格落后 1.x、正确性与 vanilla 一致。
+
+### 10.5 本轮做的两件事（`5b52a95`，都留在树里）
+
+1. `ImageRegionData.paddedIndexToSection`：带垫布局的 1 格护城河破坏了移位/掩码解码需要的 2 的幂对齐，BFS 每次
+   **写**都要三次除法才能标脏 section。改成每区域建一次的 `short[]`（2 字节 × paddedVolume ≈ 1.9 MB @1×1 瓦片），
+   `markDirtyBlockIndex`/`markDirtySkyIndex` 各一次数组读。border 的 BFS：1.36-1.43 → **1.09-1.28 ms/pass**。
+2. `ImageMaterialPlanes.evictOldestHalf()`：存储满了就整体 `clear()`，而世界生成持续灌入边界 ⇒ 每 pass 重新提取约 32 个
+   section（border 实测 3.2 ms 物化）。改为淘汰较旧的半数，工作集留住：**0.04-0.73 ms**。
+3. 路由规则**固定为"按区域"**（该区域自己的 burst ≥ 64 才接管）。中途试的"flush 总量 ≥64 + 区域 floor ≥4"用测量否掉了：
+   border 的 95 处是按世界生成粒度分批到达的，总量规则会在**同一个测量 pass 内混用两条路径**（该窗口 border 5.7-7.6 对 SL 4.1）。
+   `covers()` 与结算现在调用同一个谓词、同一个实参，`flushTotal` 那套管道已全部删除（防止两边再次漂移）。
+
+### 10.6 抓到一个真正的正确性 bug：批量改动的**天光下降**被丢掉了（`settleSkyWindow`）
+
+**症状**（门里 4×4×4 荧石补丁，`bash tools/rig/gate-gradient.sh`）：补丁**内部**四格（10,-37,-16 / 11,-35,-14 /
+11,-34,-13 / 12,-36,-14）在 READ1 读到 `updSky=15`（应为 0），补丁**正下方**（11,-38,-14）读 15（应为 13），
+`lucistarlink relight 2` 之后全部变对（0/0/0/0 与 13）。方块光全程正确（荧石 15 与侧面 14 的衰减都对），
+**只有天光的"下降"没发生**。6 次运行全部复现。
+
+**溯源链**（每一步都有读数，不是推测）：
+
+1. 先怀疑图像通道 —— **撤回**。当时的对照（`-Dscalablelux.imageLane=false`）以及后来的
+   `-Dscalablelux.ownEdit=false` 都是**假对照**：`gate-gradient.sh` 把 `$1` 塞进 `JAVA_TOOL_OPTIONS`，
+   而导出的环境变量**到不了** fork 出去的服务端（Gradle daemon 自己持有一份环境，daemon 起来之后导出的变量被静默丢弃）。
+   两个"对照"其实跑的都是默认配置，其中一次之所以读数不同是窗口的偶然，不是属性生效。
+   **已修**：`build.gradle` 的 `serverDiag` 现在支持 `-PslArgs="-Dk=v ..."`（和测量 rig 同一条路），门脚本改用它。
+   验证方式：`-Dscalablelux.telemetrySeconds=1` 让 SLTELEM 从 5 行变 54 行。
+2. 确认这条路本身：`-Dscalablelux.editDebug=true` 下日志出现 `EDITDBG blockChange ... -> inline lane` 与
+   `FLUSHDBG apply chunk=0,-1 n=66` —— 门的填充**确实**走我们的 own-edit 路径，且由它 apply。
+3. 加一行 `FLUSHDBG route`（留在树里，`LUCIS_EDIT_DEBUG` 之下）后拿到决定性的那行：
+   `n=66 seeds=66 chunkNow=true deferSky=true bulkRelight=false laneCovered=false`
+   —— 天光半边被**推迟**给 `lucis$pendingRecomputes` 的窗口重算。
+4. `SkyStarLightEngine.settleSkyWindow`（R5 的窗口重算）：第 1 步把窗口内每格的**现有**光值从 nibble 拷进
+   `light[]`，随后扫掠只做 `light[i] = 15`（开放列）与 BFS 的 `if (target > light[nIndex])` —— **只会加光，
+   永远不会减光**。新的不透明方块（护城河外那 15 格护罩）、它下方的格子，光值都停留在改动前。
+   `updateVisible` 把没有变化的窗口原样发布回去，所以即使"重算过"也等于没算。
+   `performLightDecrease` 只能处理**下降队列**，而这条路的下降队列从没被播种（那个 `queue[]` 是局部增光 BFS）。
+5. 为什么 `relight` 能修：它走整块 `lightChunk`（`rewriteNibbleCacheForSkylight` + 从空开始重建），
+   不依赖窗口里的旧值。
+
+**影响**：任何"一次放很多方块"的玩法操作（`/fill`、结构生成、模组一次性放置、世界编辑工具）都会留下
+**天光穿顶**：新盖的屋顶下面还是 15（正下方 15 而不是 13）。四格判据的指纹看不到它，因为那四格的世界是空气
+（`structure_cube` 的 16³ 荧石球确实被推迟重算过，而它的指纹与 vanilla 一致 —— 说明**该格子型的重算恰好是加光**，
+于是一致；不能拿它证明下降是对的）。
+
+**修法方向**（下一轮）：在窗口重算里为"不透明度上升"的格子补一次真正的下降（像基底
+`propagateBlockChanges` 对天光做的那样，先播种下降队列再 drain），或者把窗口的 `light[]` 从干净状态重建
+**并且**正确处理窗口边界（窗口边界离改动 ≥16 格，那些格子的现有值是正确的、不能被清零）。
+不要简单地把窗口清零：`yLo = changedMinY - 16` 之外的值必须保住。
+
+**这条比引擎口径优先。**

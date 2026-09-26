@@ -821,6 +821,13 @@ public final class StarLightInterface {
                     final long[] seedPositions = toSeedPositions(positions);
                     final int seedCount = seedPositions.length;
 
+                    if (LUCIS_EDIT_DEBUG) {
+                        System.out.println("FLUSHDBG route chunk=" + chunkX + "," + chunkZ + " n=" + positions.size()
+                                + " seeds=" + seedCount + " chunkNow=" + (chunkNow != null)
+                                + " deferSky=" + deferSky + " bulkRelight=" + LUCIS_BULK_RELIGHT
+                                + " laneCovered=" + laneCovered);
+                    }
+
                     if (deferSky) {
                         // remember the y range the burst touched: the window is built from it
                         final int[] range = this.lucis$pendingRecomputes.computeIfAbsent(key, ignored -> new int[]{Integer.MAX_VALUE, Integer.MIN_VALUE});

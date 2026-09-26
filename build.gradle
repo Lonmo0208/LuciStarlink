@@ -132,6 +132,18 @@ loom {
             runDir "run-diag"
             property "scalablelux.telemetrySeconds", providers.gradleProperty("probeTelemetrySeconds").getOrElse("10")
             property "scalablelux.profile", providers.gradleProperty("probeProfile").getOrElse("true")
+            // Generic engine knobs for a diagnostic run, the same way the measurement rig passes them:
+            //   ./gradlew runServerDiag -PslArgs="-Dscalablelux.ownEdit=false"
+            // Exporting JAVA_TOOL_OPTIONS in the shell does NOT reach this server: the Gradle daemon is long-lived and
+            // keeps its own environment, so a variable exported after the daemon started is silently dropped and the
+            // run tests the default configuration instead - which can fake both a repro and its control (found
+            // 2026-09-26 while chasing a sky-light defect, after two runs disagreed for no stated reason).
+            providers.gradleProperty("slArgs").orNull?.trim()?.split("\\s+")?.each { arg ->
+                if (arg.startsWith("-D") && arg.contains("=")) {
+                    def kv = arg.substring(2).split("=", 2)
+                    property kv[0], kv[1]
+                }
+            }
         }
     }
 }
