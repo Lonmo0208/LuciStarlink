@@ -88,6 +88,10 @@ structure 4.44, dense 3.75, sky_hole 0.93 — that spread is the honest resoluti
 **The honest reading:**
 
 - **The player axis is at the one-tick floor for both LuciStarlink and ScalableLux** — every reading is 47–50 ms,
+
+Since 2.0.10 the lane's nibble indexing is correct: before that, enabling the image lane made a placed patch read
+dark in the world (the lane adopted and packed one section too low), which the four-cell fingerprints could not see
+because the base queue also processes those chunks. The gate now covers that configuration.
   which is 20 TPS. That means both engines finish inside the same tick and the metric cannot separate them; "faster"
   on this axis is not claimable by anyone here. 1.x is genuinely behind on it (64–117 ms) because it crosses into a
   second tick.

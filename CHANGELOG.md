@@ -6,6 +6,29 @@ the 1.x branch's own changelog; for what belongs to whom see [NOTICE](NOTICE) an
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 
+## 2.0.10 — 2026-09-27
+
+**Two fixes, both found and verified in the gate.** They matter because the image lane is the mechanism this engine's
+engine-axis work runs on, even though it ships disabled.
+
+**A 16-block misread in the lane.** With `-Dscalablelux.imageLane=true`, a placed 4x4x4 glowstone patch read
+`block=0/1` in the world and the cells around it were dragged down by a decrease wave; `/lucistarlink relight`
+repaired it, because the relight is the base engine's work and does not use the lane's mapping. The per-chunk
+nibble array starts at `minLightSection` (26 entries for 24 build sections), while the lane indexed it with a
+build-section index - 16 blocks off - so it adopted the light of the section below (the bottom one is
+"uninitialised", which silently skipped the adoption and left a zeroed light plane) and packed its results into
+that wrong section. Fixed at three sites with the canonical `sectionY - WorldUtil.getMinLightSection(level)`;
+acceptance is that with the lane on, all 22 correctness probes read identically before and after a relight. The
+four-cell fingerprints never caught it because those chunks are also processed by the base queue, whose correct
+writes overwrote the lane's field.
+
+**Packed material extraction** (`ImageMaterialPlanes`): a section is now read at the packed level - one
+`storage.get(cell)` per cell plus one material lookup per *distinct* palette index - whenever no state in it is
+shape-occluding, with a fallback to the per-cell path if the palette is wider than 64 or the handles cannot be
+resolved, so it can only ever be a lost optimisation. Measured on a played-in save (global palettes): 198-220 us
+a section against the per-cell path's 413-448 us (2.1x), with all 4096 opacity+emission bytes identical on the
+sections checked.
+
 ## 2.0.9 — 2026-09-27
 
 **A correctness defect a player would have seen: a bulk edit left the sky light of the affected cells exactly as it
