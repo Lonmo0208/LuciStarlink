@@ -6,6 +6,31 @@ the 1.x branch's own changelog; for what belongs to whom see [NOTICE](NOTICE) an
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 
+## 2.0.14 — 2026-09-28
+
+**The deferred sky recompute is column-scoped: 19x less work, and 27-29% off two cells' readings.** Profiling had
+shown that `structure_cube` and `dense_chunk_patch` lose their biggest slice of this project's own cost to that
+recompute - 2.11 ms in one call on structure, 32% of the cell's reading, and 0.96 ms on dense, 22% - and that the
+expense is not the window itself but the drains after it: clearing every interior cell of the window turns the install
+into a diff over the whole window, so the decrease and increase waves then rebuild the light of the entire 5x5 cache.
+
+Two changes in `settleSkyWindow`, the same semantics done at column scope. The clearing now walks only the changed
+columns, clearing the 15-run below each column's highest change - exactly the cells a new blocker darkens - instead of
+every interior cell. And the seeding that 2.0.9 widened to every lit cell of every run is restricted to the columns that
+changed or touch one: that rim is what a shadowed pocket actually needs, because the window BFS has no upward
+direction, while in a sunlit world the unrestricted form seeded most cells of the window (9374 seeds and 7 ms of BFS on
+the gate's patch).
+
+Acceptance: the gate's 22 probes read identically before and after a relight with the lane on, and the fingerprints
+stay canonical. Measured: the recompute's total cost falls from 2.11 ms to 0.112 ms on structure (19x) and from 0.96 ms
+to 0.278 ms on dense (3.5x), with 256 seeds instead of 3584 and 81-205 us of window work. A three-round same-window A/B
+with the order rotated reads structure 7.48 -> 5.30 ms and dense 5.98 -> 4.35 ms, i.e. 29% and 27% faster, with border
+unchanged within noise (it has no recompute to save).
+
+So two of the three cells this engine still loses to the 1.x line on the engine metric are recoverable inside the
+current architecture; border - which is the base engine's block-light decrease wave, with this layer contributing
+25 us a pass - is not, and needs the storage rewrite.
+
 ## 2.0.12 — 2026-09-27
 
 **The region image can carry both light halves exactly**, which is the precondition for the image becoming the
