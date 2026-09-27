@@ -906,3 +906,25 @@ dense 现在**领先 SL 1.65×**；border 一动没动，因为它的 5.7-6.6× 
 nibble BFS 做 4096 处改动的那 21k 次邻居检查（4096 × ~5 ✓）；1.x 做同样的 21k 次只要 ~0.17 ms（约 8 ns/次）。
 **所以 structure 与 border 是同一件事**：差距 = 每格检查的内存局部性（nibble 布局：横向连续、纵向跨 2048 字节跳页），
 **只能靠"镜像即存储"的重写改掉**，不是调参能动的。dense 现在只差 0.63 ms（3.48 对 2.85），是唯一接近追平的格子。
+
+### 10.25 更正：通道 BFS **不是** 15 ns/pop（实测 50 ns/pop）+ 放开上限后那 5 ms 不在通道的相位里
+
+**一、撤回一条记错的数字。** 记忆与早前笔记里写着"通道的镜像 BFS 15 ns/pop"——**错**。加了可信计数后
+（`LuxProfiler.lanePops`，在 `ImageBlockLightEngine` 的两个 pop 循环里按基座 `bfsPops` 的方式累加）实测：
+
+| 运行 | 通道 pops | 通道 bfsNanos | **ns/pop** |
+|---|---|---|---|
+| dense（2048 处/次，通道接管） | 40 347 | 1 999 200 | **49.6** |
+| 基座 nibble（对照，同窗口） | 2 526 | — | ~48（按 21k pops / 1.0 ms 的 structure 换算） |
+
+⇒ **两者的每 pop 成本同量级（~50 ns）**；通道的优势从来不是"每 pop 更快"，而是**它替掉了整条管线**
+（5×5 缓存窗口、drain、publish、以及基座队列的调度）。之前那句"15 ns/pop"来自一次基准不同的测量，已撤回。
+
+**二、放开上限（通道接管 structure 的 4096）后，通道自己的相位其实很便宜**：`bfsNanos` 282 µs/pass、`matzNanos` 130 µs/pass、
+`packNanos` 16 µs/pass、`laneSettleNanos` 552 µs/pass —— 可读数却是 **10.6 ms 对拒收时的 5.1 ms** ✗✗
+⇒ **有约 5 ms/pass 的开销在通道自己的相位之外**（候选：publish 路径、external re-adopt 抖动、或基座仍在处理**天空半边**
+——那半边还没被通道接管）。这是一个**有界、可继续追的目标**，但今天不做结论。
+
+**三、顺带否掉的假设**：`laneRegionCreations=0` ⇒ 那 2.74 ms 不是"每 pass 重建区域镜像"（4 个 paddedVolume 平面 = 3.9 MB）
+✗ 假设已否。计数器（`laneRegionCreations`/`laneRegionCreateNanos`/`lanePops`）留在树里，都是 `LuxProfiler.enabled()` 门控、
+关闭时零成本。

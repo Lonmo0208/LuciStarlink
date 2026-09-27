@@ -163,6 +163,13 @@ public final class LuxProfiler {
     public static long groupBlkVisNanos;
     public static long laneCaptureNanos;
     public static long laneSettleNanos;
+    /** Region images created and the time inside their allocation: the four padded planes are paddedVolume bytes each
+     *  (~3.9 MB for a 3x3-chunk region), so this says whether a settle is paying for a fresh region every pass. */
+    public static long laneRegionCreations;
+    /** Pops the LANE's own image BFS performed - the base engine's count is bfsPops, and the two must be compared
+     *  per burst: the same 4096-change structure_cube costs the base ~21k neighbour examinations. */
+    public static long lanePops;
+    public static long laneRegionCreateNanos;
     public static long laneSettleRuns;
     public static long laneSettlePolls;
     public static long laneMaterializeNanos;
@@ -288,6 +295,9 @@ public final class LuxProfiler {
         publishSectionsBlock = 0;
         laneCaptureNanos = 0;
         laneSettleNanos = 0;
+        laneRegionCreations = 0;
+        lanePops = 0;
+        laneRegionCreateNanos = 0;
         laneSettleRuns = 0;
         laneSettlePolls = 0;
         laneMaterializeNanos = 0;
@@ -381,6 +391,9 @@ public final class LuxProfiler {
                 + " publishSectionsSky=" + publishSectionsSky
                 + " laneCaptureNanos=" + laneCaptureNanos
                 + " laneSettleNanos=" + laneSettleNanos
+                + " laneRegionCreations=" + laneRegionCreations
+                + " lanePops=" + lanePops
+                + " laneRegionCreateNanos=" + laneRegionCreateNanos
                 + " matzNanos=" + laneMaterializeNanos + " extNanos=" + laneExternalNanos
                 + " bfsNanos=" + laneBfsNanos + " packNanos=" + lanePackNanos + " laneSettleRuns=" + laneSettleRuns + " laneSettlePolls=" + laneSettlePolls
                 + " settleCalls=" + settleCalls

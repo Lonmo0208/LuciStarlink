@@ -1,5 +1,7 @@
 package ca.spottedleaf.starlight.common.light.image;
 
+import ca.spottedleaf.starlight.common.debug.LuxProfiler;
+
 /**
  * The Lucis block-light BFS, ported from the 1.x engine ({@code dev.lucistarlink.light.engine.LuxBlockLightEngine})
  * onto the ported region data ({@link ImageRegionData}). This is the engine whose whole-cell readings made the 1.x
@@ -142,6 +144,7 @@ public final class ImageBlockLightEngine {
         int packed;
 
         while ((packed = removals.poll()) != Integer.MIN_VALUE) {
+            if (LuxProfiler.enabled()) { LuxProfiler.lanePops++; }
             final int index = packed >>> REMOVAL_LEVEL_BITS;
             final int removedLevel = packed & REMOVAL_LEVEL_MASK;
 
@@ -214,6 +217,7 @@ public final class ImageBlockLightEngine {
 
         while ((index = queue.poll()) >= 0) {
             this.lastPopCount++;
+            if (LuxProfiler.enabled()) { LuxProfiler.lanePops++; }
             final int current = data.blockLight[index] & 0xF;
 
             // recheck rule (the base engine's FLAG_RECHECK_LEVEL, applied to every entry): the cell must still hold

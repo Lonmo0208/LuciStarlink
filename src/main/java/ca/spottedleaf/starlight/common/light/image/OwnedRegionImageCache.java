@@ -1,5 +1,7 @@
 package ca.spottedleaf.starlight.common.light.image;
 
+import ca.spottedleaf.starlight.common.debug.LuxProfiler;
+
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Map;
@@ -11,10 +13,20 @@ public final class OwnedRegionImageCache {
     public RuntimeRegionImageState getOrCreate(ImageRegionBounds bounds) {
         RuntimeRegionImageState state = cache.compute(bounds.coreRegionKey(), (key, existing) -> {
             if (existing == null) {
-                return new RuntimeRegionImageState(new ImageRegionData(bounds));
+                final long createStart = System.nanoTime();
+                final RuntimeRegionImageState created = new RuntimeRegionImageState(new ImageRegionData(bounds));
+
+                LuxProfiler.laneRegionCreations++;
+                LuxProfiler.laneRegionCreateNanos += System.nanoTime() - createStart;
+                return created;
             }
             if (!sameShape(existing.data().bounds, bounds)) {
-                return new RuntimeRegionImageState(new ImageRegionData(bounds));
+                final long createStart = System.nanoTime();
+                final RuntimeRegionImageState created = new RuntimeRegionImageState(new ImageRegionData(bounds));
+
+                LuxProfiler.laneRegionCreations++;
+                LuxProfiler.laneRegionCreateNanos += System.nanoTime() - createStart;
+                return created;
             }
             existing.touch();
             return existing;
