@@ -829,18 +829,33 @@ public final class StarLightInterface {
                     }
 
                     if (deferSky) {
-                        // remember the y range the burst touched: the window is built from it
-                        final int[] range = this.lucis$pendingRecomputes.computeIfAbsent(key, ignored -> new int[]{Integer.MAX_VALUE, Integer.MIN_VALUE});
+                        // Remember the y range the burst touched - the window is built from it - and, per column, the
+                        // highest change: the sky engine needs the latter to clear the 15-run a change darkens and to
+                        // know which columns form the shadow's rim (docs/HANDOVER.md 10.21). Layout: {minY, maxY, one
+                        // entry per column (col = (z << 4) | x)}.
+                        final int[] range = this.lucis$pendingRecomputes.computeIfAbsent(key, ignored -> {
+                            final int[] created = new int[258];
+
+                            created[0] = Integer.MAX_VALUE;
+                            created[1] = Integer.MIN_VALUE;
+                            java.util.Arrays.fill(created, 2, created.length, Integer.MIN_VALUE);
+                            return created;
+                        });
                         final it.unimi.dsi.fastutil.longs.LongIterator changedIt = positions.iterator();
 
                         while (changedIt.hasNext()) {
-                            final int changedY = BlockPos.getY(changedIt.nextLong());
+                            final long changedPos = changedIt.nextLong();
+                            final int changedY = BlockPos.getY(changedPos);
+                            final int column = ((BlockPos.getZ(changedPos) & 15) << 4) | (BlockPos.getX(changedPos) & 15);
 
                             if (changedY < range[0]) {
                                 range[0] = changedY;
                             }
                             if (changedY > range[1]) {
                                 range[1] = changedY;
+                            }
+                            if (changedY > range[2 + column]) {
+                                range[2 + column] = changedY;
                             }
                         }
                         // The block half runs here (through the grouped settle, so it shares a cache window and a drain
@@ -921,7 +936,7 @@ public final class StarLightInterface {
                     try {
                         // the settle pushes both directions, so both propagations have to run (decrease first, as the
                         // engine does everywhere else) before the section is published
-                        skyEngine.settleSkyWindow(this.lightAccess, chunk, range[0], range[1]);
+                        skyEngine.settleSkyWindow(this.lightAccess, chunk, range[0], range[1], range);
                         skyEngine.performLightDecrease(this.lightAccess);
                         skyEngine.performLightIncrease(this.lightAccess);
                         skyEngine.updateVisible(this.lightAccess);

@@ -804,7 +804,7 @@ public final class SkyStarLightEngine extends StarLightEngine {
      * (~48 of 384 levels here), which is what this method is for.</p>
      */
     public final void settleSkyWindow(final LightChunkGetter lightAccess, final ChunkAccess chunk,
-                                      final int changedMinY, final int changedMaxY) {
+                                      final int changedMinY, final int changedMaxY, final int[] columnMaxY) {
         final int chunkX = chunk.getPos().x;
         final int chunkZ = chunk.getPos().z;
         final int worldX0 = chunkX << 4;
@@ -871,11 +871,30 @@ public final class SkyStarLightEngine extends StarLightEngine {
         //
         // The install step below already does the right thing for a cell that ended up darker: it writes the nibble
         // and pushes the cell into the DECREASE queue when it sits on the chunk boundary, so neighbours re-light too.
+        //
+        // 2026-09-28: cleared COLUMN-SCOPED, not window-wide. Clearing every interior cell of the window was the 2.0.9
+        // fix and it is correct, but it turns the install into a diff over the whole window and the drains that follow
+        // then rebuild the light of the entire 5x5 cache: measured 2.11 ms in one call on structure_cube (32% of that
+        // cell's reading) and 0.96 ms on dense (22%). Only the cells that a change actually darkens need clearing, and
+        // those are exactly the 15-runs below a changed column: walk down from the column's highest change while the
+        // stored light is still 15 and clear those cells, then let the sweep and the BFS re-derive them (the cells
+        // beside the shadow are lit and spill in, which is where the canonical 14/13/13/14 below a 4x4x4 patch comes
+        // from). The window's two boundary slabs stay as they are, as before.
         for (int col = 0; col < 256; col++) {
+            final int perColumnMaxY = columnMaxY[2 + col];
+
+            if (perColumnMaxY == Integer.MIN_VALUE) {
+                continue;
+            }
             final int colBase = col * height;
 
-            for (int inner = 1; inner < height - 1; inner++) {
-                light[colBase + inner] = 0;
+            for (int y = Math.min(perColumnMaxY, yHi); y >= yLo; y--) {
+                final int index = colBase + (y - yLo);
+
+                if ((light[index] & 0xFF) != 15) {
+                    break; // the 15-run below this change ends here
+                }
+                light[index] = 0;
             }
         }
         final long tExpand = System.nanoTime();
@@ -936,19 +955,22 @@ public final class SkyStarLightEngine extends StarLightEngine {
                 if (runBottom == Integer.MIN_VALUE) {
                     continue;
                 }
-                // Seed EVERY lit cell of the run, not just the ones whose neighbours reach as high. The old bound
-                // (`y <= lowestNeighbour`, the highest-ending neighbour run) was a cost trick that also threw away the
-                // sources a shadowed pocket needs: the BFS has no upward direction, so a cell that is open at y=-38
-                // in one column can only light its neighbour at the same height from a seed at that height. Measured
-                // 2026-09-26 under a 4x4x4 /fill: with the bound, the 4x4 shadow at y=-38 read a flat 12 where the
-                // canonical field has 14/13/13/14 (distance 1/2/2/1 from the open columns). Seeding all of them
-                // reproduces the canonical values; the extra seeds are cells the BFS would have visited anyway.
+                // Seeds: the run bottom always, plus every lit cell of the run when this column is a CHANGED column or
+                // sits next to one. Seeding every lit cell of every column was the 2.0.9 fix for a shadowed pocket
+                // under a new blocker - the BFS has no upward direction, so a cell open at y=-38 can only light its
+                // neighbour at the same height from a seed at that height - but in a sunlit world that is most of the
+                // window: 9374 seeds and 7.0 ms of BFS on the gate's patch, against 214 us for the same routine on
+                // structure_cube. The pocket only needs seeds on the shadow's RIM, i.e. the columns touching a change.
                 queue[tail++] = base + (runBottom - yLo);
-                for (int y = runBottom + 1; y <= yHi; y++) {
-                    final int i = base + (y - yLo);
+                final boolean seedWholeRun = this.skyColumnChanged(columnMaxY, x, z);
 
-                    if ((light[i] & 0xFF) == 15) {
-                        queue[tail++] = i;
+                if (seedWholeRun) {
+                    for (int y = runBottom + 1; y <= yHi; y++) {
+                        final int i = base + (y - yLo);
+
+                        if ((light[i] & 0xFF) == 15) {
+                            queue[tail++] = i;
+                        }
                     }
                 }
             }
@@ -1085,6 +1107,25 @@ public final class SkyStarLightEngine extends StarLightEngine {
                     + " installUs=" + (tEnd - tBfs) / 1000
                     + " totalUs=" + (tEnd - tStart) / 1000);
         }
+    }
+
+    /** True when this column was changed, or touches one - the rim that needs the full-run seeding. */
+    private boolean skyColumnChanged(final int[] columnMaxY, final int x, final int z) {
+        final int col = (z << 4) | x;
+
+        if (columnMaxY[2 + col] != Integer.MIN_VALUE) {
+            return true;
+        }
+        if (x > 0 && columnMaxY[2 + col - 1] != Integer.MIN_VALUE) {
+            return true;
+        }
+        if (x < 15 && columnMaxY[2 + col + 1] != Integer.MIN_VALUE) {
+            return true;
+        }
+        if (z > 0 && columnMaxY[2 + col - 16] != Integer.MIN_VALUE) {
+            return true;
+        }
+        return z < 15 && columnMaxY[2 + col + 16] != Integer.MIN_VALUE;
     }
 
     /** Opacity of a cell in the world (used above the window, where no buffer exists). */
