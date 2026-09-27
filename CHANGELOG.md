@@ -617,3 +617,16 @@ that one cell on this reading**, where the pre-fix 0.69 was measured with a chun
 the standing claim to quote until then is the narrow one — `block_toggle_border` and `dense_chunk_patch` are decisive
 wins, `structure_cube` is a win, `sky_hole` is undecided between the two engines. The light itself is unaffected:
 bit-identical to vanilla/ScalableLux on the verification box in every run.
+
+## 2.0.13 — 2026-09-27
+
+**A lane ownership invariant, and the proof that the alarm rings.** `-Dscalablelux.laneInvariant=true` compares every
+section the region image claims to own against the world's nibbles, cell by cell, right after each settle's pack; a
+mismatch names the section and counts the cells. It is the check the 16-block misread of 2.0.10 would have failed in
+seconds - there the image computed the right light and the pack wrote it one section too low while every other reading
+looked healthy. On the fixed lane it reports nothing.
+
+Because two checks fooled me earlier the same day (an empty log judged "all identical", and a verification routine with
+its own wrong index), this one was validated the other way round: with the pack deliberately sabotaged to write one
+section too high it reports immediately (24, 111 and 2510 mismatching cells in the first bad sections), and after
+reverting the sabotage it is silent again. A check that cannot fail is not a check.

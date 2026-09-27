@@ -60,6 +60,16 @@ public final class ImageLane {
     public static final boolean MIRROR_SKY = Boolean.getBoolean("scalablelux.mirrorSky");
     /** Round-trip the mirror against the nibbles and print the per-section timings (implies nothing else). */
     public static final boolean MIRROR_VERIFY = Boolean.getBoolean("scalablelux.mirrorVerify");
+    /**
+     * After every settle's pack, compare the sections the image claims to own against the world's nibbles, cell by cell.
+     *
+     * <p>This is the invariant the lane's exclusive ownership rests on - "what the image holds for a lane-owned section
+     * is what the world holds" - and it is the check that would have caught the 16-block misread of 2026-09-27 in
+     * seconds instead of an afternoon: there the image computed the right light and the pack wrote it one section too
+     * low, so exactly this comparison fails while everything else looks healthy. Off by default; the walk costs
+     * ~110 us a section.</p>
+     */
+    public static final boolean LANE_INVARIANT = Boolean.getBoolean("scalablelux.laneInvariant");
 
     // Region tile size: 4x4 core chunks plus a 1-chunk halo. The tile decides how many region settles a scattered
     // burst pays: border walks ~19 chunks, which at 1-chunk tiles meant 19 inits + 19 packs + 19 publishes a pass
@@ -400,6 +410,10 @@ public final class ImageLane {
             this.packDirty(data, entry.getLongKey());
             LuxProfiler.lanePackNanos += System.nanoTime() - lucisPackT0;
 
+            if (LANE_INVARIANT) {
+                this.checkLaneInvariant(data);
+            }
+
             if (this.settleCount == 1) {
                 // TEMP diagnostic: did the BFS light the region it was handed?
                 int emitters = 0;
@@ -708,6 +722,75 @@ public final class ImageLane {
     private static byte[] MIRROR_PACK_SKY_SCRATCH;
     private static byte[] MIRROR_SNAPSHOT_BLOCK;
     private static byte[] MIRROR_SNAPSHOT_SKY;
+    private static byte[] INVARIANT_SNAPSHOT;
+    private long invariantChecked;
+    private long invariantMismatched;
+    private long invariantBadSections;
+
+    /**
+     * The lane's ownership invariant, checked right after the pack: for every section the region image claims to own,
+     * the image's field must equal the world's nibbles. A mismatch means the pack went somewhere else (or nowhere) -
+     * the 16-block misread of 2026-09-27 looked exactly like this while every other reading looked healthy, and the
+     * four-cell fingerprints could not see it because the base queue also writes those chunks.
+     *
+     * <p>Reported per settle and counted, so a single line says whether the invariant held over a whole run.</p>
+     */
+    private void checkLaneInvariant(final ImageRegionData data) {
+        if (INVARIANT_SNAPSHOT == null) {
+            INVARIANT_SNAPSHOT = new byte[2048];
+        }
+        final byte[] snapshot = INVARIANT_SNAPSHOT;
+        int sectionMismatches;
+
+        for (int linear = data.materializedLightSections.nextSetBit(0); linear >= 0;
+                linear = data.materializedLightSections.nextSetBit(linear + 1)) {
+            final SectionPos sp = data.sectionPosFromLinear(linear);
+            final ChunkAccess chunk = this.owner.getAnyChunkNow(sp.x(), sp.z());
+
+            if (chunk == null) {
+                continue;
+            }
+            final SWMRNibbleArray[] nibbles = ((ExtendedChunk) chunk).scalablelux$getBlockNibbles();
+            final int nibbleIndex = sp.y() - WorldUtil.getMinLightSection(this.owner.world);
+
+            if (nibbleIndex < 0 || nibbleIndex >= nibbles.length) {
+                continue;
+            }
+            final SWMRNibbleArray nibble = nibbles[nibbleIndex];
+
+            if (nibble == null || !nibble.isInitialisedUpdating()) {
+                continue;
+            }
+            // One snapshot per section, then compare: a live read would report the light thread's own progress as a
+            // mismatch (the same benign race that fooled the mirror check three times before it was right).
+            System.arraycopy(nibble.storageUpdating, 0, snapshot, 0, 2048);
+            sectionMismatches = 0;
+            final int sectionIndex = linear / data.sectionsPerPlane;
+            final int rem = linear % data.sectionsPerPlane;
+            final int cx = rem % data.sectionWidth;
+            final int cz = rem / data.sectionWidth;
+
+            for (int local = 0; local < 4096; local++) {
+                final int imageBlock = data.blockLight[data.localIndex((cx << 4) | (local & 15),
+                        (sectionIndex << 4) | ((local >>> 8) & 15), (cz << 4) | ((local >>> 4) & 15))] & 0xF;
+                final int worldBlock = (snapshot[local >> 1] >>> ((local & 1) << 2)) & 0xF;
+
+                this.invariantChecked++;
+                if (imageBlock != worldBlock) {
+                    sectionMismatches++;
+                }
+            }
+            if (sectionMismatches > 0) {
+                this.invariantMismatched += sectionMismatches;
+                this.invariantBadSections++;
+                if (this.invariantBadSections <= 4) {
+                    System.out.println("LANEINVARIANT MISMATCH section=" + sp.x() + "," + sp.y() + "," + sp.z()
+                            + " cells=" + sectionMismatches + " (run total " + this.invariantMismatched + " of "
+                            + this.invariantChecked + " cells, " + this.invariantBadSections + " bad sections)");
+                }
+            }
+        }
+    }
 
     private void copyPlane(final ImageRegionData data, final ImageMaterialPlanes.Plane plane,
                            final int chunkX, final int chunkZ, final int localSection) {
