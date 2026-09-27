@@ -54,10 +54,10 @@
 
 | 档位（玩家的说法） | **LuciStarlink 2.0** | ScalableLux | 1.x（Lucis 线） |
 |---|---|---|---|
-| `block_toggle_border` —— 沿区块边界快速拆放 | 4.60 ms | 3.78 ms | **0.81 ms** |
-| `structure_cube` —— 盖一个实心建筑 | 6.80 ms | 5.54 ms | **2.88 ms** |
-| `dense_chunk_patch` —— 大面积改动 | 4.76 ms | 3.92 ms | **2.40 ms** |
-| `sky_hole` —— 一次很小的改动 | **0.72 ms** | 0.68 ms | 0.86 ms |
+| `block_toggle_border` —— 沿区块边界快速拆放 | 5.01 ms | 4.16 ms | **0.76 ms** |
+| `structure_cube` —— 盖一个实心建筑 | **5.11 ms** | 5.36 ms | 3.37 ms |
+| `dense_chunk_patch` —— 大面积改动 | **3.48 ms** | 5.74 ms | 2.85 ms |
+| `sky_hole` —— 一次很小的改动 | **1.17 ms** | 1.18 ms | 3.85 ms |
 
 **玩家口径** —— `bench.pass_wall_actual`，一个 pass 的墙钟时间，**包含**玩家要等的跨 tick（中位数 / 最好一轮）：
 

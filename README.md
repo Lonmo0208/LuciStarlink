@@ -64,10 +64,10 @@ computing the light, not by the harness's own block loop.
 
 | workload (what a player calls it) | **LuciStarlink 2.0** | ScalableLux | 1.x (Lucis line) |
 |---|---|---|---|
-| `block_toggle_border` — placing/breaking fast along a chunk border | 4.60 ms | 3.78 ms | **0.81 ms** |
-| `structure_cube` — building a solid structure | 6.80 ms | 5.54 ms | **2.88 ms** |
-| `dense_chunk_patch` — large-area edits | 4.76 ms | 3.92 ms | **2.40 ms** |
-| `sky_hole` — a single small edit | **0.72 ms** | 0.68 ms | 0.86 ms |
+| `block_toggle_border` — placing/breaking fast along a chunk border | 5.01 ms | 4.16 ms | **0.76 ms** |
+| `structure_cube` — building a solid structure | **5.11 ms** | 5.36 ms | 3.37 ms |
+| `dense_chunk_patch` — large-area edits | **3.48 ms** | 5.74 ms | 2.85 ms |
+| `sky_hole` — a single small edit | **1.17 ms** | 1.18 ms | 3.85 ms |
 
 **Player metric** — `bench.pass_wall_actual`, the wall time of a whole pass, which *does* include the tick crossings
 a player waits through (median / best round):
