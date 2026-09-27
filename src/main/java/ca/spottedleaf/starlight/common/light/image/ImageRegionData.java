@@ -62,7 +62,49 @@ public final class ImageRegionData {
         this.offsetNegY = -this.paddedArea;
         this.paddedIndexToSection = this.buildIndexToSection();
         this.fillWalls();
+        if (TABLE_VERIFY) {
+            this.verifyIndexToSection();
+        }
     }
+
+    /**
+     * Guarded self-check for {@link #paddedIndexToSection}: walks every padded cell, decodes it the
+     * way the BFS writes do and compares against the table. Enabled with {@code -Dscalablelux.regionTableVerify=true}.
+     * It was written while chasing a lane-on gate run that read a placed patch's block light as 0/1 in the world;
+     * the table proved correct (884736 cells, zero mismatches) and the real cause was the nibble array's
+     * minLightSection base (docs/HANDOVER.md 10.16). Kept because it is the cheapest way to re-prove this table
+     * after any change to the padded layout.
+     */
+    private void verifyIndexToSection() {
+        final int pw = this.paddedWidth, pd = this.paddedDepth, ph = this.paddedHeight;
+        int checked = 0;
+        int mismatches = 0;
+        int firstIndex = -1;
+        int firstExpected = -1;
+        int firstGot = -1;
+
+        for (int y = 1; y <= ph - 2; y++) {
+            for (int z = 1; z <= pd - 2; z++) {
+                for (int x = 1; x <= pw - 2; x++) {
+                    final int index = y * this.paddedArea + z * pw + x;
+                    final int inTable = this.paddedIndexToSection[index];
+                    final int expected = this.sectionLinearIndexLocal(x - 1, y - 1, z - 1);
+
+                    checked++;
+                    if (inTable != expected && mismatches++ == 0) {
+                        firstIndex = index;
+                        firstExpected = expected;
+                        firstGot = inTable;
+                    }
+                }
+            }
+        }
+        System.out.println("PLANETABLE sectionWidth=" + this.sectionWidth + " sectionsPerPlane=" + this.sectionsPerPlane
+                + " padded=" + pw + "x" + pd + "x" + ph + " checked=" + checked + " mismatches=" + mismatches
+                + (mismatches == 0 ? "" : " first index=" + firstIndex + " expected=" + firstExpected + " got=" + firstGot));
+    }
+
+    private static final boolean TABLE_VERIFY = Boolean.getBoolean("scalablelux.regionTableVerify");
 
     /** Opacity 15 on the pad: a spreading wave loses 15 levels entering it, so it never writes and never enqueues. */
     private void fillWalls() {

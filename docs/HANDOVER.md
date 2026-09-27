@@ -711,3 +711,43 @@ harness 的完成判定是 `waitForPendingTasks(chunk)` 的 future + `controller
 
 **今天的收尾**：2.0.9 已发布（天光下降修复 + 诚实 README），四格表、记账不可比这一条、以及所有被否掉的候选都已入库。
 **没有半成品留在树里**（工作树 = HEAD，门绿、四格指纹不变）。
+
+### 10.16 通道的一个真 bug（错位 16 格）+ 打包式材质提取（2026-09-27）
+
+**一、`imageLane=true` 时世界里的方块光是错的 —— 已在门里复现、定位、修好并验证。**
+
+症状：门里放一块 4×4×4 荧石补丁，**世界读到的是 `block=0/1`**（补丁自身），周围格子的光还被一条下降波拖低
+（1/2/3/5），`relight` 之后才对 —— 因为 relight 是基座引擎的活，不走通道的映射。
+
+二分（4 分钟一次）：`scalablelux.imageLaneMinChanges=4096`（通道**只捕获、永不接管**）→ `READ1 == READ2 ✓`
+⇒ 缺陷在通道的 **apply/pack**，不在捕获。
+
+根因：**每个区块的 nibble 数组从 `minLightSection` 起**（overworld 里 26 段 = 24 建造段 + 上下各一扩展段），
+而通道用**建造段索引**去取：`nibbles[sp.y() - bounds.minSectionY()]` —— 整体错位 **16 格**。后果有两层：
+① `materializeSection` 读到的是**下面那一段**的光（最底下那段是 `uninitialised` → 采纳被静默跳过 → 该 section 的
+light 平面保持全 0），② `packDirty` 把算出来的光**写回下面那一段**。于是世界真正的那一段一直黑着，而通道基于
+"全 0 的 light 平面 + 正确的 material 平面"跑出的下降波还把邻居拖暗 ✓✓ 症状完全吻合。
+
+修法（三处，`materializeSection` / `packDirty` / 外部再采纳路径）统一用命令里那条规范形式：
+`sectionY - WorldUtil.getMinLightSection(level)`。**验收：通道开着时 22 个探针格 `READ1 == READ2 ✓`**
+（并且要求读数行数 = 44，避免空日志假阳性——这个坑当天也踩过：构建失败 → 门日志为空 → 我的比对脚本把 22 个空串
+判成"全部一致"✗）。四格指纹仍 `905931078dfc5ace`、minPass 7.55/4.94/4.11/0.79 ms（与同量级窗口一致，无回归）。
+
+**为什么四格指纹一直没抓到它**：那四格的 chunk 同时也被基座队列处理（§10.9），通道写错的场被基座写对的场覆盖；
+门的 `/fill` 只走 own-edit + 通道 ✓。**顺带说明：嫌疑首先落在当天新加的 `paddedIndexToSection` 索引表上，它被自己的
+守卫自检洗清了**（`-Dscalablelux.regionTableVerify=true`：884,736 格、0 mismatch；这个自检留在树里）。
+
+**二、打包式材质提取（第一块砖，已验证）**：`ImageMaterialPlanes` 现在能在**打包层**读整个 section
+（`storage.get(cell)` + 按"去重索引"算一次材质），前提是该 section 里没有形状遮挡状态；拿不到句柄或调色板宽于 64 时
+**回退到逐格路径**（所以只有性能风险、没有正确性风险）。
+
+- 正确性：守卫自检 `-Dscalablelux.planeExtractVerify=true` 把两边的 4096 格 opacity+emission 逐字节比对 ——
+  **11/11 identical**；通道开着的门跑也证明了它（光是对的）。
+- 速度（玩家存档、全调色板 section）：**packed 198-220 µs/section 对 perCell 413-448 µs = 2.1×**。
+- **诚实的更正**：我原先估 16×（把 4096 次调色板查找换成 4096 次数组读）；实测 2.1×，因为在**全调色板** section 里
+  主导成本是 `BitStorage.get` 的 15 bit 跨 long 解包（≈40-50 ns/格），不是 `valueFor`。
+- **这条数对"换存储"那条路的直接影响**：镜像要在加载时填充成本 ≈ 每 section 20 µs（线性调色板）到 200+ µs（全调色板），
+  即每区块 0.5-5 ms —— **所以存储重写只能"惰性/增量填充"，不能加载时全量填**。这是这块砖量出来的具体设计约束。
+- 实现路径的教训：`@Accessor` 走不通（Mixin 要求**精确**字段类型，而 `PalettedContainer$Data` 是包私有 record，
+  报 "No candidates were found matching data:Ljava/lang/Object;"）。最终用**一次性解析的 MethodHandle** +
+  失败即回退（拿不到就永久走逐格路径，绝不崩、绝不静默算错）。

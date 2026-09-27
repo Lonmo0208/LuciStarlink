@@ -11,6 +11,7 @@ import ca.spottedleaf.starlight.common.light.image.ImageRegionData;
 import ca.spottedleaf.starlight.common.light.image.OwnedRegionImageCache;
 import ca.spottedleaf.starlight.common.light.image.RuntimeLightChangeBuffer;
 import ca.spottedleaf.starlight.common.light.image.RuntimeRegionImageState;
+import ca.spottedleaf.starlight.common.util.WorldUtil;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
@@ -548,9 +549,22 @@ public final class ImageLane {
 
         final SWMRNibbleArray[] nibbles = ((ExtendedChunk) chunk).scalablelux$getBlockNibbles();
         final LevelChunkSection[] sections = chunk.getSections();
+        // The per-chunk nibble array starts at minLightSection (one section below minSection, and one above the top:
+        // 26 entries for 24 build sections), so a BUILD-section index reads the section 16 blocks below - which is
+        // "uninitialised" for the bottom one, i.e. the adoption silently did nothing and the region kept a zeroed
+        // light plane while the material plane was correct. The canonical form is the one the /scalablelux command
+        // uses. Recorded in docs/HANDOVER.md 10.16.
+        final int nibbleIndex = sectionY - WorldUtil.getMinLightSection(level);
+        final SWMRNibbleArray nibble = nibbleIndex >= 0 && nibbleIndex < nibbles.length ? nibbles[nibbleIndex] : null;
+
+        if (LANE_DEBUG) {
+            System.out.println("LANEMATZ chunk=" + chunkX + "," + chunkZ + " sectionY=" + sectionY
+                    + " buildIndex=" + sectionIndex + " nibbleIndex=" + nibbleIndex + " nibbles=" + nibbles.length
+                    + " sections=" + sections.length + " nibble="
+                    + (nibble == null ? "null" : String.valueOf(nibble.isInitialisedUpdating())));
+        }
 
         // light: mirror the authoritative nibbles (absent storage reads as zero)
-        final SWMRNibbleArray nibble = sectionIndex < nibbles.length ? nibbles[sectionIndex] : null;
         if (nibble != null && nibble.isInitialisedUpdating()) {
             data.adoptSectionData(cx, cz, sectionIndex, nibble.storageUpdating, false);
         }
@@ -600,11 +614,12 @@ public final class ImageLane {
         }
         final SWMRNibbleArray[] nibbles = ((ExtendedChunk) chunk).scalablelux$getBlockNibbles();
         final int sectionIndex = sp.y() - data.bounds.minSectionY();
+        final int nibbleIndex = sp.y() - WorldUtil.getMinLightSection(this.owner.world);
 
-        if (sectionIndex < 0 || sectionIndex >= nibbles.length) {
+        if (sectionIndex < 0 || nibbleIndex < 0 || nibbleIndex >= nibbles.length) {
             return;
         }
-        final SWMRNibbleArray nibble = nibbles[sectionIndex];
+        final SWMRNibbleArray nibble = nibbles[nibbleIndex];
 
         if (nibble != null && nibble.isInitialisedUpdating()) {
             data.adoptSectionData(sp.x() - (data.bounds.minBlockX() >> 4),
@@ -639,9 +654,10 @@ public final class ImageLane {
             if (chunk != null) {
                 final SWMRNibbleArray[] nibbles = ((ExtendedChunk) chunk).scalablelux$getBlockNibbles();
                 final int sectionIndex = sp.y() - data.bounds.minSectionY();
+                final int nibbleIndex = sp.y() - WorldUtil.getMinLightSection(this.owner.world);
 
-                if (sectionIndex >= 0 && sectionIndex < nibbles.length) {
-                    final SWMRNibbleArray nibble = nibbles[sectionIndex];
+                if (sectionIndex >= 0 && nibbleIndex >= 0 && nibbleIndex < nibbles.length) {
+                    final SWMRNibbleArray nibble = nibbles[nibbleIndex];
 
                     if (nibble != null && this.writeSection(nibble, data, sp.x(), sp.z(), sectionIndex)) {
                         // the reader side (client packets, saves) reads the visible layer: sync it before publishing
