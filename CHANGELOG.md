@@ -6,6 +6,20 @@ the 1.x branch's own changelog; for what belongs to whom see [NOTICE](NOTICE) an
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 
+## 2.0.12 — 2026-09-27
+
+**The region image can carry both light halves exactly**, which is the precondition for the image becoming the
+storage rather than a cache that packs back. `-Dscalablelux.mirrorSky=true` adopts each materialised section's sky
+half alongside its block half (same nibble array, same canonical `minLightSection` indexing), and
+`-Dscalablelux.mirrorVerify=true` compares both halves against the nibbles cell by cell and byte by byte: 8/8
+identical on real chunks, and the switch is inert for light - the gate reads identically with it on and off, and
+the default configuration is unchanged.
+
+What the measurement bought is a design decision with a number: adoption costs 212-228 µs a section and packing
+back 600-646, i.e. ~0.85 ms a section, so a design that keeps the nibbles as the storage and mirrors them costs
+~20 ms a chunk before any material work. That variant is out. What remains is the image being the storage itself:
+writes land in their final form, there is no pack step, and saves and the client read the image directly.
+
 ## 2.0.11 — 2026-09-27
 
 **The material-plane write funnel is free when no plane exists.** It hangs off

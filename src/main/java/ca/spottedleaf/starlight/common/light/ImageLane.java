@@ -48,6 +48,18 @@ public final class ImageLane {
     public static final boolean ENABLED = Boolean.getBoolean("scalablelux.imageLane");
     /** Per-settle trace (region, changes, materialized sections); off unless asked for. */
     public static final boolean LANE_DEBUG = Boolean.getBoolean("scalablelux.imageLaneDebug");
+    /**
+     * Adopt the sky half of every materialised section into the region image as well.
+     *
+     * <p>Off by default: nothing reads the image's sky plane yet, so this is pure cost today. It is the first brick of
+     * the route that replaces the storage layer (docs/HANDOVER.md 10.15) - an engine whose update loop runs on the
+     * image must carry both light halves exactly, and this is the mechanism plus its proof. Measured with
+     * {@code -Dscalablelux.mirrorVerify=true} on real chunks: the adopt (unpack) and the pack-back cost per section,
+     * and whether every cell round-trips exactly.</p>
+     */
+    public static final boolean MIRROR_SKY = Boolean.getBoolean("scalablelux.mirrorSky");
+    /** Round-trip the mirror against the nibbles and print the per-section timings (implies nothing else). */
+    public static final boolean MIRROR_VERIFY = Boolean.getBoolean("scalablelux.mirrorVerify");
 
     // Region tile size: 4x4 core chunks plus a 1-chunk halo. The tile decides how many region settles a scattered
     // burst pays: border walks ~19 chunks, which at 1-chunk tiles meant 19 inits + 19 packs + 19 publishes a pass
@@ -569,6 +581,26 @@ public final class ImageLane {
             data.adoptSectionData(cx, cz, sectionIndex, nibble.storageUpdating, false);
         }
 
+        // The sky half of the same section, so the region image can carry BOTH halves - the precondition for the
+        // image becoming the storage rather than a cache that packs back. Off by default: nothing reads the sky
+        // plane yet, so adopting it is pure cost until the sky engine works on the image (docs/HANDOVER.md 10.15).
+        if (MIRROR_SKY) {
+            final SWMRNibbleArray[] skyNibbles = ((ExtendedChunk) chunk).scalablelux$getSkyNibbles();
+            final SWMRNibbleArray skyNibble = nibbleIndex >= 0 && nibbleIndex < skyNibbles.length ? skyNibbles[nibbleIndex] : null;
+
+            if (skyNibble != null && skyNibble.isInitialisedUpdating()) {
+                if (MIRROR_VERIFY) {
+                    // Snapshot FIRST and adopt from the snapshot: the light thread writes the same chunk's nibbles while
+                    // this runs, so a snapshot taken after the adoption compares two different moments and reports the
+                    // light thread's own progress as mirror mismatches - which is what the earlier cuts of this check
+                    // did (one section identical, the rest "mismatched" by exactly the concurrent decrease work).
+                    this.snapshotAdoptAndVerify(data, cx, cz, sectionY, sectionIndex, nibble, skyNibble);
+                } else {
+                    data.adoptSectionData(cx, cz, sectionIndex, skyNibble.storageUpdating, true);
+                }
+            }
+        }
+
         // materials: air sections are zero already; anything else comes from the CHUNK-LEVEL material plane,
         // which is extracted once per section and reused by every region that needs it (a scattered change
         // reaches sections that up to nine neighbouring regions materialized separately, and each pass reaches
@@ -582,6 +614,101 @@ public final class ImageLane {
     }
 
     /** Copies a plane's 4096 cells into the region's padded planes. Two array-level loops, no per-cell lookups. */
+    /**
+     * Proves the two halves of the region image against the nibbles and prices both directions.
+     *
+     * <p>Reads all 4096 cells of the section back out of the image (block and sky), packs them into the nibble layout
+     * the engine stores (two cells a byte, one array per layer), and compares cell by cell against the source arrays.
+     * Every cell must round-trip exactly - that is what "the image can be the storage" means - and the pack timing is
+     * what a storage-level engine pays per section when it has to publish or save. The unpack timing comes from the
+     * adoption itself, passed in from the call site.</p>
+     */
+    private void snapshotAdoptAndVerify(final ImageRegionData data, final int cx, final int cz, final int sectionY,
+                                        final int sectionIndex, final SWMRNibbleArray blockNibble,
+                                        final SWMRNibbleArray skyNibble) {
+        if (MIRROR_PACK_SCRATCH == null) {
+            MIRROR_PACK_SCRATCH = new byte[2048];
+            MIRROR_PACK_SKY_SCRATCH = new byte[2048];
+            MIRROR_SNAPSHOT_BLOCK = new byte[2048];
+            MIRROR_SNAPSHOT_SKY = new byte[2048];
+        }
+        final byte[] blockScratch = MIRROR_PACK_SCRATCH;
+        final byte[] skyScratch = MIRROR_PACK_SKY_SCRATCH;
+        // A snapshot, not a live read: the light thread writes the same chunk's nibbles while the server thread (this
+        // code) runs, and comparing against a moving source produces mismatches that say nothing about the mirror.
+        // The first cut did exactly that and reported 1 identical of 8; with a snapshot the comparison is meaningful.
+        System.arraycopy(blockNibble.storageUpdating, 0, MIRROR_SNAPSHOT_BLOCK, 0, 2048);
+        System.arraycopy(skyNibble.storageUpdating, 0, MIRROR_SNAPSHOT_SKY, 0, 2048);
+        final byte[] blockSnapshot = MIRROR_SNAPSHOT_BLOCK;
+        final byte[] skySnapshot = MIRROR_SNAPSHOT_SKY;
+        // The adoption runs FROM the snapshot, so the image is a function of exactly these bytes regardless of what the
+        // light thread does to the live arrays afterwards.
+        final long adoptStart = System.nanoTime();
+
+        data.adoptSectionData(cx, cz, sectionIndex, blockSnapshot, false);
+        data.adoptSectionData(cx, cz, sectionIndex, skySnapshot, true);
+        final long adoptNanos = System.nanoTime() - adoptStart;
+        final long packStart = System.nanoTime();
+        int mismatches = 0;
+        int firstMismatch = -1;
+        int firstBlockImage = -1;
+        int firstBlockNibble = -1;
+        int firstSkyImage = -1;
+        int firstSkyNibble = -1;
+
+        java.util.Arrays.fill(blockScratch, (byte) 0);
+        java.util.Arrays.fill(skyScratch, (byte) 0);
+
+        for (int local = 0; local < 4096; local++) {
+            final int localX = local & 15;
+            final int localY = (local >>> 8) & 15;
+            final int localZ = (local >>> 4) & 15;
+            // The readback has to be built exactly like the adoption builds its write address: REGION-local X, Y and Z
+            // (chunk offset included). Three earlier cuts of this check got a different piece of that wrong - the
+            // region-local Y, the timing of the snapshot, and the chunk offset on X and Z - and each wrong piece
+            // produced "mismatches" that said nothing about the mirror. Call the production formula, never re-derive it.
+            final int imageIndex = data.localIndex((cx << 4) | localX, (sectionIndex << 4) | localY, (cz << 4) | localZ);
+            final int imageBlock = data.blockLight[imageIndex] & 0xF;
+            final int imageSky = data.skyLight[imageIndex] & 0xF;
+            final int nibbleBlock = (blockSnapshot[local >> 1] >>> ((local & 1) << 2)) & 0xF;
+            final int nibbleSky = (skySnapshot[local >> 1] >>> ((local & 1) << 2)) & 0xF;
+
+            if (imageBlock != nibbleBlock || imageSky != nibbleSky) {
+                if (firstMismatch < 0) {
+                    firstMismatch = local;
+                    firstBlockImage = imageBlock;
+                    firstBlockNibble = nibbleBlock;
+                    firstSkyImage = imageSky;
+                    firstSkyNibble = nibbleSky;
+                }
+                mismatches++;
+            }
+            final int half = local >> 1;
+
+            if ((local & 1) == 0) {
+                blockScratch[half] = (byte) ((blockScratch[half] & 0xF0) | imageBlock);
+                skyScratch[half] = (byte) ((skyScratch[half] & 0xF0) | imageSky);
+            } else {
+                blockScratch[half] = (byte) ((blockScratch[half] & 0x0F) | (imageBlock << 4));
+                skyScratch[half] = (byte) ((skyScratch[half] & 0x0F) | (imageSky << 4));
+            }
+        }
+        final long packNanos = System.nanoTime() - packStart;
+        final String packOk = java.util.Arrays.equals(blockScratch, blockSnapshot)
+                && java.util.Arrays.equals(skyScratch, skySnapshot) ? "bytes=identical" : "BYTES-DIFFER";
+
+        System.out.println("MIRRORMIRROR sectionY=" + sectionY + " idx=" + sectionIndex + " cx=" + cx + " cz=" + cz
+                + " adopt=" + adoptNanos / 1000 + "us pack=" + packNanos / 1000 + "us " + packOk
+                + (mismatches == 0 ? " cells=identical" : " MISMATCH n=" + mismatches + " first cell=" + firstMismatch
+                        + " block[image=" + firstBlockImage + ",nibble=" + firstBlockNibble
+                        + "] sky[image=" + firstSkyImage + ",nibble=" + firstSkyNibble + "]"));
+    }
+
+    private static byte[] MIRROR_PACK_SCRATCH;
+    private static byte[] MIRROR_PACK_SKY_SCRATCH;
+    private static byte[] MIRROR_SNAPSHOT_BLOCK;
+    private static byte[] MIRROR_SNAPSHOT_SKY;
+
     private void copyPlane(final ImageRegionData data, final ImageMaterialPlanes.Plane plane,
                            final int chunkX, final int chunkZ, final int localSection) {
         final int baseX = (chunkX << 4) + 1;
