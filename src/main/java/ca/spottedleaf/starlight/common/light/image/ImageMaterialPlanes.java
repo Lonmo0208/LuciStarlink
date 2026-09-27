@@ -36,6 +36,14 @@ public final class ImageMaterialPlanes {
 
     private static final ConcurrentHashMap<LevelChunkSection, Plane> PLANES = new ConcurrentHashMap<>();
 
+    /**
+     * True while at least one plane is live. Read first by the write funnel, which runs for every block write in the
+     * world: with the image lane off - the shipped default - no plane is ever created, so the funnel becomes a single
+     * volatile read instead of a concurrent-map lookup per write. Only written where planes are created or dropped,
+     * never on the per-write path.
+     */
+    private static volatile boolean ANY_PLANES;
+
     private ImageMaterialPlanes() {}
 
     /** One section's materials. {@code opacity}/{@code emission} hold 4096 cells in vanilla's (y<<8)|(z<<4)|x order. */
@@ -108,6 +116,7 @@ public final class ImageMaterialPlanes {
         }
 
         PLANES.put(section, plane);
+        ANY_PLANES = true;
         return plane;
     }
 
@@ -297,10 +306,20 @@ public final class ImageMaterialPlanes {
     /**
      * The write funnel (mixin call site): one cell of the section changed. If a plane is live, update that cell -
      * exact write-through, so the plane never goes stale for a write anyone can see.
+     *
+     * <p>The first line is what keeps this funnel free for everyone who never creates a plane. It hangs off
+     * {@code LevelChunkSection.setBlockState}, so it runs for <b>every block write in the world</b>, worldgen
+     * included; with the image lane disabled - the shipped default - no plane is ever created, and before this guard
+     * that meant a concurrent-map lookup per write for nothing. Measured same-window against pristine ScalableLux
+     * with both of this engine's features off: 213 ns a change in the apply phase against 147, i.e. +66 ns a change of
+     * pure overhead (docs/HANDOVER.md 10.17).</p>
      */
     public static void onSectionWrite(final LevelChunkSection section, final int x, final int y, final int z,
                                       final BlockState newState, final ImageMaterialCache materialCache,
                                       final BlockPos.MutableBlockPos pos) {
+        if (!ANY_PLANES) {
+            return; // no plane exists anywhere: nothing to keep in step
+        }
         final Plane plane = PLANES.get(section);
 
         if (plane == null || plane.section != section) {
@@ -317,10 +336,12 @@ public final class ImageMaterialPlanes {
     /** Drops a section's plane: for rewrites the funnel cannot see (bulk recalcs, section replacement). */
     public static void drop(final LevelChunkSection section) {
         PLANES.remove(section);
+        ANY_PLANES = !PLANES.isEmpty();
     }
 
     /** Drops every plane of one chunk (external engine writes, chunk unload). */
     public static void dropChunk(final int chunkX, final int chunkZ) {
         PLANES.values().removeIf(plane -> plane.chunkX == chunkX && plane.chunkZ == chunkZ);
+        ANY_PLANES = !PLANES.isEmpty();
     }
 }

@@ -751,3 +751,24 @@ light 平面保持全 0），② `packDirty` 把算出来的光**写回下面那
 - 实现路径的教训：`@Accessor` 走不通（Mixin 要求**精确**字段类型，而 `PalettedContainer$Data` 是包私有 record，
   报 "No candidates were found matching data:Ljava/lang/Object;"）。最终用**一次性解析的 MethodHandle** +
   失败即回退（拿不到就永久走逐格路径，绝不崩、绝不静默算错）。
+
+### 10.17 我们自己层里"永远在跑"的每改动开销（2026-09-27，已修）
+
+材质平面的**写入漏斗**挂在 `LevelChunkSection.setBlockState` 上 → **世界上每一次方块写入都会调它**（世界生成也算），
+而通道**默认关闭**时平面存储永远是空的 → 每次写入白做一次 `ConcurrentHashMap.get`。
+
+**同窗口配对测量**（dense，ours = 我们的 jar 且两个特性都关 = 纯基座，sl = 纯净 ScalableLux）：
+
+| | ours | sl | 结论 |
+|---|---|---|---|
+| 修复前 | 4.70 ms（apply 3.92，**213 ns/改动**） | 3.97 ms（apply 2.71，147 ns/改动） | 我们**慢 18%**、每改动 +66 ns |
+| 修复后 r1 | 3.58（**471 ns/改动**） | 4.12（517） | 我们**快 13%** |
+| 修复后 r2（换序） | 3.44（448） | 4.09（521） | 我们**快 16%** |
+
+**修法**：`ImageMaterialPlanes` 加一个 `volatile boolean ANY_PLANES`（只在创建/淘汰平面时写），漏斗第一行
+`if (!ANY_PLANES) return;` ✓ 于是没有平面时它退化成一次 volatile 读。**验收**：通道开着（含打包提取）的门
+`READ1 == READ2 ✓`、11/11 提取 identical（守卫生效不能破坏通道的平面更新——第一版替换漏掉了 `ANY_PLANES = true`，
+那就是"平面永不更新"的正确性 bug，被门当场抓住）。
+
+**意义**：这是**发布配置**（通道关）下每个方块写入的净开销，所以它对所有四格、所有玩法都成立；也说明
+"我们这层只占 7% 成本"那个数字里，有一部分是这种白干的活。2.0.11 带上它。

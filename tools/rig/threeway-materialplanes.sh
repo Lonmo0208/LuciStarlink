@@ -28,7 +28,8 @@ fresh() { [ -f "$1" ] && [ "$(stat -c %Y "$1" 2>/dev/null)" -ge "$RUN_STARTED" ]
 build_rig_jar() {
   ( cd "$V2" && timeout 900 ./gradlew build -Pmod_id=lucistarlinkrig -x test --console=plain ) > "$OUT/rig-build.log" 2>&1 \
     || { echo "RIG-BUILD-FAILED, see $OUT/rig-build.log" >&2; return 1; }
-  local built="$V2/build/libs/lucistarlink-1.21.1-2.0.9-all.jar"
+  # glob, not a pinned version: a version bump must not silently break the rig build
+  local built; built=$(ls "$V2"/build/libs/lucistarlink-1.21.1-*-all.jar 2>/dev/null | grep -v -- "-dev.jar" | head -1)
   local id; id=$(unzip -p "$built" META-INF/neoforge.mods.toml 2>/dev/null | grep -m1 '^modId')
   case "$id" in *lucistarlinkrig*) ;; *) echo "RIG-BUILD-WRONG-MOD-ID: $id" >&2; return 1;; esac
   cp -f "$built" "$US20_JAR"

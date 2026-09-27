@@ -6,6 +6,16 @@ the 1.x branch's own changelog; for what belongs to whom see [NOTICE](NOTICE) an
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 
+## 2.0.11 — 2026-09-27
+
+**The material-plane write funnel is free when no plane exists.** It hangs off
+`LevelChunkSection.setBlockState`, so it ran for *every block write in the world*, worldgen included, and with the
+image lane disabled (the shipped default) no plane is ever created - which meant a concurrent-map lookup per write
+for nothing. A `volatile boolean` set only where planes are created or evicted now short-circuits it to a single
+read. Measured same-window against pristine ScalableLux with both features off: 213 ns a change in the apply phase
+against 147 before (18% slower overall), 448-471 against 517-521 after (15% faster), on two rounds with the order
+reversed.
+
 ## 2.0.10 — 2026-09-27
 
 **Two fixes, both found and verified in the gate.** They matter because the image lane is the mechanism this engine's
