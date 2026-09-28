@@ -990,6 +990,25 @@ public final class SkyStarLightEngine extends StarLightEngine {
                 queue[tail++] = colBase + height - 1;
             }
         }
+        if (Boolean.getBoolean("scalablelux.recomputeDebug") && chunkX == 0 && chunkZ == -1) {
+            // Fixed-point diagnostic for the shadow pocket of the gate's 4x4x4 patch: world (10..13, -38, -14) is
+            // directly under it, x=9 is the open column one step away, and the canonical value there is 14 against
+            // this routine's 12 (docs/HANDOVER.md 10.30). Print what the sweep and the seeding produced, per column.
+            final StringBuilder diag = new StringBuilder("SKYRECOMPUTE-DEBUG POCKET y=-38: ");
+
+            for (int x = 8; x <= 14; x++) {
+                final int col = (2 << 4) | x; // z index 2 is world z=-14 for chunkZ=-1
+                final int colBase = col * height;
+                final int i = colBase + (-38 - yLo);
+
+                diag.append("x=").append(x).append("[runBottom=")
+                        .append(runs[(2 + 1) * 18 + (x + 1)] == Integer.MIN_VALUE ? "MIN"
+                                : String.valueOf(runs[(2 + 1) * 18 + (x + 1)]))
+                        .append(",mat=").append(material[i] & 0xFF)
+                        .append(",light=").append(light[i] & 0xFF).append("] ");
+            }
+            System.out.println(diag);
+        }
         int head = 0;
 
         while (head < tail) {
@@ -1037,6 +1056,19 @@ public final class SkyStarLightEngine extends StarLightEngine {
             }
         }
         final long tBfs = System.nanoTime();
+
+        if (Boolean.getBoolean("scalablelux.recomputeDebug") && chunkX == 0 && chunkZ == -1) {
+            final StringBuilder diag = new StringBuilder("SKYRECOMPUTE-DEBUG POCKET-AFTER-BFS y=-38: ");
+
+            for (int x = 8; x <= 14; x++) {
+                final int col = (2 << 4) | x;
+                final int i = col * height + (-38 - yLo);
+
+                diag.append("x=").append(x).append("[light=").append(light[i] & 0xFF)
+                        .append(",before=").append(before[i] & 0xFF).append("] ");
+            }
+            System.out.println(diag);
+        }
 
         // ---- 5) install the differences, and push the chunk's boundary changes for the neighbouring chunks
         final long propagateDirection = AxisDirection.POSITIVE_Y.everythingButThisDirection;
