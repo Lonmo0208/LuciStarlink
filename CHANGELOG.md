@@ -687,3 +687,29 @@ Because two checks fooled me earlier the same day (an empty log judged "all iden
 its own wrong index), this one was validated the other way round: with the pack deliberately sabotaged to write one
 section too high it reports immediately (24, 111 and 2510 mismatching cells in the first bad sections), and after
 reverting the sabotage it is silent again. A check that cannot fail is not a check.
+
+## 2.0.17 — 2026-09-29
+
+**The deferred sky window keeps its algorithm and takes its data from the image.** `settleSkyWindow` grew a
+`WindowSource`: the sweep, the seeding rules, the five-direction BFS, the install and the boundary push stay entirely
+the engine's, and the source only answers where the two arrays it works on come from. The image lane answers from the
+region's material plane (a 4096-byte array the write funnel already keeps current) and from the same copy of the
+nibbles it adopts into its sky plane in that pass, which turns the per-cell palette walk into an array read. Sections
+whose material was never extracted are refused rather than approximated, so the fallback is the world-sourced fill
+exactly as before; the engine hands the installed window back so the image holds the result instead of a stale copy.
+Off by default (`-Dscalablelux.imageLaneSky=true`); with it off, nothing changes.
+
+Acceptance, all three legs: the correctness gate reads identically on all 22 probes before and after a relight (and
+the source counters prove a real window was sourced, not a silent fallback); `structure_cube`'s canonical fingerprint
+`sky=905931078dfc5ace` is identical on both sides in all three rounds; and the interleaved same-jar A/B over three
+rounds reads 0.929 (border), 1.063 (structure) and 0.930 (dense) - signs flip between rounds, so **on the metric this
+is not established** (dense and structure need six rounds, per 10.28's rule), while no cell is clearly worse and the
+light is byte-identical.
+
+Also corrected in this round: the slice-1.5 claim of an equivalent region-granular recompute (HANDOVER 10.36) is
+withdrawn. An honest probe - comparing the two routes on the same window in the same pass instead of comparing the
+plane with itself - showed the region form is a *different algorithm* (288 of 9216 cells on the gate's patch: it
+seeds every run instead of the changed rim, walks six directions instead of five, and crosses chunk edges the
+production routine never crosses), and that the per-column clearing used the wrong columns entirely (region-local
+0..15 where the changed chunk is 16..31), which is why it could not lower a single cell. The region form stays as
+gated diagnostic code; the ship path is the source substitution.
