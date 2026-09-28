@@ -6,6 +6,21 @@ the 1.x branch's own changelog; for what belongs to whom see [NOTICE](NOTICE) an
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 
+## 2.0.15 — 2026-09-28
+
+**One flush per tick: dense_chunk_patch 3.8x faster, structure_cube 15% faster.** The harness asks
+`waitForPendingTasks` PER CHUNK - 289 times for its prepare ring - and this engine's `syncFuture` ran the whole
+pending-edit flush on every one of those calls: region iteration, external-section drains, the deferred sky recompute.
+A flush is idempotent until another change arrives and the tick hook already guarantees one per tick, so the repeats
+were pure waste, and they were the bulk of the time HANDOVER 10.26 could not attribute to engine work (structure's
+own engine work is 0.7 ms of a 5.62 ms pass). A single `lucis` helper, shared by the tick hook,
+`hasUpdates` and `syncFuture`, is the whole change.
+
+Three interleaved rounds with the order rotated: dense 9.54/3.95/5.47 ms before against 1.14/1.43/1.59 after (the
+two sets never overlap), structure 5.08/5.99/5.30 against 4.60/3.90/4.50, border 5.52 against 5.08. So dense is now
+roughly 1.1-1.6 ms where the 1.x line reads 2.85 - ahead by about 2x - and structure narrows from 1.52x to about
+1.34x behind it. Border is unchanged in substance: its cost is the base engine's decrease wave.
+
 ## 2.0.14 — 2026-09-28
 
 **The deferred sky recompute is column-scoped: 19x less work, and 27-29% off two cells' readings.** Profiling had

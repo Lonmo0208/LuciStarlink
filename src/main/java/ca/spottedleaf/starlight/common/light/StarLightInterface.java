@@ -369,7 +369,7 @@ public final class StarLightInterface {
                     + " pendingRecomputes=" + this.lucis$pendingRecomputes.size()
                     + " queueEmpty=" + this.lightQueue.isEmpty());
         }
-        this.lucis$flushAllPendingEdits(true);
+        this.lucis$flushOncePerTick();
         return !this.lightQueue.isEmpty();
     }
 
@@ -660,7 +660,9 @@ public final class StarLightInterface {
      * engine's own queue has work - work the inline lane deliberately does not create.</p>
      */
     public void lucisFlushPendingEdits() {
-        this.lucis$flushAllPendingEdits(true);
+        // the tick hook: a new tick, so the next ask flushes again
+        this.lucis$newTick();
+        this.lucis$flushOncePerTick();
     }
 
     private void lucis$flushPendingEdits(final long keepKey, final boolean settle) {
@@ -1269,9 +1271,29 @@ public final class StarLightInterface {
     }
 
     public CompletableFuture<Void> syncFuture(final int chunkX, final int chunkZ) {
-        this.lucis$flushAllPendingEdits(true);
+        // The harness asks for this PER CHUNK - 289 of them for its prepare ring - and every call used to run the whole
+        // flush: region iteration, external-section drains, the sky recompute. A flush is idempotent until another
+        // change arrives, and the tick hook already guarantees one per tick, so the repeats are pure waste (part of the
+        // unattributed time in HANDOVER 10.14-10.26). One flush a tick, including this call site's.
+        this.lucis$flushOncePerTick();
         return this.lightQueue.getChunkSyncFuture(chunkX, chunkZ).thenApply(Function.identity());
     }
+
+    /** Runs the pending-edit flush at most once per server tick; called by the tick hook, hasUpdates and syncFuture. */
+    public void lucis$flushOncePerTick() {
+        if (this.lucis$flushedThisTick) {
+            return;
+        }
+        this.lucis$flushedThisTick = true;
+        this.lucis$flushAllPendingEdits(true);
+    }
+
+    /** The tick hook clears this at the top of every tick, so the next ask flushes again. */
+    public void lucis$newTick() {
+        this.lucis$flushedThisTick = false;
+    }
+
+    private boolean lucis$flushedThisTick;
 
     public void propagateChanges() {
         if (this.lightQueue.isEmpty()) {
