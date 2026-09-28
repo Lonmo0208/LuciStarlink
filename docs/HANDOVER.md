@@ -1150,3 +1150,29 @@ border/structure 的剩余差距在**每格检查的内存局部性**，而"平�
   "oracle 模式"对拍：对同一区域，镜像算的天光 vs `settleSkyWindow` 的天光逐格一致 ⇒ 引擎核心成立。
 - **切片 2**：把 `applyChanges` 的天光半边接上（改动 → 列规则播种 → BFS），fuzz 对拍基底。
 - **切片 3**：`packDirty` 加天光半边（`dirtySkySections` 已在维护 ✓），四格判据 + A/B。
+
+### 10.35 切片 1 的 oracle 结果：**一次设计级发现**（天光的物化粒度必须是世界顶起的全列）
+
+**已建好**：`ImageSkyLightEngine`（区域平面上的四步：open-run sweep → 全 run 播种 → 护城河 BFS）+
+`runSkyOracle`（与采纳值逐格对拍）。首次运行（修复 NPE 后）：`cells=965000 pops=876642 36-40 ms
+MISMATCH 806k/965k, first (x=32,z=0,y=0) adopted=0 computed=15`。
+
+**诊断链**（matCols 2304/2304 ⇒ 不是"未物化"标记的问题）：
+- mismatch 首格在 **halo 区块的 y=0**（世界底部）。adopted=0 ✓（世界那里有遮挡）；computed=15 ✗。
+- 我的 sweep 从**区域顶**往下走、遇材质 0 就设 15 —— 而那个区块**顶部的 section 材质平面没提取**
+  （`materializeForChanges` 的 reach 只覆盖改动可及的 y 段 ✗ 未提取段材质=0 ⇒ 被当成空气 ✗）。
+- 修过一版"只 sweep 材质已提取的列"（新 marker `materializedMaterialSections`）⇒ 2304/2304 全部
+  "已提取" ✗ 因为 3×3 halo 的 chunk 全加载 ⇒ **标记的粒度（chunk 级）对天光不够细**。
+
+**设计级结论**：天光的 15 段**从世界顶贯穿到遮挡物**，任何 y 段都可能被它穿过 ⇒ **部分物化的列对天光 sweep
+不安全**——这与方块光不同（方块光的波只到改动 ±15）。所以"镜像即存储"对天光的要求是：
+**列内所有 section 的材质都必须在镜像里**（要么区域建立时全列提取——240 section × ~20-200 µs = 5-48 ms ✗✗；
+要么**当列的任何 section 被触碰时全列提取**——平均 ~24 section/列 = 0.5-5 ms ✗ 仍贵）。
+**或者**：sweep 不从区域顶开始，而是**从每个 section 采纳的现有光值出发**（信任采纳值 = 信任 nibble），
+只把**改动可及的 y 窗口**重算 —— 那正是 `settleSkyWindow` 在做的事 ⇒ **"区域即存储"的天光半边本质上等于
+把 settleSkyWindow 扩到区域粒度**，而不是全区域重算。
+
+**下一轮的方向（据此收敛）**：`ImageSkyLightEngine.computeWindow(data, yLo, yHi, columns)`——与
+`settleSkyWindow` 同构、但在区域平面上、可跨多个 chunk ⇒ 通道的天光半边 = 每次结算对改动触及的 (chunk, 窗口)
+调用它。这保留了"写入即最终形态、无打包"的目标，同时不付全列提取的钱。**本切片的 oracle 代码保留在树上**
+（`SKYORACLE` 行 + `ImageSkyLightEngine.compute`），作为下一版的正确性判据。

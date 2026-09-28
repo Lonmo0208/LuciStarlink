@@ -89,11 +89,18 @@ public final class ImageLane {
     private final StarLightInterface owner;
     private final OwnedRegionImageCache cache = new OwnedRegionImageCache();
     private final ImageBlockLightEngine engine = new ImageBlockLightEngine();
+    /** The region image's own sky half (slice 1, oracle mode only - see docs/HANDOVER.md 10.34/10.35). */
+    private final ca.spottedleaf.starlight.common.light.image.ImageSkyLightEngine skyEngine =
+            new ca.spottedleaf.starlight.common.light.image.ImageSkyLightEngine();
     private final ImageMaterialCache materialCache = new ImageMaterialCache();
     /** Reusable (old, new) material pair for the capture path; the capture is server-thread only. */
     private final int[] materialPair = new int[2];
     private final Long2ObjectOpenHashMap<RuntimeLightChangeBuffer> pending = new Long2ObjectOpenHashMap<>();
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet staleRegions = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
+    /** Slice 1's oracle fires once per run, after a settle that adopted doubles (mirrorSky+mirrorVerify). */
+    private final java.util.concurrent.atomic.AtomicBoolean skyOraclePending =
+            new java.util.concurrent.atomic.AtomicBoolean();
+    private ImageRegionData runSkyOraclePending;
     /** Chunk keys the current settle took over; consulted by covers() after the buffer is drained. */
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet lastHandled = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     private int worldgenDepth;
@@ -408,6 +415,11 @@ public final class ImageLane {
 
             final long lucisPackT0 = System.nanoTime();
             this.packDirty(data, entry.getLongKey());
+
+            if (this.runSkyOraclePending == data) {
+                this.runSkyOraclePending = null;
+                this.runSkyOracle(data);
+            }
             LuxProfiler.lanePackNanos += System.nanoTime() - lucisPackT0;
 
             if (LANE_INVARIANT) {
@@ -550,8 +562,16 @@ public final class ImageLane {
             final int chunkX = minChunkX + (rem % data.sectionWidth);
             final int chunkZ = minChunkZ + (rem / data.sectionWidth);
             final int sectionIndex = linear / data.sectionsPerPlane;
+            final boolean chunkLoaded = this.owner.getAnyChunkNow(chunkX, chunkZ) != null;
             this.materializeSection(data, level, chunkX, chunkZ, sectionY, sectionIndex, pos);
             data.markLightMaterialized(linear);
+            // A separate marker for the MATERIAL half: markLightMaterialized also fires for an unloaded halo section
+            // (its light reads as zero, which is correct), but there the MATERIAL planes were never extracted - they
+            // stay zero because nobody read the world. The sky engine's sweep needs the distinction: mistaking an
+            // unextracted column for air floods the field with 15 (the first oracle run: 806k of 965k cells wrong).
+            if (chunkLoaded) {
+                data.markMaterialMaterialized(linear);
+            }
             this.materializedSections++;
             this.matzThisSettle++;
         }
@@ -609,6 +629,9 @@ public final class ImageLane {
                     // light thread's own progress as mirror mismatches - which is what the earlier cuts of this check
                     // did (one section identical, the rest "mismatched" by exactly the concurrent decrease work).
                     this.snapshotAdoptAndVerify(data, cx, cz, sectionY, sectionIndex, nibble, skyNibble);
+                    if (this.skyOraclePending.compareAndSet(false, true)) {
+                        this.runSkyOraclePending = data;
+                    }
                 } else {
                     data.adoptSectionData(cx, cz, sectionIndex, skyNibble.storageUpdating, true);
                 }
@@ -651,8 +674,16 @@ public final class ImageLane {
         // A snapshot, not a live read: the light thread writes the same chunk's nibbles while the server thread (this
         // code) runs, and comparing against a moving source produces mismatches that say nothing about the mirror.
         // The first cut did exactly that and reported 1 identical of 8; with a snapshot the comparison is meaningful.
-        System.arraycopy(blockNibble.storageUpdating, 0, MIRROR_SNAPSHOT_BLOCK, 0, 2048);
-        System.arraycopy(skyNibble.storageUpdating, 0, MIRROR_SNAPSHOT_SKY, 0, 2048);
+        // A HIDDEN nibble has no storage array at all (it reads as all zero); treat that as a zeroed snapshot rather
+        // than crashing - found when a worldgen-side section reached this path with isInitialisedUpdating() true but
+        // no storage yet.
+        if (blockNibble.storageUpdating == null || skyNibble.storageUpdating == null) {
+            java.util.Arrays.fill(MIRROR_SNAPSHOT_BLOCK, (byte) 0);
+            java.util.Arrays.fill(MIRROR_SNAPSHOT_SKY, (byte) 0);
+        } else {
+            System.arraycopy(blockNibble.storageUpdating, 0, MIRROR_SNAPSHOT_BLOCK, 0, 2048);
+            System.arraycopy(skyNibble.storageUpdating, 0, MIRROR_SNAPSHOT_SKY, 0, 2048);
+        }
         final byte[] blockSnapshot = MIRROR_SNAPSHOT_BLOCK;
         final byte[] skySnapshot = MIRROR_SNAPSHOT_SKY;
         // The adoption runs FROM the snapshot, so the image is a function of exactly these bytes regardless of what the
@@ -717,6 +748,64 @@ public final class ImageLane {
                         + " block[image=" + firstBlockImage + ",nibble=" + firstBlockNibble
                         + "] sky[image=" + firstSkyImage + ",nibble=" + firstSkyNibble + "]"));
     }
+
+    /**
+     * Slice 1's oracle: re-derive the region's whole sky field with {@link ImageSkyLightEngine#compute} and compare it,
+     * cell by cell, against the sky the nibbles carried (the region's own adopted values, taken before the compute
+     * overwrote them). Runs once per settle while {@code mirrorVerify} is on; the region's material planes must be in
+     * place, which this settle's materialization has just done. Prints one line, either identical or the first
+     * difference with its padded coordinates - the exactness this route needs before anything can be wired to it.
+     */
+    private void runSkyOracle(final ImageRegionData data) {
+        final int cells = data.paddedVolume;
+        final byte[] adopted;
+
+        if (SKY_ORACLE_ADOPTED == null || SKY_ORACLE_ADOPTED.length < cells) {
+            SKY_ORACLE_ADOPTED = new byte[cells];
+        }
+        adopted = SKY_ORACLE_ADOPTED;
+        System.arraycopy(data.skyLight, 0, adopted, 0, cells);
+
+        final long start = System.nanoTime();
+        this.skyEngine.compute(data);
+        final long nanos = System.nanoTime() - start;
+
+        int mismatches = 0;
+        int first = -1;
+        int firstAdopted = -1;
+        int firstComputed = -1;
+
+        for (int i = 0; i < cells; i++) {
+            final int a = adopted[i] & 0xF;
+            final int c = data.skyLight[i] & 0xF;
+
+            if (a != c) {
+                if (first < 0) {
+                    first = i;
+                    firstAdopted = a;
+                    firstComputed = c;
+                }
+                mismatches++;
+            }
+        }
+        final int pw = data.paddedWidth;
+        final int area = data.paddedArea;
+
+        int materializedColumns = 0;
+        for (int z = 1; z <= data.paddedDepth - 2; z++) {
+            for (int x = 1; x <= data.paddedWidth - 2; x++) {
+                if (data.isColumnMaterialMaterialized(x - 1, z - 1)) { materializedColumns++; }
+            }
+        }
+        System.out.println("SKYORACLE matCols=" + materializedColumns + " of " + ((data.paddedWidth - 2) * (data.paddedDepth - 2))
+                + " cells=" + cells + " pops=" + this.skyEngine.lastPopCount()
+                + " nanos=" + nanos / 1000 + "us"
+                + (mismatches == 0 ? " identical" : " MISMATCH n=" + mismatches + " first index=" + first
+                        + " (x=" + (first % pw - 1) + " z=" + ((first / pw) % data.paddedDepth - 1)
+                        + " y=" + (first / area - 1) + ") adopted=" + firstAdopted + " computed=" + firstComputed));
+    }
+
+    private static byte[] SKY_ORACLE_ADOPTED;
 
     private static byte[] MIRROR_PACK_SCRATCH;
     private static byte[] MIRROR_PACK_SKY_SCRATCH;

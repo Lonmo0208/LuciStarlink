@@ -196,8 +196,51 @@ public final class ImageRegionData {
         return materializedLightSections.get(sectionLinear);
     }
 
+    /**
+     * Whether this x/z column has ANY materialized section. The sky engine's sweep may only run over columns whose
+     * material planes were actually extracted: an unextracted column's planes are zero because nobody read that part
+     * of the world, and mistaking that for air floods the field with 15 (the first oracle run read exactly that,
+     * mismatch 806k of 965k cells). The linear layout is chunk-linear-major (cx + cz*width, then y), so a column's
+     * sections are strided by sectionsPerPlane.
+     */
+    public boolean isColumnMaterialized(final int localX, final int localZ) {
+        final int chunkLinear = (localX >> 4) + (localZ >> 4) * sectionWidth;
+        final int sectionCount = this.bounds.sectionCount();
+
+        for (int y = 0; y < sectionCount; y++) {
+            if (this.materializedLightSections.get(chunkLinear + y * this.sectionsPerPlane)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public void markLightMaterialized(int sectionLinear) {
         materializedLightSections.set(sectionLinear);
+    }
+
+    public final java.util.BitSet materializedMaterialSections = new java.util.BitSet();
+
+    public void markMaterialMaterialized(int sectionLinear) {
+        materializedMaterialSections.set(sectionLinear);
+    }
+
+    /**
+     * Whether this x/z column has ANY section whose MATERIAL planes were extracted from a loaded chunk - the scope the
+     * sky engine's sweep may run over. Distinct from {@link #isLightMaterialized}: an unloaded halo section's light is
+     * adopted as zero (correct), but its material planes are zero because nobody read the world, and treating that as
+     * air floods the field with 15 (the first oracle run: 806k of 965k cells wrong).
+     */
+    public boolean isColumnMaterialMaterialized(final int localX, final int localZ) {
+        final int chunkLinear = (localX >> 4) + (localZ >> 4) * sectionWidth;
+        final int sectionCount = this.bounds.sectionCount();
+
+        for (int y = 0; y < sectionCount; y++) {
+            if (this.materializedMaterialSections.get(chunkLinear + y * this.sectionsPerPlane)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void markAllLightMaterialized() {
