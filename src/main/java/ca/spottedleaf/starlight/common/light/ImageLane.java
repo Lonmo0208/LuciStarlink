@@ -100,7 +100,6 @@ public final class ImageLane {
     /** Slice 1's oracle fires once per run, after a settle that adopted doubles (mirrorSky+mirrorVerify). */
     private final java.util.concurrent.atomic.AtomicBoolean skyOraclePending =
             new java.util.concurrent.atomic.AtomicBoolean();
-    private ImageRegionData runSkyOraclePending;
     /** Chunk keys the current settle took over; consulted by covers() after the buffer is drained. */
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet lastHandled = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     private int worldgenDepth;
@@ -416,10 +415,6 @@ public final class ImageLane {
             final long lucisPackT0 = System.nanoTime();
             this.packDirty(data, entry.getLongKey());
 
-            if (this.runSkyOraclePending == data) {
-                this.runSkyOraclePending = null;
-                this.runSkyOracle(data);
-            }
             LuxProfiler.lanePackNanos += System.nanoTime() - lucisPackT0;
 
             if (LANE_INVARIANT) {
@@ -629,9 +624,11 @@ public final class ImageLane {
                     // light thread's own progress as mirror mismatches - which is what the earlier cuts of this check
                     // did (one section identical, the rest "mismatched" by exactly the concurrent decrease work).
                     this.snapshotAdoptAndVerify(data, cx, cz, sectionY, sectionIndex, nibble, skyNibble);
-                    if (this.skyOraclePending.compareAndSet(false, true)) {
-                        this.runSkyOraclePending = data;
-                    }
+                    // Arm only: the pending recompute is registered LATER in this same flush (this settle runs before
+                    // the flush body defers the sky half), so the columns cannot be read here. The fire point is
+                    // after the recompute stage, where the interface passes the columns it stored before clearing.
+                    this.skyOraclePending.compareAndSet(false, true);
+                    this.runSkyOraclePending = data;
                 } else {
                     data.adoptSectionData(cx, cz, sectionIndex, skyNibble.storageUpdating, true);
                 }
@@ -750,24 +747,44 @@ public final class ImageLane {
     }
 
     /**
-     * Slice 1's oracle: re-derive the region's whole sky field with {@link ImageSkyLightEngine#compute} and compare it,
-     * cell by cell, against the sky the nibbles carried (the region's own adopted values, taken before the compute
-     * overwrote them). Runs once per settle while {@code mirrorVerify} is on; the region's material planes must be in
-     * place, which this settle's materialization has just done. Prints one line, either identical or the first
-     * difference with its padded coordinates - the exactness this route needs before anything can be wired to it.
+     * Slice 1.5's oracle: re-derive the region's sky over the PENDING WINDOW with {@code computeWindow} and compare it,
+     * cell by cell within the window, against what the nibbles carried. This is the correctness criterion for wiring
+     * the image's sky half into the settle: identical means the image's windowed recompute can replace the nibble-based
+     * one with no light change (and no pack). Prints one line, identical or the first difference with coordinates.
      */
-    private void runSkyOracle(final ImageRegionData data) {
-        final int cells = data.paddedVolume;
-        final byte[] adopted;
+    private void runSkyOracle(final ImageRegionData data, final int[] pending) {
+        final int pw = data.paddedWidth;
+        final int pd = data.paddedDepth;
+        final int area = data.paddedArea;
+        final int minBuildY = data.bounds.minBuildY();
+        final int ph = data.paddedHeight;
+        final int yLoWorld = Math.max(minBuildY, pending[0] - 16);
+        final int yHiWorld = Math.min(minBuildY + ph - 3, pending[1] + 16);
+        final int yLo = Math.max(1, yLoWorld - minBuildY + 1);
+        final int yHi = Math.min(ph - 2, yHiWorld - minBuildY + 1);
+        final int height = yHi - yLo + 1;
+        final int cells = (pw - 2) * (pd - 2) * height;
 
         if (SKY_ORACLE_ADOPTED == null || SKY_ORACLE_ADOPTED.length < cells) {
             SKY_ORACLE_ADOPTED = new byte[cells];
         }
-        adopted = SKY_ORACLE_ADOPTED;
-        System.arraycopy(data.skyLight, 0, adopted, 0, cells);
+        final byte[] adopted = SKY_ORACLE_ADOPTED;
+
+        // snapshot the window's adopted values, column-major, before the compute overwrites the plane
+        for (int z = 1; z <= pd - 2; z++) {
+            for (int x = 1; x <= pw - 2; x++) {
+                final int colBase = z * pw + x;
+                final int outBase = ((z - 1) * (pw - 2) + (x - 1)) * height;
+
+                for (int y = yLo; y <= yHi; y++) {
+                    adopted[outBase + (y - yLo)] = data.skyLight[y * area + colBase];
+                }
+            }
+        }
 
         final long start = System.nanoTime();
-        this.skyEngine.compute(data);
+        this.skyEngine.setPendingColumns(pending);
+        this.skyEngine.computeWindow(data, yLoWorld, yHiWorld);
         final long nanos = System.nanoTime() - start;
 
         int mismatches = 0;
@@ -775,35 +792,50 @@ public final class ImageLane {
         int firstAdopted = -1;
         int firstComputed = -1;
 
-        for (int i = 0; i < cells; i++) {
-            final int a = adopted[i] & 0xF;
-            final int c = data.skyLight[i] & 0xF;
+        for (int z = 1; z <= pd - 2 && mismatches == 0 || true; z++) {
+            if (z > pd - 2) {
+                break;
+            }
+            for (int x = 1; x <= pw - 2; x++) {
+                final int colBase = z * pw + x;
+                final int outBase = ((z - 1) * (pw - 2) + (x - 1)) * height;
 
-            if (a != c) {
-                if (first < 0) {
-                    first = i;
-                    firstAdopted = a;
-                    firstComputed = c;
+                for (int y = yLo; y <= yHi; y++) {
+                    final int a = adopted[outBase + (y - yLo)] & 0xF;
+                    final int c = data.skyLight[y * area + colBase] & 0xF;
+
+                    if (a != c) {
+                        if (first < 0) {
+                            first = 1;
+                            firstAdopted = a;
+                            firstComputed = c;
+                            System.out.println("SKYORACLE MISMATCH first at world x="
+                                    + (data.bounds.minBlockX() + x - 1) + " y=" + (minBuildY + y - 1)
+                                    + " z=" + (data.bounds.minBlockZ() + z - 1)
+                                    + " adopted=" + a + " computed=" + c);
+                        }
+                        mismatches++;
+                    }
                 }
-                mismatches++;
             }
         }
-        final int pw = data.paddedWidth;
-        final int area = data.paddedArea;
-
-        int materializedColumns = 0;
-        for (int z = 1; z <= data.paddedDepth - 2; z++) {
-            for (int x = 1; x <= data.paddedWidth - 2; x++) {
-                if (data.isColumnMaterialMaterialized(x - 1, z - 1)) { materializedColumns++; }
-            }
-        }
-        System.out.println("SKYORACLE matCols=" + materializedColumns + " of " + ((data.paddedWidth - 2) * (data.paddedDepth - 2))
-                + " cells=" + cells + " pops=" + this.skyEngine.lastPopCount()
-                + " nanos=" + nanos / 1000 + "us"
-                + (mismatches == 0 ? " identical" : " MISMATCH n=" + mismatches + " first index=" + first
-                        + " (x=" + (first % pw - 1) + " z=" + ((first / pw) % data.paddedDepth - 1)
-                        + " y=" + (first / area - 1) + ") adopted=" + firstAdopted + " computed=" + firstComputed));
+        System.out.println("SKYORACLE window y=" + yLoWorld + ".." + yHiWorld + " cells=" + cells
+                + " pops=" + this.skyEngine.lastPopCount() + " nanos=" + nanos / 1000 + "us"
+                + (mismatches == 0 ? " identical" : " MISMATCH n=" + mismatches));
     }
+
+    /**
+     * Called by the interface after a flush's recompute stage: runs the slice-1.5 oracle once if a mirror-verify
+     * settle armed it (the region to check and the pending window are stored by the arm), and resets the arm.
+     */
+    public void lucis$runPendingSkyOracle(final int[] pendingColumns) {
+        if (this.runSkyOraclePending != null && pendingColumns != null) {
+            this.runSkyOracle(this.runSkyOraclePending, pendingColumns);
+        }
+        this.runSkyOraclePending = null;
+    }
+
+    private ImageRegionData runSkyOraclePending;
 
     private static byte[] SKY_ORACLE_ADOPTED;
 

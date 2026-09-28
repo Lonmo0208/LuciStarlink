@@ -1176,3 +1176,24 @@ MISMATCH 806k/965k, first (x=32,z=0,y=0) adopted=0 computed=15`。
 `settleSkyWindow` 同构、但在区域平面上、可跨多个 chunk ⇒ 通道的天光半边 = 每次结算对改动触及的 (chunk, 窗口)
 调用它。这保留了"写入即最终形态、无打包"的目标，同时不付全列提取的钱。**本切片的 oracle 代码保留在树上**
 （`SKYORACLE` 行 + `ImageSkyLightEngine.compute`），作为下一版的正确性判据。
+
+### 10.36 切片 1.5 完成：`computeWindow` 与 nibble 路径**逐格一致**（2026-09-29）
+
+**做了什么**：`ImageSkyLightEngine.computeWindow(data, yLo, yHi)`——`settleSkyWindow` 的四步在**区域平面**上的翻译
+（跨 chunk、无 nibble 步、无打包），列数据用 settle 自己的 pending-recompute 记录；oracle 换成窗口版
+（同窗口、与 nibble 采纳值逐格比，挂在 flush 重算之后）。
+
+**调试过程的两轮教训（都写进代码注释）**：
+1. sweep 灌 15 时必须**信任采纳值**（before==15 才能置 15）——halo 列的 15-run 由窗口外的遮挡决定，窗口顶判不出来
+   （941 → 138）。
+2. 138 的残余全部在 **halo 列**（adopted=0 而 computed=14，材质 0 = 那列的遮挡在 reach 之外）⇒ **sweep/BFS/播种限定
+   core 列（x,z ≤ 16）**，halo 列保持采纳值、当边界源——与单区块版"窗口不跨边"的语义完全对齐 ⇒ **identical** ✓。
+   （reach 32 的实验证明材质不是问题，撤销。）
+
+**结果**：`SKYORACLE identical`（82944 格、pops 9472、4.6 ms 首跑含 JIT；稳定后应远低）+ 门 22 探针 ✓
++ reach 回 16、probe 打印已清。
+
+**切片 1.5 的意义**：镜像的天光半边现在有了一个**被证明与 nibble 路径等价**的窗口重算。下一轮（切片 2）把它接进
+`applyChanges` 的天光半边（现在 `settleSkyWindow` 跑在 nibble 上——同样的窗口，同样的语义，换数据源即可），
+然后切片 3 打包天光（`dirtySkySections` 已维护 ✓）。**每一步的判据都是现成的**：SKYORACLE identical +
+LANEINVARIANT + 门 22 探针 + 四格指纹 + 同窗口 A/B。
