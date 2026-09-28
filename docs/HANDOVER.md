@@ -1362,3 +1362,19 @@ read_11（relight 后）== 基线 ✓             ← 世界原本是对的，�
 
 **结论**：**残留问题没有解决，只是换了一个更小的形状**。任何"残留已修"的说法在此之前都不成立；
 `gate-cycle.sh` 与 `gate-residue.sh` 都要留作回归门，任何天光改动都必须两个门 + 四格指纹同时过。
+
+**10.41 的机制（同一轮调试打印锁定）**：把 sweep 打印改到出事的那一列（x=3, chunk-local z=9），R3 的**放**与**拆**两次窗口读数完全不同：
+
+```
+放（material 在 y=-35..-37 是 15=萤石）: gateY=-18 gate=15 nibbleInit=true  updStorageNull=false yLo=-53 yHi=-19 topRow=15 light(-36)=0
+拆（material 全 0）                    : gateY=-18 gate=0  nibbleInit=false updStorageNull=true  yLo=-53 yHi=-19 topRow=0  light(-36)=0
+```
+
+⇒ **两次窗口之间，窗口上方那个 section（y=-32..-17，section -2）被"藏"掉了**：updating 存储变 null、所有读变 0。
+于是拆除这次：上格 gate=0、窗口顶行 topRow=0，**sweep 的两个入口条件同时为假**，整列跳过，列下段的 0/13 永远留在那里。
+放上去那次之所以正确，是因为靠的是 step 1 的"按列清 15-run"（只降不升），跟 sweep 无关——这也解释了为什么"变亮"这一半一直是坏的。
+
+**下一轮的第一件事**：查清谁把 section -2 置成 HIDDEN（候选：基座引擎的 empty-section / 高度图之上的隐式 15 语义；
+`nibbleInit` 在两次窗口之间翻转是硬证据），以及引擎读 HIDDEN 段时**是否应当回退到高度图判 15**——
+`getLightLevel` 现在对 HIDDEN 段一律返回 0，如果这个段在语义上是"15"，那这就不只是 sweep 的问题，
+而是**所有**依赖"窗口上方有光"的天光路径都会在它下面留下残留。修之前先确认语义，别猜。

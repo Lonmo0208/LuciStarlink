@@ -963,7 +963,7 @@ public final class SkyStarLightEngine extends StarLightEngine {
                 final int gateY = yHi + 1 > worldMaxY ? worldMaxY : yHi + 1;
                 final int gateLevel = this.getLightLevel(worldX0 + x, gateY, worldZ0 + z);
 
-                if (SWEEP_DEBUG && chunkX == 0 && chunkZ == -1 && x == 4 && z == 4) {
+                if (SWEEP_DEBUG && chunkX == 0 && chunkZ == -1 && ((x == 4 && z == 4) || (x == 3 && z == 9))) {
                     // the residue probe (docs/HANDOVER.md 10.40): after an opaque bulk edit is REMOVED the column must
                     // be swept back to 15, and it is not. Print what this column's sweep is handed, before the gate.
                     final SWMRNibbleArray probeNibble = this.getNibbleFromCache(chunkX, gateY >> 4, chunkZ);
@@ -978,6 +978,7 @@ public final class SkyStarLightEngine extends StarLightEngine {
                             + " nibbleInit=" + (probeNibble != null && probeNibble.isInitialisedUpdating())
                             + " updStorageNull=" + (probeNibble == null || probeNibble.storageUpdating == null)
                             + " yLo=" + yLo + " yHi=" + yHi
+                            + " topRow=" + (light[probeCol * height + height - 1] & 0xFF)
                             + " light(-36)=" + (light[probeCol * height + (-36 - yLo)] & 0xFF)
                             + " material(-17..-41)=" + mat);
                 }
