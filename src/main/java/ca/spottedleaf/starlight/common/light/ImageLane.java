@@ -70,6 +70,24 @@ public final class ImageLane {
      * ~110 us a section.</p>
      */
     public static final boolean LANE_INVARIANT = Boolean.getBoolean("scalablelux.laneInvariant");
+    /**
+     * Slice 2's probe: run each deferred sky window through the region image's own sky planes and compare the result
+     * with the nibbles the production path just wrote, cell by cell, in the same pass.
+     *
+     * <p>The image can only take the sky write side over (slice 3: pack + ownership) if its windowed recompute
+     * reproduces the nibble routine exactly on real workloads - this flag is the measurement that decides it, and it
+     * changes nothing about the light: the nibble path still runs and still installs. Off by default.</p>
+     */
+    public static final boolean SKY_WINDOW_PROBE = Boolean.getBoolean("scalablelux.skyWindowProbe");
+    /**
+     * Slice 2's ship path: source the deferred sky window's material and light from the region image.
+     *
+     * <p>{@code SkyStarLightEngine.settleSkyWindow} keeps its algorithm and only asks where its two arrays come from;
+     * this makes the lane answer, which removes the per-cell palette walk (material) and the per-cell nibble read
+     * (light) for every chunk the image already covers, and leaves the plane holding the values the routine started
+     * from. Off by default: with it off the engine fills from the world exactly as before.</p>
+     */
+    public static final boolean SKY_WINDOW_SOURCE = Boolean.getBoolean("scalablelux.imageLaneSky");
 
     // Region tile size: 4x4 core chunks plus a 1-chunk halo. The tile decides how many region settles a scattered
     // burst pays: border walks ~19 chunks, which at 1-chunk tiles meant 19 inits + 19 packs + 19 publishes a pass
@@ -97,9 +115,6 @@ public final class ImageLane {
     private final int[] materialPair = new int[2];
     private final Long2ObjectOpenHashMap<RuntimeLightChangeBuffer> pending = new Long2ObjectOpenHashMap<>();
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet staleRegions = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
-    /** Slice 1's oracle fires once per run, after a settle that adopted doubles (mirrorSky+mirrorVerify). */
-    private final java.util.concurrent.atomic.AtomicBoolean skyOraclePending =
-            new java.util.concurrent.atomic.AtomicBoolean();
     /** Chunk keys the current settle took over; consulted by covers() after the buffer is drained. */
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet lastHandled = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     private int worldgenDepth;
@@ -137,7 +152,8 @@ public final class ImageLane {
         return "attempts=" + this.captureAttempts + " accepted=" + this.captureAccepted + " settles=" + this.settleCount + " captured=" + this.capturedChanges
                 + " packed=" + this.packedSections + " regions=" + this.initializedRegions
                 + " pending=" + this.pending.size() + " cached=" + this.cache.size()
-                + " matzSecs=" + this.materializedSections;
+                + " matzSecs=" + this.materializedSections
+                + " skySource=" + this.sourceFills + "/" + this.sourceNanos / 1000 + "us fill=" + this.sourceFillNanos / 1000 + "us";
     }
 
     // capture (server thread, from ServerLevel.onBlockStateChange)
@@ -624,11 +640,6 @@ public final class ImageLane {
                     // light thread's own progress as mirror mismatches - which is what the earlier cuts of this check
                     // did (one section identical, the rest "mismatched" by exactly the concurrent decrease work).
                     this.snapshotAdoptAndVerify(data, cx, cz, sectionY, sectionIndex, nibble, skyNibble);
-                    // Arm only: the pending recompute is registered LATER in this same flush (this settle runs before
-                    // the flush body defers the sky half), so the columns cannot be read here. The fire point is
-                    // after the recompute stage, where the interface passes the columns it stored before clearing.
-                    this.skyOraclePending.compareAndSet(false, true);
-                    this.runSkyOraclePending = data;
                 } else {
                     data.adoptSectionData(cx, cz, sectionIndex, skyNibble.storageUpdating, true);
                 }
@@ -746,98 +757,394 @@ public final class ImageLane {
                         + "] sky[image=" + firstSkyImage + ",nibble=" + firstSkyNibble + "]"));
     }
 
+    // ------------------------------------------------------------------------------------------------------------
+    // slice 2: the settle's sky window computed on the region planes, compared cell by cell with the nibbles
+    // ------------------------------------------------------------------------------------------------------------
+
     /**
-     * Slice 1.5's oracle: re-derive the region's sky over the PENDING WINDOW with {@code computeWindow} and compare it,
-     * cell by cell within the window, against what the nibbles carried. This is the correctness criterion for wiring
-     * the image's sky half into the settle: identical means the image's windowed recompute can replace the nibble-based
-     * one with no light change (and no pack). Prints one line, identical or the first difference with coordinates.
+     * Slice 2's subject under test. The deferred sky recompute is the one place where the image's sky half could take
+     * over from the nibble scratch ({@code SkyStarLightEngine.settleSkyWindow}), so this runs the same window through
+     * {@link ImageSkyLightEngine#computeWindow} on the region's own planes. It is a PROBE: the caller runs the nibble
+     * path right after and then {@link #lucis$skyWindowCompare}, which compares the two results cell by cell over the
+     * chunk the recompute belongs to, in the same pass and from the same starting values.
+     *
+     * <p>Two things the first cut of this comparison got wrong, both of which let it report "identical" while proving
+     * nothing: the per-column clearing used the wrong columns (see {@code ImageSkyLightEngine.columnMaxYFor}), so the
+     * routine could not lower a single cell - and the comparison was against the plane's own pre-compute copy, i.e.
+     * against itself. This version re-reads the window band from the world's nibbles first, and compares against the
+     * nibbles AFTER the nibble path has run. {@code changed} reports how many cells the plane's recompute moved, so a
+     * vacuous pass is visible as {@code changed=0}.</p>
      */
-    private void runSkyOracle(final ImageRegionData data, final int[] pending) {
-        final int pw = data.paddedWidth;
-        final int pd = data.paddedDepth;
-        final int area = data.paddedArea;
-        final int minBuildY = data.bounds.minBuildY();
-        final int ph = data.paddedHeight;
-        final int yLoWorld = Math.max(minBuildY, pending[0] - 16);
-        final int yHiWorld = Math.min(minBuildY + ph - 3, pending[1] + 16);
-        final int yLo = Math.max(1, yLoWorld - minBuildY + 1);
-        final int yHi = Math.min(ph - 2, yHiWorld - minBuildY + 1);
-        final int height = yHi - yLo + 1;
-        final int cells = (pw - 2) * (pd - 2) * height;
-
-        if (SKY_ORACLE_ADOPTED == null || SKY_ORACLE_ADOPTED.length < cells) {
-            SKY_ORACLE_ADOPTED = new byte[cells];
+    public boolean lucis$skyWindowProbe(final int chunkX, final int chunkZ, final int[] range) {
+        if (!SKY_WINDOW_PROBE || range == null || this.skyEngine == null) {
+            return false;
         }
-        final byte[] adopted = SKY_ORACLE_ADOPTED;
+        if (!(this.owner.world instanceof ServerLevel level)
+                || !level.getChunkSource().chunkMap.mainThreadExecutor.isSameThread()) {
+            return false;
+        }
+        if (REGION_CHUNKS != 1) {
+            return false; // the band adoption below is shaped for the one-chunk tile
+        }
+        final ImageRegionBounds bounds =
+                ImageRegionBounds.around(new ChunkPos(chunkX, chunkZ), level, REGION_CHUNKS, HALO_CHUNKS);
+        final RuntimeRegionImageState state = this.cache.getInitialized(bounds.coreRegionKey());
 
-        // snapshot the window's adopted values, column-major, before the compute overwrites the plane
-        for (int z = 1; z <= pd - 2; z++) {
-            for (int x = 1; x <= pw - 2; x++) {
-                final int colBase = z * pw + x;
-                final int outBase = ((z - 1) * (pw - 2) + (x - 1)) * height;
+        if (state == null) {
+            return false; // no image covers this chunk: the nibble path owns it and there is nothing to compare
+        }
+        final ImageRegionData data = state.data();
+        final int minBuildY = data.bounds.minBuildY();
+        final int yLoWorld = Math.max(minBuildY, range[0] - 16);
+        final int yHiWorld = Math.min(minBuildY + data.paddedHeight - 3, range[1] + 16);
 
-                for (int y = yLo; y <= yHi; y++) {
-                    adopted[outBase + (y - yLo)] = data.skyLight[y * area + colBase];
+        if (yLoWorld > yHiWorld) {
+            return false;
+        }
+        final long start = System.nanoTime();
+
+        this.adoptSkyWindowBand(data, level, chunkX, chunkZ, yLoWorld, yHiWorld);
+        this.skyEngine.setPendingColumns(range, (chunkX << 4) - data.bounds.minBlockX(),
+                (chunkZ << 4) - data.bounds.minBlockZ());
+        this.skyEngine.computeWindow(data, yLoWorld, yHiWorld);
+        this.probeData = data;
+        this.probeChunkX = chunkX;
+        this.probeChunkZ = chunkZ;
+        this.probeLastNanos = System.nanoTime() - start;
+        this.probeNanos += this.probeLastNanos;
+        this.probeRuns++;
+        return true;
+    }
+
+    /**
+     * Re-reads the sky half of the window band from the world's nibbles, so the probe starts from the values the
+     * nibble path starts from - a section materialized in an earlier settle carries whatever was true then, and the
+     * world is the only authority. Sections whose MATERIAL planes were never extracted are skipped: their planes are
+     * zero because nobody read that part of the world, and adopting sky into them would make the two halves disagree
+     * rather than make the probe fair.
+     */
+    private void adoptSkyWindowBand(final ImageRegionData data, final ServerLevel level, final int chunkX,
+                                    final int chunkZ, final int yLoWorld, final int yHiWorld) {
+        final int minSectionY = yLoWorld >> 4;
+        final int maxSectionY = yHiWorld >> 4;
+        final int minLightSection = WorldUtil.getMinLightSection(level);
+        final int minSectionIndex = data.bounds.minSectionY();
+
+        for (int dz = -HALO_CHUNKS; dz <= HALO_CHUNKS; dz++) {
+            for (int dx = -HALO_CHUNKS; dx <= HALO_CHUNKS; dx++) {
+                final int cx = chunkX + dx;
+                final int cz = chunkZ + dz;
+                final ChunkAccess chunk = this.owner.getAnyChunkNow(cx, cz);
+
+                if (chunk == null) {
+                    continue; // an unloaded halo chunk reads as dark, as it does on the nibble path's cache miss
+                }
+                final SWMRNibbleArray[] skyNibbles = ((ExtendedChunk) chunk).scalablelux$getSkyNibbles();
+
+                for (int sectionY = minSectionY; sectionY <= maxSectionY; sectionY++) {
+                    if (!data.materializedMaterialSections.get(
+                            data.sectionLinearIndex(cx << 4, sectionY, cz << 4))) {
+                        continue;
+                    }
+                    final int nibbleIndex = sectionY - minLightSection;
+
+                    if (nibbleIndex < 0 || nibbleIndex >= skyNibbles.length) {
+                        continue;
+                    }
+                    final SWMRNibbleArray nibble = skyNibbles[nibbleIndex];
+
+                    if (nibble == null || !nibble.isInitialisedUpdating()) {
+                        continue;
+                    }
+                    data.adoptSectionData(cx - (data.bounds.minBlockX() >> 4), cz - (data.bounds.minBlockZ() >> 4),
+                            sectionY - minSectionIndex, nibble.storageUpdating, true);
                 }
             }
         }
+    }
 
-        final long start = System.nanoTime();
-        this.skyEngine.setPendingColumns(pending);
-        this.skyEngine.computeWindow(data, yLoWorld, yHiWorld);
-        final long nanos = System.nanoTime() - start;
+    /**
+     * Compares the probe's window against the world's nibbles, cell by cell, over the chunk the recompute belongs to.
+     * {@code changed} is how many cells the plane's recompute moved off the values it was handed - the count that shows
+     * the comparison is not vacuous - and {@code mismatch} how many cells disagree with the nibbles.
+     */
+    public void lucis$skyWindowCompare(final int chunkX, final int chunkZ) {
+        final ImageRegionData data = this.probeData;
 
+        this.probeData = null;
+
+        if (data == null || chunkX != this.probeChunkX || chunkZ != this.probeChunkZ) {
+            return;
+        }
+        final ChunkAccess chunk = this.owner.getAnyChunkNow(chunkX, chunkZ);
+
+        if (chunk == null) {
+            return;
+        }
+        final SWMRNibbleArray[] skyNibbles = ((ExtendedChunk) chunk).scalablelux$getSkyNibbles();
+        final int minLightSection = WorldUtil.getMinLightSection(this.owner.world);
+        final int pw = data.paddedWidth;
+        final int area = data.paddedArea;
+        final int minBuildY = data.bounds.minBuildY();
+        final int yLoWorld = this.skyEngine.lastWindowYLoWorld();
+        final int height = this.skyEngine.lastWindowHeight();
+        final int yLo = Math.max(1, yLoWorld - minBuildY + 1);
+        final int localX0 = (chunkX << 4) - data.bounds.minBlockX();
+        final int localZ0 = (chunkZ << 4) - data.bounds.minBlockZ();
+        final int[] before = this.skyEngine.beforeScratch;
+        int cells = 0;
+        int changed = 0;
         int mismatches = 0;
-        int first = -1;
-        int firstAdopted = -1;
-        int firstComputed = -1;
+        int firstX = 0;
+        int firstY = 0;
+        int firstZ = 0;
+        int firstComputed = 0;
+        int firstNibble = 0;
 
-        for (int z = 1; z <= pd - 2 && mismatches == 0 || true; z++) {
-            if (z > pd - 2) {
-                break;
-            }
-            for (int x = 1; x <= pw - 2; x++) {
-                final int colBase = z * pw + x;
-                final int outBase = ((z - 1) * (pw - 2) + (x - 1)) * height;
+        for (int lz = 0; lz < 16; lz++) {
+            for (int lx = 0; lx < 16; lx++) {
+                final int planeColumn = (localZ0 + lz + 1) * pw + localX0 + lx + 1;
+                final int beforeColumn = (localZ0 + lz) * (pw - 2) + localX0 + lx;
+                final int worldX = (chunkX << 4) + lx;
+                final int worldZ = (chunkZ << 4) + lz;
 
-                for (int y = yLo; y <= yHi; y++) {
-                    final int a = adopted[outBase + (y - yLo)] & 0xF;
-                    final int c = data.skyLight[y * area + colBase] & 0xF;
+                for (int i = 0; i < height; i++) {
+                    final int y = yLo + i;
+                    final int computed = data.skyLight[y * area + planeColumn] & 0xF;
+                    final int was = before[beforeColumn * height + i] & 0xF;
+                    final int worldY = minBuildY + y - 1;
+                    final int sectionY = worldY >> 4;
+                    final int nibbleIndex = sectionY - minLightSection;
+                    final SWMRNibbleArray nibble = nibbleIndex >= 0 && nibbleIndex < skyNibbles.length
+                            ? skyNibbles[nibbleIndex] : null;
+                    final int nibbleValue;
 
-                    if (a != c) {
-                        if (first < 0) {
-                            first = 1;
-                            firstAdopted = a;
-                            firstComputed = c;
-                            System.out.println("SKYORACLE MISMATCH first at world x="
-                                    + (data.bounds.minBlockX() + x - 1) + " y=" + (minBuildY + y - 1)
-                                    + " z=" + (data.bounds.minBlockZ() + z - 1)
-                                    + " adopted=" + a + " computed=" + c);
+                    if (nibble == null || !nibble.isInitialisedUpdating()) {
+                        nibbleValue = 0;
+                    } else {
+                        final byte[] packed = nibble.storageUpdating;
+                        final int local = ((worldY & 15) << 8) | ((worldZ & 15) << 4) | (worldX & 15);
+                        final int b = packed[local >> 1] & 0xFF;
+
+                        nibbleValue = (local & 1) == 0 ? (b & 0xF) : (b >>> 4);
+                    }
+                    cells++;
+                    if (computed != was) {
+                        changed++;
+                    }
+                    if (computed != nibbleValue) {
+                        if (mismatches == 0) {
+                            firstX = worldX;
+                            firstY = worldY;
+                            firstZ = worldZ;
+                            firstComputed = computed;
+                            firstNibble = nibbleValue;
                         }
                         mismatches++;
                     }
                 }
             }
         }
-        System.out.println("SKYORACLE window y=" + yLoWorld + ".." + yHiWorld + " cells=" + cells
-                + " pops=" + this.skyEngine.lastPopCount() + " nanos=" + nanos / 1000 + "us"
-                + (mismatches == 0 ? " identical" : " MISMATCH n=" + mismatches));
+        this.probeCells += cells;
+        this.probeChanged += changed;
+        this.probeMismatches += mismatches;
+        System.out.println("SKYWINDOW chunk=" + chunkX + "," + chunkZ + " window y=" + yLoWorld + ".."
+                + (yLoWorld + height - 1) + " cells=" + cells + " changed=" + changed + " mismatch=" + mismatches
+                + " pops=" + this.skyEngine.lastPopCount() + " probeUs=" + this.probeLastNanos / 1000
+                + " totalMismatch=" + this.probeMismatches);
+        if (mismatches > 0) {
+            System.out.println("SKYWINDOW-MISMATCH first at x=" + firstX + " y=" + firstY + " z=" + firstZ
+                    + " plane=" + firstComputed + " nibble=" + firstNibble);
+        }
     }
+
+    // ------------------------------------------------------------------------------------------------------------
+    // slice 2: the window routine's two arrays, sourced from the region image instead of the palette and the nibbles
+    // ------------------------------------------------------------------------------------------------------------
 
     /**
-     * Called by the interface after a flush's recompute stage: runs the slice-1.5 oracle once if a mirror-verify
-     * settle armed it (the region to check and the pending window are stored by the arm), and resets the arm.
+     * The image's side of {@link SkyStarLightEngine.WindowSource}: the same window, filled from the region's own
+     * material and light planes. The engine keeps every decision - sweep, seeding, five-direction BFS, install,
+     * boundary push - so the only thing that can differ is the data, and a difference is a real finding rather than a
+     * different routine (which is exactly what the region-granular form turned out to be: it diverged at 288 of 9216
+     * cells on the gate's patch, docs/HANDOVER.md 10.37).
+     *
+     * <p>What it buys: the per-cell palette walk ({@code opacityOf}, the cost the border profile put at ~50 ns of
+     * every 48 ns examination average) becomes an array read, and the light comes from the same copy that also leaves
+     * the plane holding the world's own values. What it costs: one 16-cell copy per column per band section, ~9216
+     * bytes a settle. Sections whose material was never extracted are REFUSED, never approximated - the plane would
+     * read as air and flood the column below it with 15.</p>
      */
-    public void lucis$runPendingSkyOracle(final int[] pendingColumns) {
-        if (this.runSkyOraclePending != null && pendingColumns != null) {
-            this.runSkyOracle(this.runSkyOraclePending, pendingColumns);
+    private final SkyStarLightEngine.WindowSource skyWindowSource = new SkyStarLightEngine.WindowSource() {
+        @Override
+        public boolean fillSkyWindow(final int chunkX, final int chunkZ, final int yLo, final int yHi,
+                                     final int height, final byte[] material, final byte[] light) {
+            if (!SKY_WINDOW_SOURCE || REGION_CHUNKS != 1
+                    || !(ImageLane.this.owner.world instanceof ServerLevel level)
+                    || !level.getChunkSource().chunkMap.mainThreadExecutor.isSameThread()) {
+                return false;
+            }
+            final RuntimeRegionImageState state = ImageLane.this.cache.getInitialized(
+                    ImageRegionBounds.regionKey(chunkX, chunkZ));
+
+            if (state == null) {
+                return false; // no image for this chunk: the world-sourced fill runs exactly as it always did
+            }
+            final ImageRegionData data = state.data();
+            final ChunkAccess chunk = ImageLane.this.owner.getAnyChunkNow(chunkX, chunkZ);
+
+            if (chunk == null) {
+                return false;
+            }
+            final int minSectionY = yLo >> 4;
+            final int maxSectionY = yHi >> 4;
+
+            for (int sectionY = minSectionY; sectionY <= maxSectionY; sectionY++) {
+                if (!data.materializedMaterialSections.get(
+                        data.sectionLinearIndex(chunkX << 4, sectionY, chunkZ << 4))) {
+                    return false; // material never read for this band: refuse, do not read air
+                }
+            }
+            final long start = System.nanoTime();
+            final SWMRNibbleArray[] skyNibbles = ((ExtendedChunk) chunk).scalablelux$getSkyNibbles();
+            final int minLightSection = WorldUtil.getMinLightSection(level);
+            final byte[] opacityPlane = data.opacity;
+            final byte[] skyPlane = data.skyLight;
+            final int pw = data.paddedWidth;
+            final int area = data.paddedArea;
+            final int minBuildY = data.bounds.minBuildY();
+            final int localX0 = (chunkX << 4) - data.bounds.minBlockX();
+            final int localZ0 = (chunkZ << 4) - data.bounds.minBlockZ();
+            final long lucisFillT0 = System.nanoTime();
+
+            for (int sectionY = minSectionY; sectionY <= maxSectionY; sectionY++) {
+                final int sectionY0 = sectionY << 4;
+                final int lyFrom = Math.max(0, yLo - sectionY0);
+                final int lyTo = Math.min(15, yHi - sectionY0);
+                final int nibbleIndex = sectionY - minLightSection;
+                final SWMRNibbleArray nibble = nibbleIndex >= 0 && nibbleIndex < skyNibbles.length
+                        ? skyNibbles[nibbleIndex] : null;
+                // no storage means the world's light here is zero - the same reading the world-sourced fill gets from
+                // a null packed array
+                final byte[] packed = nibble != null && nibble.isInitialisedUpdating() ? nibble.storageUpdating : null;
+
+                // y outer, x inner: the plane is y-major, so this walks it in its own order (16 contiguous bytes a
+                // row) and the scratch, which is column-major, is small enough to stay hot while it is written
+                // strided. The first cut had the loops the other way round and paid a 2500-byte stride a cell.
+                for (int ly = lyFrom; ly <= lyTo; ly++) {
+                    final int planeRow = (sectionY0 - minBuildY + 1 + ly) * area + (localZ0 + 1) * pw + localX0 + 1;
+                    final int packedRow = (ly << 8) >> 1;
+                    final int outY = sectionY0 + ly - yLo;
+
+                    for (int col = 0; col < 256; col++) {
+                        final int x = col & 15;
+                        final int z = col >> 4;
+                        final int planeIndex = planeRow + z * pw + x;
+                        final int skyValue;
+
+                        if (packed == null) {
+                            skyValue = 0;
+                        } else {
+                            final int packedIndex = packedRow + ((z << 4) | x) / 2;
+                            final int b = packed[packedIndex] & 0xFF;
+
+                            skyValue = (((z << 4) | x) & 1) == 0 ? (b & 0xF) : (b >>> 4);
+                        }
+                        material[col * height + outY] = opacityPlane[planeIndex];
+                        light[col * height + outY] = (byte) skyValue;
+                        // one pass, two jobs: the window's starting light AND the plane's own copy of the world's
+                        // values (the section band the routine will read again is the band it just adopted)
+                        skyPlane[planeIndex] = (byte) skyValue;
+                    }
+                }
+            }
+            ImageLane.this.sourceFillNanos += System.nanoTime() - lucisFillT0;
+            ImageLane.this.sourceData = data;
+            ImageLane.this.sourceChunkX = chunkX;
+            ImageLane.this.sourceChunkZ = chunkZ;
+            ImageLane.this.sourceYLo = yLo;
+            ImageLane.this.sourceHeight = height;
+            ImageLane.this.sourceLocalX0 = localX0;
+            ImageLane.this.sourceLocalZ0 = localZ0;
+            ImageLane.this.sourceLastNanos = System.nanoTime() - start;
+            ImageLane.this.sourceNanos += ImageLane.this.sourceLastNanos;
+            ImageLane.this.sourceFills++;
+            return true;
         }
-        this.runSkyOraclePending = null;
+
+        @Override
+        public void skyWindowInstalled(final int chunkX, final int chunkZ, final int yLo, final int yHi,
+                                       final int height, final byte[] light) {
+            final ImageRegionData data = ImageLane.this.sourceData;
+
+            ImageLane.this.sourceData = null;
+
+            if (data == null || chunkX != ImageLane.this.sourceChunkX || chunkZ != ImageLane.this.sourceChunkZ
+                    || yLo != ImageLane.this.sourceYLo || height != ImageLane.this.sourceHeight) {
+                return;
+            }
+            final byte[] skyPlane = data.skyLight;
+            final int pw = data.paddedWidth;
+            final int area = data.paddedArea;
+            final int minSectionY = yLo >> 4;
+            final int maxSectionY = yHi >> 4;
+            final int localX0 = ImageLane.this.sourceLocalX0;
+            final int localZ0 = ImageLane.this.sourceLocalZ0;
+
+            for (int sectionY = minSectionY; sectionY <= maxSectionY; sectionY++) {
+                final int sectionY0 = sectionY << 4;
+                final int lyFrom = Math.max(0, yLo - sectionY0);
+                final int lyTo = Math.min(15, yHi - sectionY0);
+
+                for (int ly = lyFrom; ly <= lyTo; ly++) {
+                    final int planeRow = (sectionY0 - data.bounds.minBuildY() + 1 + ly) * area
+                            + (localZ0 + 1) * pw + localX0 + 1;
+                    final int outY = sectionY0 + ly - yLo;
+
+                    for (int col = 0; col < 256; col++) {
+                        final int planeIndex = planeRow + (col >> 4) * pw + (col & 15);
+
+                        skyPlane[planeIndex] = light[col * height + outY];
+                    }
+                }
+                // slice 3's pack input: the sections whose sky the image now holds in final form
+                data.dirtySkySections.set(data.sectionLinearIndex(chunkX << 4, sectionY, chunkZ << 4));
+            }
+        }
+    };
+
+    /** The engine's window source, or null when the image must not source the window (the default). */
+    public SkyStarLightEngine.WindowSource lucis$skyWindowSource() {
+        return SKY_WINDOW_SOURCE ? this.skyWindowSource : null;
     }
 
-    private ImageRegionData runSkyOraclePending;
+    private ImageRegionData sourceData;
+    private int sourceChunkX;
+    private int sourceChunkZ;
+    private int sourceYLo;
+    private int sourceHeight;
+    private int sourceLocalX0;
+    private int sourceLocalZ0;
+    private long sourceFills;
+    private long sourceNanos;
+    private long sourceLastNanos;
+    private long sourceFillNanos;
 
-    private static byte[] SKY_ORACLE_ADOPTED;
+    public String skyWindowStats() {
+        return "probeRuns=" + this.probeRuns + " cells=" + this.probeCells + " changed=" + this.probeChanged
+                + " mismatch=" + this.probeMismatches + " nanos=" + this.probeNanos / 1000 + "us"
+                + " sourceFills=" + this.sourceFills + " sourceNanos=" + this.sourceNanos / 1000 + "us";
+    }
+
+    private ImageRegionData probeData;
+    private int probeChunkX;
+    private int probeChunkZ;
+    private long probeRuns;
+    private long probeCells;
+    private long probeChanged;
+    private long probeMismatches;
+    private long probeNanos;
+    private long probeLastNanos;
 
     private static byte[] MIRROR_PACK_SCRATCH;
     private static byte[] MIRROR_PACK_SKY_SCRATCH;

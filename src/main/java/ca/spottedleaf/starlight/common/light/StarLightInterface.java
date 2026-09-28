@@ -946,7 +946,6 @@ public final class StarLightInterface {
             if (!grouped.isEmpty()) {
                 this.lucis$settleGroups(skyEngine, blockEngine, grouped);
             }
-            int[] lucisOracleColumns = null;
             if (settle && !this.lucis$pendingRecomputes.isEmpty()) {
                 // R5: the deferred sky settles, one per chunk per burst, over the y window the burst touched (see the sky
                 // engine for what it does and why it can only be right there). The settle points are
@@ -968,17 +967,27 @@ public final class StarLightInterface {
                         continue; // no y range recorded for this chunk
                     }
                     final long lucisRecT0 = System.nanoTime();
+                    // Slice 2's probe: the same window through the region image's sky planes, from the same starting
+                    // values (the band is re-read from the nibbles inside). It installs nothing - the nibble path
+                    // below still writes the light - and is compared against the nibbles right after it does. When the
+                    // two agree on real workloads, the image can take the write side over (slice 3).
+                    final boolean lucisSkyProbe = this.lucis$imageLane != null
+                            && this.lucis$imageLane.lucis$skyWindowProbe(chunkX, chunkZ, range);
 
                     skyEngine.setupCaches(this.lightAccess, chunkX * 16 + 7, 128, chunkZ * 16 + 7, true, true);
                     try {
                         // the settle pushes both directions, so both propagations have to run (decrease first, as the
                         // engine does everywhere else) before the section is published
-                        skyEngine.settleSkyWindow(this.lightAccess, chunk, range[0], range[1], range);
+                        skyEngine.settleSkyWindow(this.lightAccess, chunk, range[0], range[1], range,
+                                this.lucis$imageLane == null ? null : this.lucis$imageLane.lucis$skyWindowSource());
                         skyEngine.performLightDecrease(this.lightAccess);
                         skyEngine.performLightIncrease(this.lightAccess);
                         skyEngine.updateVisible(this.lightAccess);
                     } finally {
                         skyEngine.destroyCaches();
+                    }
+                    if (lucisSkyProbe) {
+                        this.lucis$imageLane.lucis$skyWindowCompare(chunkX, chunkZ);
                     }
                     if (LuxProfiler.enabled()) {
                         LuxProfiler.ownEditRecomputes++;
@@ -987,15 +996,8 @@ public final class StarLightInterface {
                         LuxProfiler.lucisRecompute(System.nanoTime() - lucisRecT0);
                     }
                 }
-                // capture the pending columns BEFORE the clear, for the image lane's windowed oracle (mirrorVerify)
-                lucisOracleColumns = this.lucis$firstPendingRecompute();
                 this.lucis$pendingRecomputes.clear();
                 lucis$clearDeferredSkyKeys();
-            }
-            // Slice 1.5's oracle: after this flush's recompute machinery has run, re-derive the same window on the
-            // image's own planes and compare (mirrorVerify only). The lane stores which region it wants checked.
-            if (this.lucis$imageLane != null) {
-                this.lucis$imageLane.lucis$runPendingSkyOracle(lucisOracleColumns);
             }
         } finally {
             this.releaseSkyLightEngine(skyEngine);

@@ -158,6 +158,9 @@ public final class ImageSkyLightEngine {
         }
         final int height = yHi - yLo + 1;
         final int cells = (pw - 2) * (pd - 2) * height;
+
+        this.heightScratch = height;
+        this.yLoWorldScratch = yLoWorld;
         final byte[] material = data.opacity;
         final byte[] light = data.skyLight;
 
@@ -306,23 +309,48 @@ public final class ImageSkyLightEngine {
         }
     }
 
-    private int[] beforeScratch;
+    public int[] beforeScratch;
+    private int heightScratch = -1;
+    private int yLoWorldScratch;
 
-    /** The per-column highest change (region-local x/z in): {minY, maxY, per-column} as the settle stores it. */
+    /** The window the last computeWindow call used, for the caller's compare/install pass. */
+    public int lastWindowHeight() {
+        return this.heightScratch;
+    }
+
+    public int lastWindowYLoWorld() {
+        return this.yLoWorldScratch;
+    }
+
+    /**
+     * The per-column highest change, given a region-local column. The pending recompute's array is chunk-local, and
+     * with a region of one chunk plus a one-chunk halo the changed chunk occupies region-local 16..31 in both axes -
+     * NOT 0..15. The first cut assumed 0..15 and cleared the 15-run below the highest change of the chunk to the WEST
+     * and NORTH instead of the changed one (docs/HANDOVER.md 10.37): the changed chunk's own shadow was never cleared,
+     * so this routine could not lower a single cell - the slice-1.5 oracle compared its (unchanged) result against the
+     * plane it had just read and called the two routes identical.
+     */
     private int columnMaxYFor(final int regionLocalX, final int regionLocalZ) {
-        // region tiles are 1 chunk wide in this build (REGION_CHUNKS=1), so region-local == chunk-local; wider tiles
-        // are slice 3's work and this guard stops silently running there.
-        if (this.pendingColumnMaxY == null || regionLocalX >= 16 || regionLocalZ >= 16) {
+        final int chunkLocalX = regionLocalX - this.changedChunkLocalX;
+        final int chunkLocalZ = regionLocalZ - this.changedChunkLocalZ;
+
+        if (this.pendingColumnMaxY == null || (chunkLocalX | chunkLocalZ) < 0
+                || chunkLocalX >= 16 || chunkLocalZ >= 16) {
             return Integer.MIN_VALUE;
         }
-        return this.pendingColumnMaxY[2 + ((regionLocalZ << 4) | regionLocalX)];
+        return this.pendingColumnMaxY[2 + ((chunkLocalZ << 4) | chunkLocalX)];
     }
 
-    /** Set by the caller (the lane) before computeWindow: the pending recompute's {minY, maxY, per-column maxY}. */
-    public void setPendingColumns(final int[] columnMaxY) {
+    /** Set by the caller (the lane) before computeWindow: the pending recompute's {minY, maxY, per-column maxY}, plus
+     *  the region-local position of the chunk that recompute belongs to (the array's columns are chunk-local). */
+    public void setPendingColumns(final int[] columnMaxY, final int changedChunkLocalX, final int changedChunkLocalZ) {
         this.pendingColumnMaxY = columnMaxY;
+        this.changedChunkLocalX = changedChunkLocalX;
+        this.changedChunkLocalZ = changedChunkLocalZ;
     }
     private int[] pendingColumnMaxY;
+    private int changedChunkLocalX;
+    private int changedChunkLocalZ;
 
     public long lastPopCount() {
         return this.lastPops;

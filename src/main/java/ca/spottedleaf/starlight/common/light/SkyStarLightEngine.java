@@ -803,8 +803,34 @@ public final class SkyStarLightEngine extends StarLightEngine {
      * over 98,304 cells. Restricting both passes to the window cuts them by the ratio of window height to world height
      * (~48 of 384 levels here), which is what this method is for.</p>
      */
+    /**
+     * Where a window's material and light come from.
+     *
+     * <p>The window routine's decisions - the sweep, the seeding rules, the five-direction BFS, the install and the
+     * boundary push - stay the engine's; only the two arrays the window is built on can be sourced elsewhere. That is
+     * the difference between this and computing the light somewhere else: the result is comparable cell by cell with
+     * the world-sourced one, because the algorithm never changed. The image lane implements it to read the region's
+     * planes (its own extracted material and its mirrored light) instead of walking the section palette and the
+     * nibbles cell by cell.</p>
+     */
+    public interface WindowSource {
+        /** Fills {@code material} and {@code light} in the window layout ({@code col * height + (y - yLo)}). False
+         *  when this chunk's window cannot be sourced - no image, or its material is not extracted for the band - in
+         *  which case the engine fills them from the world exactly as before. */
+        boolean fillSkyWindow(int chunkX, int chunkZ, int yLo, int yHi, int height, byte[] material, byte[] light);
+
+        /** The window the engine just installed, so the source can take the result over instead of re-reading it. */
+        void skyWindowInstalled(int chunkX, int chunkZ, int yLo, int yHi, int height, byte[] light);
+    }
+
     public final void settleSkyWindow(final LightChunkGetter lightAccess, final ChunkAccess chunk,
                                       final int changedMinY, final int changedMaxY, final int[] columnMaxY) {
+        this.settleSkyWindow(lightAccess, chunk, changedMinY, changedMaxY, columnMaxY, null);
+    }
+
+    public final void settleSkyWindow(final LightChunkGetter lightAccess, final ChunkAccess chunk,
+                                      final int changedMinY, final int changedMaxY, final int[] columnMaxY,
+                                      final WindowSource source) {
         final int chunkX = chunk.getPos().x;
         final int chunkZ = chunk.getPos().z;
         final int worldX0 = chunkX << 4;
@@ -825,7 +851,13 @@ public final class SkyStarLightEngine extends StarLightEngine {
         final int[] runs = this.recomputeRuns; // 18x18: the chunk plus a one-block halo, indexed (z+1)*18 + (x+1)
         final long tStart = System.nanoTime();
 
-        // ---- 1) expand the window, column-major: index = col * height + (y - yLo)
+        // ---- 1) expand the window, column-major: index = col * height + (y - yLo). The image lane can hand the two
+        // arrays over directly (its region planes hold the same material, and its light was mirrored from the same
+        // nibbles); when it does, nothing else in this routine changes - which is the point.
+        final boolean sourced = source != null
+                && source.fillSkyWindow(chunkX, chunkZ, yLo, yHi, height, material, light);
+
+        if (!sourced) {
         for (int section = minSection; section <= maxSection; section++) {
             final int sectionY0 = section * 16;
 
@@ -855,6 +887,7 @@ public final class SkyStarLightEngine extends StarLightEngine {
                     }
                 }
             }
+        }
         }
         System.arraycopy(light, 0, before, 0, cells);
         // START FROM DARK, not from what is stored. Seeding the window with the current light made this routine
@@ -1127,6 +1160,11 @@ public final class SkyStarLightEngine extends StarLightEngine {
                     }
                 }
             }
+        }
+        if (sourced) {
+            // hand the installed window back: the image's own copy is now behind the world's, and re-reading it next
+            // time (or packing it) would write these very values back as if they were new
+            source.skyWindowInstalled(chunkX, chunkZ, yLo, yHi, height, light);
         }
         if (Boolean.getBoolean("scalablelux.recomputeDebug")) {
             final long tEnd = System.nanoTime();

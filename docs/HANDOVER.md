@@ -1193,7 +1193,54 @@ MISMATCH 806k/965k, first (x=32,z=0,y=0) adopted=0 computed=15`。
 **结果**：`SKYORACLE identical`（82944 格、pops 9472、4.6 ms 首跑含 JIT；稳定后应远低）+ 门 22 探针 ✓
 + reach 回 16、probe 打印已清。
 
-**切片 1.5 的意义**：镜像的天光半边现在有了一个**被证明与 nibble 路径等价**的窗口重算。下一轮（切片 2）把它接进
-`applyChanges` 的天光半边（现在 `settleSkyWindow` 跑在 nibble 上——同样的窗口，同样的语义，换数据源即可），
-然后切片 3 打包天光（`dirtySkySections` 已维护 ✓）。**每一步的判据都是现成的**：SKYORACLE identical +
-LANEINVARIANT + 门 22 探针 + 四格指纹 + 同窗口 A/B。
+> **⚠ 这一条已被 10.37 推翻（2026-09-29）**：那次 `identical` 是**空洞的**——判据比的是「平面自己算前 vs 算后」，
+> 而那次重算**一格都没改**（见 10.37 的列偏移缺陷）。`computeWindow` 也不是等价算法，它是**另一个算法**。
+
+**切片 1.5 的意义（修订）**：镜像的天光半边有一个**能跑通、能自洽**的窗口重算，但它与原 nibble 路径**不逐格等价**
+（10.37 实测 288/9216）。真正被证明可行的形态不是「区域粒度的重写」，而是**同算法换数据源**（10.37 的 drop-in）。
+
+### 10.37 切片 2：区域粒度重算**不是**等价算法；真形态是「同算法换数据源」（已落地，判据全绿，指标未成立）
+
+**起因**（2026-09-29）：把切片 1.5 的 `computeWindow` 接进 settle 天光半边（切片 2）之前，先把 oracle 换成**诚实版**：
+不再是「平面自己算前 vs 算后」（那条判据恒真），而是**同一个 pass 里**让 plane 版和 nibble 版跑同一个窗口，
+逐格比**生产路径刚写进 nibble 的结果**，并额外统计 `changed`（plane 版真正动了几格）——`changed=0` 就是空洞通过。
+
+**诚实版第一次跑就抓到两件事**：
+
+1. **真缺陷（未发布路径）**：`ImageSkyLightEngine.columnMaxYFor` 把「被改的 chunk」当成区域局部 `0..15` 的列，
+   但 1 chunk 区域 + 1 chunk halo 时它是 `16..31`。于是 **2.0.9 那条「按列清 15-run」的清列全落在西/北邻居身上**，
+   被改 chunk 自己的影子从没被清过 ⇒ 这个重算**一格都降不下来**（也解释了 10.36 那次 `identical`：它改不了任何格）。
+   已修：`setPendingColumns(..., changedChunkLocalX/Z)` 显式带上被改 chunk 的区域局部原点。
+2. **plane 版是另一个算法**：实测 `cells=9216 changed=354 mismatch=288`（门的世界、4×4×4 萤石补丁那格）。
+   逐条对完 nibble 版后，差异是结构性的、不是 bug：
+   - nibble 版播种是 **run bottom + 仅「被改列/其边缘」整条 run**（2.0.9 后的收敛，9374 seed → 214 µs）；plane 版每条 run 全播。
+   - nibble 版 BFS 只有 **5 个方向**（±x、±z、向下），**没有向上**；plane 版 6 方向。
+   - nibble 版**窗口根本不跨 chunk**（横向过界直接 `continue`），邻居靠 install 时的边界推入 + `performLightDecrease/Increase`；
+     plane 版一次算 3×3 区块并想直接写回。
+
+   结论：**「区域粒度的天光重算」不能当 drop-in**，它要么变成另一个引擎（那就回到已被测穿的自己写 BFS 成本问题），
+   要么就必须连传播一起接管（那是切片 3 的一部分，不是一次替换）。切片 1/1.5 的代码保留（`computeWindow` + probe 都在，
+   默认关：`-Dscalablelux.skyWindowProbe=true`），但**上线形态不是它**。
+
+**真正落地的形态 —— 同算法换数据源**：`SkyStarLightEngine.WindowSource`。窗口例程的每一个决定（sweep、播种规则、
+5 方向 BFS、install、边界推入）**全留在引擎里**，它只多问一句「这两组数组从哪来」；lane 用区域平面回答
+（`ImageLane.skyWindowSource`，`-Dscalablelux.imageLaneSky=true`，默认关）：
+材质来自区域的 material plane（那个 4096 字节平面，本来就在写漏斗里保持最新），天光来自同一个 pass 里从 nibble
+**按其读的那一段**采纳进平面的值（一遍两用：既是窗口的输入，又让平面持有世界的当前值）。
+拒绝而不是近似：band 内任一 section 的材质**没被抽过**就返回 false，引擎照旧从世界填。
+install 之后引擎把结果交回来（`skyWindowInstalled`），平面写回窗口新值 + 标记 `dirtySkySections`（切片 3 的打包输入）。
+
+**为什么这条一定等价**：算的是同一个算法、同一份数据；plane 里的材质就是引擎本来要走的 palette 的同一份抽取，
+plane 里的天光就是它要读的那些 nibble 字节。所以**接受判据不是「看起来对」，是逐字节相同**。
+
+**判据（全部跑完）**：
+- 门（22 探针 + `relight 2` 后重读）：**READ1 == READ2 全 22 格 ✓**，`skySource=1/806us`（证明真的走通了 → 不是静默回退）。
+- 四格指纹：`structure_cube` 的 `sky=905931078dfc5ace`（= SL = 原版）**两侧三轮全同 ✓**。
+- 同窗口交错 3 轮（`tools/rig/skysource-ab.sh`，同一 jar 只差一个 flag；取 min-of-2 均值）：
+  `border` base 5.34 → src 4.96（ratio **0.929**）、`structure` 3.63 → 3.86（**1.063**）、`dense` 1.48 → 1.38（**0.930**）。
+  **逐轮变号**（border 0.68/0.84/1.04；structure 0.81/1.17/1.18；dense 0.81/0.85/1.39）⇒ 与 2.0.8 同样的结论：
+  **指标上未成立**（格子本身在 ±15% 抖动，三格都翻号），但**没有一格是真变差**，而正确性是逐字节的。
+
+**保留理由 + 状态**：这是「镜像即存储」在这条路线上的第一处生产级替换（palette 走路 → 数组读），
+默认关、零风险（关掉就是原来的世界源路径），且它是切片 3（接管天光写侧 + 打包）的前置。**指标结论单独记：未成立**，
+需要 ≥6 轮才配给 verdict（见 10.28 的告诫）。**不要**把 `changed=354 mismatch=288` 读成 bug——那是两个算法。
