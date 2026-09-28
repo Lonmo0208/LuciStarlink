@@ -842,11 +842,20 @@ public final class StarLightInterface {
                     // and syncFuture(), which is where "the engine must be settled now" is asked - while the block half
                     // runs here as always.
                     final ChunkAccess chunkNow = this.getAnyChunkNow(chunkX, chunkZ);
-                    final boolean deferSky = LUCIS_RECOMPUTE_SKY && chunkNow != null
-                            && positions.size() >= LUCIS_RECOMPUTE_MIN;
                     // the image lane carries this chunk's block half when it captured the burst at setBlock time
                     final boolean laneCovered = this.lucis$imageLane != null
                             && this.lucis$imageLane.covers(chunkX, chunkZ);
+                    // A LANE-COVERED burst defers its sky half no matter how small it is. The size rule above exists to
+                    // save a per-chunk window rebuild on bulk traffic, and the small case was always carried by the
+                    // base queue instead - which is how every small edit's sky has been done all along. When the lane
+                    // owns the burst the queue never sees those positions (that is the point of lane ownership), so the
+                    // only remaining writer is our own grouped path, and its sky seeding is an INCREASE path: it cannot
+                    // lower a cell. Measured on the gate with the lane forced (imageLaneMinChanges=1): a placed
+                    // glowstone reads sky=15 in its own cell - a relight gives 0 - and the counter line shows the group
+                    // seeding both bursts while no window recompute ran for them. Deferring hands those cells to the
+                    // window recompute, which clears the column's 15-run (2.0.9) and derives the real value.
+                    final boolean deferSky = LUCIS_RECOMPUTE_SKY && chunkNow != null
+                            && (positions.size() >= LUCIS_RECOMPUTE_MIN || laneCovered);
 
                     // Packed longs, never boxed BlockPos: this list is built for every flush and a bulk burst holds tens
                     // of thousands of positions, which JFR showed as heavy young-generation churn in this engine and no

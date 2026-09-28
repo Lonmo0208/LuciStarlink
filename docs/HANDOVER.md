@@ -1277,3 +1277,32 @@ structure 49/45 vs 47/43 vs 63/52；dense 57/52 vs 52/50 vs 58/50；sky_hole 51/
 第二条（玩家口径严格超过 SL）**本轮未成立**，且正是"负载窗口"这一侧——我们的降级系数比 SL 大。
 下一轮的靶子是 border（它的 6.4 ms 里 6.2 ms 是等基座自己把排队的天光/方块下降波结算完，我们自己的 apply 只有 0.22 ms）
 和负载下的玩家口径（SL 1.0-1.4× 降级 vs 我们更大）。
+
+### 10.39 追上 border 的第一块砖：**lane 拥有的 burst 从不做天光"变暗"**（真缺陷，已修）+ minPass 在这条路线上**量的是别的东西**
+
+**起因**：用户要求 border 必须超过 1.x。把路由放开（`-Dscalablelux.imageLaneMinChanges=1`，让 lane 接管 border 的 95 个散点）后，
+`minPass` 读到 **0.88/0.55-0.75 ms**（1.x 最优轮 3.92），看起来是 5-7 倍。按本仓的老规矩先过门——**门红**：
+
+```
+READ1: light -1,-37,-16 ... sky=15 ... state=glowstone      ← 石头/萤石自己的格子读 15
+READ2: light -1,-37,-16 ... sky=0  ...  （relight 之后）
+```
+即**被放置的不透明方块自己的格子天光没被重算**（relight 会修好）。这是 2.0.9 那一类缺陷的翻版，但根因不同：
+lane 接管 burst 后，那批坐标**不再进基座队列**（这正是"独占"的含义），而**我们自己 grouped settle 的天光播种是"增量增亮"路径，
+降不下来**——小队形（<4 改动）还不会走 `settleSkyWindow` 的延迟窗口（那个窗口的"按列清 15-run"才是 2.0.9 的修复）。
+默认配置（floor=64）看不见它，因为 border 的散点本来就被送去基座队列。
+
+**修法**（`StarLightInterface`，段内注释写清）：**lane 拥有的 burst 一律延迟它的天光半边**，不论大小——
+把那些格子交给窗口重算（它会清 15-run 并重新推导）。门：forced 配置 **GREEN**，默认配置 **GREEN**（无回归）。
+
+**然后是我必须点出来的第二件事**：修好后 forced 路线的 `minPass` 是 **0.55-0.75 ms**，但它**不是引擎口径的胜利**：
+harness 的"引擎完成"时间戳来自**基座引擎的 future**（`waitForPendingTasks`），而这条路线里我们的工作（lane settle + 窗口重算）
+落在**我们自己的 flush 点/tick 钩子**上——它在 `bench.pass_wall_actual` 里（48.6 ms/pass ≈ 一个 tick），不在 `minPassNanos` 里。
+同窗口交错（border only，3 轮，profiler 关）：shipped minPass 6.96/8.38/8.78、wall 50.9；forced minPass 0.55/0.72/0.75、wall 48.6。
+⇒ 玩家口径只差 ~5%（噪声内），引擎口径差 12 倍——**这 12 倍是"我们的工作不在被量的那条路径上"，不是快**。
+
+**所以 border 的判据现状**：仍未过线。诚实的两个数字是 shipped 4.87-6.96（对 1.x 3.92，落后 24-70%）与
+"forced 路线 wall 48.6 vs shipped 50.9（噪声内）"。**下一步（本轮结论）**：先让我们的同步工作进入 harness 的完成判据
+（`waitForPendingTasks`/`syncFuture` 触发的 flush 必须包含 lane 与窗口重算——本轮试过"有活就 flush"的内容式闸门，
+但那版没能在 wait 里抓到 lane 的捕获，已回退），**然后** forced 路线的 minPass 才可比、才能谈"超过 1.x"。
+在那之前，任何 0.55 ms 的 border 数字都不许当胜利写进任何表。
