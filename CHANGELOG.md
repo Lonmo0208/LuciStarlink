@@ -6,6 +6,23 @@ the 1.x branch's own changelog; for what belongs to whom see [NOTICE](NOTICE) an
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 
+## 2.0.16 — 2026-09-28
+
+**A deferred sky recompute now owns its chunk.** A burst is split between two paths - the first position of each
+batch goes to the engine queue, the remainder to the own-edit buffer - so on a chunk with a pending deferred
+recompute both the base engine's own sky work and that recompute wrote the same cells, and the result depended on
+which ran last. Measured on the correctness gate's 4x4x4 patch: the base path writes 14 into a pocket cell whose
+canonical value is 13 while the recompute computes 13, so the cell was right in some runs and wrong in others. The
+queue dispatch now skips the sky half for chunks with a pending recompute (a static set, marked at deferral and
+cleared with the recomputes), leaving exactly one writer. Gate: all 22 probes read identically before and after a
+relight, and the recompute still produces the canonical 14/13/13/14 under the patch.
+
+Also measured and withdrawn in the same round: moving the guaranteed settle from the head of the tick to its end
+(ServerTickEvent.Post). It is the more honest accounting - our work then falls inside the measured pass instead of
+spilling into the next one - and the interleaved A/B reads it 4-13% slower on the engine metric (border 3.79 to 4.27,
+structure 2.53 to 2.70, dense 1.04 to 1.08). Its player-axis benefit is unmeasured, so it is reverted until someone
+measures that side properly.
+
 ## 2.0.15 — 2026-09-28
 
 **One flush per tick: dense_chunk_patch 3.8x faster, structure_cube 15% faster.** The harness asks

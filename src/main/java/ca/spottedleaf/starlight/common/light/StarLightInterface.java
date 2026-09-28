@@ -529,6 +529,29 @@ public final class StarLightInterface {
      */
     private final it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<int[]> lucis$pendingRecomputes =
             new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>();
+
+    /**
+     * Chunk keys with a pending deferred sky recompute, so the base queue's own sky work can skip them.
+     *
+     * <p>Static because the queue's dispatch runs on the light thread and has no interface instance at hand, exactly
+     * like {@code ImageLane.onEngineBlockWrite}. The set is written on the server thread (deferral and the settle's
+     * clear) and read on the light thread, which is why it is a concurrent set; a stale read can only send a chunk
+     * down the base path for one flush, which is what used to happen always.</p>
+     */
+    private static final it.unimi.dsi.fastutil.longs.LongOpenHashSet LUCIS_SKY_DEFERRED =
+            new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
+
+    static boolean lucis$isSkyDeferred(final long chunkCoordinate) {
+        return LUCIS_SKY_DEFERRED.contains(chunkCoordinate);
+    }
+
+    private static void lucis$markSkyDeferred(final long chunkCoordinate) {
+        LUCIS_SKY_DEFERRED.add(chunkCoordinate);
+    }
+
+    static void lucis$clearDeferredSkyKeys() {
+        LUCIS_SKY_DEFERRED.clear();
+    }
     /**
      * Whether the 3x3 neighbourhood of a chunk is loaded and past LIGHT (SL's own {@code canUseChunk} semantics). The
      * inline path propagates across chunk borders, so it must not run while a neighbour is still generating: taking it
@@ -843,6 +866,8 @@ public final class StarLightInterface {
                             java.util.Arrays.fill(created, 2, created.length, Integer.MIN_VALUE);
                             return created;
                         });
+                        // from here on this chunk's sky half belongs to the deferred recompute, not to the queue's task
+                        lucis$markSkyDeferred(key);
                         final it.unimi.dsi.fastutil.longs.LongIterator changedIt = positions.iterator();
 
                         while (changedIt.hasNext()) {
@@ -953,6 +978,7 @@ public final class StarLightInterface {
                     }
                 }
                 this.lucis$pendingRecomputes.clear();
+                lucis$clearDeferredSkyKeys();
             }
         } finally {
             this.releaseSkyLightEngine(skyEngine);
@@ -1392,7 +1418,13 @@ public final class StarLightInterface {
         final Set<BlockPos> positions = task.changedPositions;
         final Boolean[] sectionChanges = task.changedSectionSet;
 
-        if (skyEngine != null && (!positions.isEmpty() || sectionChanges != null)) {
+        // A chunk with a pending deferred sky recompute is OWNED by that recompute. It runs at a settle point over the
+        // whole window the burst touches, while this task holds the REST of the same burst - a burst is split, the
+        // first position of each batch going to the queue and the remainder to the own-edit buffer. Letting both write
+        // the same cells made the result depend on which ran last: measured on the gate's patch, where this path writes
+        // 14 into a pocket cell whose canonical value is 13, while our recompute computes 13 (HANDOVER 10.31). The
+        // block half is unaffected and still runs here.
+        if (skyEngine != null && !lucis$isSkyDeferred(coordinate) && (!positions.isEmpty() || sectionChanges != null)) {
             skyEngine.blocksChangedInChunk(this.lightAccess, chunkX, chunkZ, positions, sectionChanges);
         }
         if (blockEngine != null && (!positions.isEmpty() || sectionChanges != null)) {
