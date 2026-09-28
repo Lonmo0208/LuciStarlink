@@ -108,6 +108,17 @@ public abstract class StarLightEngine {
     // index = x + (z * 5)
     protected final boolean[][] emptinessMapCache = new boolean[5 * 5][];
 
+    /**
+     * The material planes of the sections in the cache window, parallel to {@code sectionCache} and allocated in the
+     * constructor (its length depends on min/maxLightSection). Filled on demand by {@link #lucis$materialPlane(int)} -
+     * the first BFS examination of a section extracts it once (the write funnel then keeps it in step) and every later
+     * examination of that section reads a flat byte instead of walking the palette. Null when the section cannot have
+     * a trustworthy plane (shape-occluding states) - the per-cell palette path is the fallback, so this can only be a
+     * lost optimisation.
+     */
+    protected final ca.spottedleaf.starlight.common.light.image.ImageMaterialPlanes.Plane[] materialPlaneCache;
+    protected final boolean[] materialPlaneKnown;
+
     protected final BlockPos.MutableBlockPos mutablePos1 = new BlockPos.MutableBlockPos();
     protected final BlockPos.MutableBlockPos mutablePos2 = new BlockPos.MutableBlockPos();
     protected final BlockPos.MutableBlockPos mutablePos3 = new BlockPos.MutableBlockPos();
@@ -150,6 +161,8 @@ public abstract class StarLightEngine {
         this.maxSection = WorldUtil.getMaxSection(world);
 
         this.sectionCache = new LevelChunkSection[5 * 5 * ((this.maxLightSection - this.minLightSection + 1) + 2)]; // add two extra sections for buffer
+        this.materialPlaneCache = new ca.spottedleaf.starlight.common.light.image.ImageMaterialPlanes.Plane[this.sectionCache.length];
+        this.materialPlaneKnown = new boolean[this.sectionCache.length];
         this.nibbleCache = new SWMRNibbleArray[5 * 5 * ((this.maxLightSection - this.minLightSection + 1) + 2)]; // add two extra sections for buffer
         this.notifyUpdateCache = new boolean[5 * 5 * ((this.maxLightSection - this.minLightSection + 1) + 2)]; // add two extra sections for buffer
     }
@@ -311,9 +324,54 @@ public abstract class StarLightEngine {
         Arrays.fill(this.nibbleCache, null);
         Arrays.fill(this.chunkCache, null);
         Arrays.fill(this.emptinessMapCache, null);
+        Arrays.fill(this.materialPlaneCache, null);
+        Arrays.fill(this.materialPlaneKnown, false);
         if (this.isClientSide) {
             Arrays.fill(this.notifyUpdateCache, false);
         }
+    }
+
+    /**
+     * This cache slot's material plane, extracted on first use and kept in step by the write funnel; null when the
+     * section cannot have one (air, absent, or shape-occluding). The boolean distinguishes "known to be null" from
+     * "not looked at yet", so a section that cannot have a plane is not re-probed per examination.
+     */
+    protected final ca.spottedleaf.starlight.common.light.image.ImageMaterialPlanes.Plane lucis$materialPlane(
+            final int sectionIndex) {
+        if (this.materialPlaneKnown[sectionIndex]) {
+            return this.materialPlaneCache[sectionIndex];
+        }
+        this.materialPlaneKnown[sectionIndex] = true;
+
+        final LevelChunkSection section = this.sectionCache[sectionIndex];
+
+        if (section == null) {
+            return null;
+        }
+        // Decode the slot the same way the caches encode it (index = x + 5*z + 25*y + offset). The naive rem/25 form
+        // is wrong for the two buffer sections at the bottom (sectionY below minSection), whose encoded index is
+        // negative - a crash the first A/B caught (ArrayIndexOutOfBoundsException -112 into a 25-slot chunk cache).
+        // `rem` here is therefore taken AFTER un-adding the offset, with floor semantics, and the y slot may be -1
+        // or max+1: those are the buffer sections, which have no chunk and no plane.
+        final int rem = sectionIndex - this.chunkSectionIndexOffset;
+        final int chunkX = Math.floorMod(rem, 5);
+        final int chunkZ = Math.floorMod(rem / 5, 5);
+        final int sectionY = Math.floorDiv(rem, 25) + this.minSection;
+        final int chunkSlot = chunkX + 5 * chunkZ + this.chunkIndexOffset;
+
+        if (chunkSlot < 0 || chunkSlot >= this.chunkCache.length) {
+            return null;
+        }
+        final ChunkAccess chunk = this.chunkCache[chunkSlot];
+
+        if (chunk == null) {
+            return null;
+        }
+        final ca.spottedleaf.starlight.common.light.image.ImageMaterialPlanes.Plane plane =
+                ca.spottedleaf.starlight.common.light.image.ImageMaterialPlanes.enginePlane(
+                        (Level) this.world, section, chunk.getPos().x, sectionY, chunk.getPos().z);
+        this.materialPlaneCache[sectionIndex] = plane;
+        return plane;
     }
 
     protected final BlockState getBlockState(final int worldX, final int worldY, final int worldZ) {
@@ -1472,11 +1530,21 @@ public abstract class StarLightEngine {
                         continue;
                     }
 
+                    // The material-plane fast path (docs/HANDOVER.md 10.33): a section with a trustworthy plane has
+                    // its opacity/emission extracted once and kept in step by the write funnel, so the examination
+                    // reads two flat bytes instead of walking the palette (~50 ns -> ~2 ns). Shape-occluding sections
+                    // have no plane and fall through to the palette path below, unchanged; the fallback is what makes
+                    // this exact rather than approximate. blockState is still fetched here because the sided branch
+                    // below needs the state itself.
+                    final ca.spottedleaf.starlight.common.light.image.ImageMaterialPlanes.Plane lucisPlane =
+                            this.lucis$materialPlane(sectionIndex);
                     final BlockState blockState = this.getBlockState(sectionIndex, localIndex);
                     if (blockState == null) {
                         continue;
                     }
-                    final int opacityCached = ((ExtendedAbstractBlockState)blockState).scalablelux$getOpacityIfCached();
+                    final int opacityCached = lucisPlane == null
+                            ? ((ExtendedAbstractBlockState)blockState).scalablelux$getOpacityIfCached()
+                            : (lucisPlane.opacity[localIndex] & 0xFF);
                     if (opacityCached != -1) {
                         final int targetLevel = Math.max(0, propagatedLightLevel - Math.max(1, opacityCached));
                         if (lightLevel > targetLevel) {
@@ -1491,7 +1559,9 @@ public abstract class StarLightEngine {
                                             | FLAG_RECHECK_LEVEL;
                             continue;
                         }
-                        final int emittedLight = blockState.getLightEmission() & emittedMask; // opacity cached
+                        final int emittedLight = (lucisPlane == null
+                                ? blockState.getLightEmission()
+                                : (lucisPlane.emission[localIndex] & 0xFF)) & emittedMask; // opacity cached
                         if (emittedLight != 0) {
                             // re-propagate source
                             // note: do not set recheck level, or else the propagation will fail
@@ -1601,11 +1671,21 @@ public abstract class StarLightEngine {
                         continue;
                     }
 
+                    // The material-plane fast path (docs/HANDOVER.md 10.33): a section with a trustworthy plane has
+                    // its opacity/emission extracted once and kept in step by the write funnel, so the examination
+                    // reads two flat bytes instead of walking the palette (~50 ns -> ~2 ns). Shape-occluding sections
+                    // have no plane and fall through to the palette path below, unchanged; the fallback is what makes
+                    // this exact rather than approximate. blockState is still fetched here because the sided branch
+                    // below needs the state itself.
+                    final ca.spottedleaf.starlight.common.light.image.ImageMaterialPlanes.Plane lucisPlane =
+                            this.lucis$materialPlane(sectionIndex);
                     final BlockState blockState = this.getBlockState(sectionIndex, localIndex);
                     if (blockState == null) {
                         continue;
                     }
-                    final int opacityCached = ((ExtendedAbstractBlockState)blockState).scalablelux$getOpacityIfCached();
+                    final int opacityCached = lucisPlane == null
+                            ? ((ExtendedAbstractBlockState)blockState).scalablelux$getOpacityIfCached()
+                            : (lucisPlane.opacity[localIndex] & 0xFF);
                     if (opacityCached != -1) {
                         final int targetLevel = Math.max(0, propagatedLightLevel - Math.max(1, opacityCached));
                         if (lightLevel > targetLevel) {
@@ -1620,7 +1700,9 @@ public abstract class StarLightEngine {
                                             | FLAG_RECHECK_LEVEL;
                             continue;
                         }
-                        final int emittedLight = blockState.getLightEmission() & emittedMask; // opacity cached
+                        final int emittedLight = (lucisPlane == null
+                                ? blockState.getLightEmission()
+                                : (lucisPlane.emission[localIndex] & 0xFF)) & emittedMask; // opacity cached
                         if (emittedLight != 0) {
                             // re-propagate source
                             // note: do not set recheck level, or else the propagation will fail

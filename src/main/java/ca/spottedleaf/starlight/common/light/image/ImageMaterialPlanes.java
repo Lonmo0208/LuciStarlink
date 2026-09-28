@@ -46,6 +46,65 @@ public final class ImageMaterialPlanes {
 
     private ImageMaterialPlanes() {}
 
+    /** Shared cache for the engine-side reads; the lane's own capture passes its per-lane instance. */
+    private static final ImageMaterialCache ENGINE_CACHE = new ImageMaterialCache();
+    private static final BlockPos.MutableBlockPos ENGINE_POS = new BlockPos.MutableBlockPos();
+
+    /**
+     * The engine-side read: this section's opacity and emission planes, extracted once and then kept in step by the
+     * write funnel. Returns null when the section cannot produce a trustworthy plane (shape-occluding states need the
+     * cell's position, so their material is not a pure function of the state).
+     *
+     * <p>This is the storage route's first increment (docs/HANDOVER.md 10.33): the base engine's BFS examines a
+     * neighbour's material on every pop, and on the palette path that is a random access into the section's state
+     * array (~50 ns) against a plane read (~2 ns, sequential). It is ON DEMAND rather than at chunk load because the
+     * load-time variant measured 4.8 ms a chunk of pure upfront cost, while a BFS wave touches only a slice of a
+     * chunk's sections per pass - and an eviction costs at most a re-extract, never correctness, because the write
+     * funnel rebuilds the plane from the live section on the next get.</p>
+     *
+     * <p>The world position matters to two states' materials (the position-dependent queries in
+     * {@code getLightBlock}), which is why the caller supplies the section's world coordinates; the plane's cached
+     * levels and the write-funnel write-through are position-independent for everything else.</p>
+     */
+    public static Plane enginePlane(final Level level, final LevelChunkSection section, final int chunkX,
+                                    final int sectionY, final int chunkZ) {
+        if (section == null || section.hasOnlyAir()) {
+            return null;
+        }
+        final Plane existing = PLANES.get(section);
+
+        if (existing != null && existing.section == section) {
+            if (existing.usable) {
+                existing.lastUseNanos = System.nanoTime();
+                return existing;
+            }
+            return null; // proven unusable for this section instance; do not retry per cell
+        }
+
+        if (PLANES.size() >= MAX_SECTIONS) {
+            evictOldestHalf();
+        }
+
+        final Plane plane = new Plane(level, section, chunkX, sectionY, chunkZ);
+
+        if (section.maybeHas(BlockState::useShapeForLightOcclusion)) {
+            plane.usable = false;
+            PLANES.put(section, plane);
+            ANY_PLANES = true;
+            return null; // a shape-occluding state's material depends on the cell position
+        }
+        extractInto(plane, section);
+        plane.usable = true;
+        PLANES.put(section, plane);
+        ANY_PLANES = true;
+        return plane;
+    }
+
+    /** Fills a plane's two arrays from the section, by the packed path when available. */
+    private static void extractInto(final Plane plane, final LevelChunkSection section) {
+        extractPacked(plane.level, section, plane, ENGINE_CACHE, ENGINE_POS);
+    }
+
     /** One section's materials. {@code opacity}/{@code emission} hold 4096 cells in vanilla's (y<<8)|(z<<4)|x order. */
     public static final class Plane {
         public final Level level;
@@ -54,6 +113,8 @@ public final class ImageMaterialPlanes {
         public final int sectionY;
         public final LevelChunkSection section;
         public volatile long lastUseNanos = System.nanoTime();
+        /** False when this section cannot have a position-independent plane (shape-occluding states present). */
+        public volatile boolean usable = true;
         public final byte[] opacity = new byte[4096];
         public final byte[] emission = new byte[4096];
 
