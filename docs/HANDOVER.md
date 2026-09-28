@@ -1306,3 +1306,33 @@ harness 的"引擎完成"时间戳来自**基座引擎的 future**（`waitForPen
 （`waitForPendingTasks`/`syncFuture` 触发的 flush 必须包含 lane 与窗口重算——本轮试过"有活就 flush"的内容式闸门，
 但那版没能在 wait 里抓到 lane 的捕获，已回退），**然后** forced 路线的 minPass 才可比、才能谈"超过 1.x"。
 在那之前，任何 0.55 ms 的 border 数字都不许当胜利写进任何表。
+
+### 10.40 用户在 dev 客户端报的「光源残留」= 延迟天光窗口**只能变暗，不能变亮**（已修，新门 `gate-residue.sh`）
+
+**现象**：dev 客户端里一次 `/fill`（日志：11088 方块）之后用户看到"有光源残留"。日志无异常，所以先做**可复现的无头复现**：
+新门 `tools/rig/gate-residue.sh` —— **放一个大编辑 → 读 → 拆掉 → 读 → relight → 读**，判据 = 拆除后的读数必须等于 relight 后的读数，
+且拆除必须真的改变了读数（防空跑）。
+
+**复现（默认配置）**：9×5×9 = 405 块萤石块 `fill` 上去再 `fill ... air` 拆掉后，
+**方块光正确归零 ✓，天光却停在被遮挡时的值**（10/6/3/11/12），而 relight 读 15。
+哨兵跑（`-Dscalablelux.ownEdit=false -Dscalablelux.recomputeSky=false`，即基座路径）：`READ2 == READ3`、那些格子都是 15
+⇒ **真值是 15，错的是我们的延迟天光窗口**（2.0.9 修的是"变暗"，这是它的镜像：**"变亮"从来就没工作过**）。
+
+**根因（调试打印锁定）**：`settleSkyWindow` 的 sweep 用**窗口上方一格**的读数判断"这条 15-run 是否延伸进窗口"：
+```
+SKYSWEEP col x=4 z=4 gateY=-16 gate=0 nibbleInit=false updStorageNull=true yLo=-53 yHi=-17 light(-36)=6
+```
+地下的那一格是石头（或该 section 的 updating 存储根本是 HIDDEN），所以**恒读 0** ⇒ sweep 整列跳过 ⇒
+窗口例程**只能降不能升**。任何"拆掉不透明方块"的编辑都会把阴影值留在原地，直到有人 `relight`。
+
+**修法**：sweep 的门加第二个条件——**窗口自己最上面那一行是 15 也算"run 延伸进窗口"**
+（岩层里的竖井/山体下的洞穴：光从窗口上方更远的地方来，旧判据看不见）。修后 `gate=0` 依旧（证明是新的一项在起作用）。
+
+**判据（同窗口、确定性、每跑重建世界副本）**：
+- 残留门（默认配置）：拆除后 `sky` 层 **16/16 与 relight 相同** ✓（残余只有 2 格 `updSky` 差异，且那格的 updating 存储是 HIDDEN ——
+  基座与 relight 在那两格读的也是 0，属已知的 visible/updating 层语义，不是本次残留）。
+- 哨兵跑（基座路径）`READ2 == READ3` 逐格相同 ✓；残留门还带"拆除确实改变了读数"的自检 ✓。
+- 待补：修复动了天光热路径，**四格指纹 + 标准梯度门（gate-gradient.sh）必须在下一轮补**。
+
+**遗留提醒**：`-Dscalablelux.skySweepDebug=true` 的单列打印留在代码里（默认关）；旧梯度门只测"放上去"，这是它漏掉这个缺陷的原因，
+后续任何天光改动都应同时跑 `gate-gradient.sh` 与 `gate-residue.sh`。

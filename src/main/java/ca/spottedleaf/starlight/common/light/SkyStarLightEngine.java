@@ -22,6 +22,9 @@ import java.util.Set;
 
 public final class SkyStarLightEngine extends StarLightEngine {
 
+    /** Prints one column's sweep inputs (docs/HANDOVER.md 10.40); {@code -Dscalablelux.skySweepDebug=true}. */
+    private static final boolean SWEEP_DEBUG = Boolean.getBoolean("scalablelux.skySweepDebug");
+
     /*
       Specification for managing the initialisation and de-initialisation of skylight nibble arrays:
 
@@ -957,7 +960,29 @@ public final class SkyStarLightEngine extends StarLightEngine {
                 // the window's top edge decides whether this column has a run inside the window at all. The earlier
                 // version walked the palette from the world top for every column (~250 reads x 256 columns), which was
                 // the settle's largest single cost.
-                if (this.getLightLevel(worldX0 + x, yHi + 1 > worldMaxY ? worldMaxY : yHi + 1, worldZ0 + z) == 15) {
+                final int gateY = yHi + 1 > worldMaxY ? worldMaxY : yHi + 1;
+                final int gateLevel = this.getLightLevel(worldX0 + x, gateY, worldZ0 + z);
+
+                if (SWEEP_DEBUG && chunkX == 0 && chunkZ == -1 && x == 4 && z == 4) {
+                    // the residue probe (docs/HANDOVER.md 10.40): after an opaque bulk edit is REMOVED the column must
+                    // be swept back to 15, and it is not. Print what this column's sweep is handed, before the gate.
+                    final SWMRNibbleArray probeNibble = this.getNibbleFromCache(chunkX, gateY >> 4, chunkZ);
+                    final int probeCol = (z << 4) | x;
+                    final StringBuilder mat = new StringBuilder();
+
+                    for (int wy = yHi; wy >= yHi - 24; wy--) {
+                        mat.append(material[probeCol * height + (wy - yLo)] & 0xFF).append(';');
+                    }
+                    System.out.println("SKYSWEEP col x=" + x + " z=" + z + " gateY=" + gateY + " gate=" + gateLevel
+                            + " probeNibbleNull=" + (probeNibble == null)
+                            + " nibbleInit=" + (probeNibble != null && probeNibble.isInitialisedUpdating())
+                            + " updStorageNull=" + (probeNibble == null || probeNibble.storageUpdating == null)
+                            + " yLo=" + yLo + " yHi=" + yHi
+                            + " light(-36)=" + (light[probeCol * height + (-36 - yLo)] & 0xFF)
+                            + " material(-17..-41)=" + mat);
+                }
+
+                if (gateLevel == 15 || (light[windowBase + height - 1] & 0xFF) == 15) {
                     int y = yHi;
 
                     while (y >= yLo) {
