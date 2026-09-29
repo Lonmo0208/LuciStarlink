@@ -1475,3 +1475,13 @@ HIDDEN 状态相等时**只有数组引用相同才跳过**，不同就落到合
 INIT 保持原有的内容比较。**验收**：大 fill 门连跑 3 次 NO-RESIDUE（含此前必现的形状），layerdump 命中 0；
 梯度门 GREEN。**明确没修的**：两个 updating 侧的天光缺陷（3×3×3 循环 8/11、405 板 2 格 updSky）——
 那是"HIDDEN 段在引擎自己那一侧读作 0"的语义问题（10.41 的 sweep 入口），与本次的发布合并是两回事，是下一个窗口的任务。
+
+### 10.47 修复"HIDDEN 天光段读 0"：循环门 8/11 → **0/11**，梯度门 GREEN；残留门剩 2 格属另一序列
+
+**修法**（SkyStarLightEngine sweep 入口）：入口段无存储（HIDDEN/NULL）且**高度图显示窗口上方全敞开 ⇒ 视作 15**——
+被去初始化的存储所代表的真相就是高度图。连带两个安全网：`updateVisible` 合并路径对 "updating=null 而 visible 有数组"
+改为**归零 visible**（原来 arraycopy 撞 null 崩服）；`set()` 对 "dirty 但 storage=null" 补分配（竞态防护理）。
+
+**验收**：`gate-cycle.sh` **0/11**（此前 8/11，用户的概率残留形状）✓；`gate-gradient.sh` GREEN ✓；
+`gate-residue.sh` 从 8 格坏值降到 **2 格**，且这 2 格是 **visible=15 / updating=0**（层不一致，合并家族，
+不是值错）——即"de-init 后没有一次发布扫过它"，属 10.45 候选①（cache 出界），是下一个单一任务。

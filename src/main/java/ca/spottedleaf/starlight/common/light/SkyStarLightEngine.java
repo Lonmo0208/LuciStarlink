@@ -983,7 +983,24 @@ public final class SkyStarLightEngine extends StarLightEngine {
                             + " material(-17..-41)=" + mat);
                 }
 
-                if (gateLevel == 15 || (light[windowBase + height - 1] & 0xFF) == 15) {
+                // Third entry: the section holding the gate cell may carry NO stored sky data (de-initialised after
+                // its blocks were removed - HIDDEN or NULL), which reads as 0 here while the true sky above an open
+                // column is 15. That exact state is the intermittent light residue (docs/HANDOVER.md 10.41): place an
+                // opaque patch, remove it, and the section above the window loses its storage, both other entries go
+                // false, and the column below keeps its shadow values until a relight. The heightmap is the truth
+                // the missing storage stood for: when the first blocker sits at or below the gate cell, the gate
+                // cell is open sky and the run provably continues into the window.
+                boolean gateLit = gateLevel == 15 || (light[windowBase + height - 1] & 0xFF) == 15;
+
+                if (!gateLit) {
+                    final SWMRNibbleArray gateNibble = this.getNibbleFromCache(chunkX, gateY >> 4, chunkZ);
+
+                    if (gateNibble == null || !gateNibble.isInitialisedUpdating()) {
+                        gateLit = this.world.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING,
+                                worldX0 + x, worldZ0 + z) <= gateY;
+                    }
+                }
+                if (gateLit) {
                     int y = yHi;
 
                     while (y >= yLo) {
