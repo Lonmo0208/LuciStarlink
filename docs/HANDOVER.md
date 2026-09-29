@@ -1461,3 +1461,17 @@ gate-cycle.log（默认那次）：                读数 168，两层不一致 
 （block+sky × 全 section）按「visible!=updating」过一遍并打印 section 坐标，同时给 `updateVisible` 的
 "跳过分支"加计数器。这一步会把 ①/② 变成可判的数据，然后一次修对。判据不变：三个门 + check-layers 归零 +
 四格指纹 + 同窗口 A/B。
+
+### 10.46 修复：`updateVisible` 的 HIDDEN 跳过分支**不比内容就清 dirty**（用户症状的根，已修）
+
+`/lucistarlink layerdump`（本轮新增的诊断命令）在残留复现的那一轮里给出了决定性数据：
+`block sectionY=-2 state(upd/vis)=HIDDEN/HIDDEN differingBytes=308..960`——两层状态同为 HIDDEN、**数组内容不同**
+（updating 是清零后的新数组，visible 还握着旧光），而 `updateVisible()` 的早退分支只比状态不比内容（INIT 分支有
+`Arrays.equals`，HIDDEN 分支没有），于是合并永远不跑、dirty 还被清掉 → 客户端与存档永远读旧光。
+HIDDEN 下两层内容可以分叉的原因：HIDDEN 状态下的首次 `set()` 会新分配**全零** updating 数组而故意保持 HIDDEN 状态。
+
+**修法**（SWMRNibbleArray.updateVisible）：NULL/UNINIT 状态相等时跳过（两层无存储，不变量保证相等）；
+HIDDEN 状态相等时**只有数组引用相同才跳过**，不同就落到合并路径（arraycopy → visible 归零并通知）；
+INIT 保持原有的内容比较。**验收**：大 fill 门连跑 3 次 NO-RESIDUE（含此前必现的形状），layerdump 命中 0；
+梯度门 GREEN。**明确没修的**：两个 updating 侧的天光缺陷（3×3×3 循环 8/11、405 板 2 格 updSky）——
+那是"HIDDEN 段在引擎自己那一侧读作 0"的语义问题（10.41 的 sweep 入口），与本次的发布合并是两回事，是下一个窗口的任务。

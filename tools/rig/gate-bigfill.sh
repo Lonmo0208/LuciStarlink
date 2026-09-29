@@ -32,7 +32,7 @@ lucistarlink light 12 -38 0
 lucistarlink light 12 -48 -8
 lucistarlink light 12 -30 -8"
 
-mk_read() { { echo "$PROBES"; echo "say BF-$1"; [ -n "${2:-}" ] && echo "schedule function bigfilltest:$2 3s"; } \
+mk_read() { local extra=""; [ "$1" = read_cleared ] && extra="execute positioned 12 -34 -8 run lucistarlink layerdump 2"; { echo "$PROBES"; echo "$extra"; echo "say BF-$1"; [ -n "${2:-}" ] && echo "schedule function bigfilltest:$2 3s"; } \
   > $DP/data/bigfilltest/function/$1.mcfunction; }
 
 mk_read read_base big_place

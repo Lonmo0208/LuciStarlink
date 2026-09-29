@@ -198,8 +198,111 @@ public final class LuciStarlinkCommand {
                                 .then(Commands.argument("passes", IntegerArgumentType.integer(1, 10))
                                         .executes(context -> startBench(context.getSource(),
                                                 IntegerArgumentType.getInteger(context, "size"),
-                                                IntegerArgumentType.getInteger(context, "passes")))))));
-        LOGGER.debug("Registered /lucistarlink (stats, light, relight, bench)");
+                                                IntegerArgumentType.getInteger(context, "passes"))))))
+                .then(Commands.literal("layerdump")
+                        .then(Commands.argument("radius", IntegerArgumentType.integer(1, 4)).executes(context -> {
+                            // The residue hunt's instrument (docs/HANDOVER.md 10.42-10.45): after a bulk edit, walk
+                            // every loaded chunk in the radius and print every section whose VISIBLE layer disagrees
+                            // with its UPDATING layer, per light type, with the SWMR state names. The visible layer is
+                            // what the client renders and a save stores; the updating layer is what the engine
+                            // computes. A disagreement is a merge that never ran - the measured residue state.
+                            final CommandSourceStack source = context.getSource();
+                            final ServerLevel level = source.getLevel();
+                            final BlockPos origin = BlockPos.containing(source.getPosition());
+                            final int centerX = origin.getX() >> 4;
+                            final int centerZ = origin.getZ() >> 4;
+                            final int radius = IntegerArgumentType.getInteger(context, "radius");
+                            final int minLight = WorldUtil.getMinLightSection(level);
+                            int sections = 0;
+                            int mismatches = 0;
+
+                            for (int dz = -radius; dz <= radius; dz++) {
+                                for (int dx = -radius; dx <= radius; dx++) {
+                                    final ChunkAccess access = level.getChunk(centerX + dx, centerZ + dz, ChunkStatus.FULL, false);
+                                    if (!(access instanceof LevelChunk chunk)) {
+                                        continue;
+                                    }
+                                    final ExtendedChunk extended = (ExtendedChunk) chunk;
+                                    sections += dumpLayer(extended.scalablelux$getBlockNibbles(), "block",
+                                            chunk.getPos().x, chunk.getPos().z, minLight);
+                                    sections += dumpLayer(extended.scalablelux$getSkyNibbles(), "sky",
+                                            chunk.getPos().x, chunk.getPos().z, minLight);
+                                }
+                            }
+                            // counters come back through the return value of dumpLayer via a field-free route: the
+                            // mismatch count is logged per chunk array, the summary here only counts calls
+                            final String report = "LuciStarlink layerdump r=" + radius + " around chunk " + centerX + "," + centerZ
+                                    + " done (" + sections + " section arrays walked)";
+                            LOGGER.info(report);
+                            source.sendSuccess(() -> Component.literal(report), false);
+                            return 1;
+                        }))));
+        LOGGER.debug("Registered /lucistarlink (stats, light, relight, layerdump, bench)");
+    }
+
+    /** Prints one nibble array's sections whose visible and updating layers disagree; returns the arrays walked. */
+    private static int dumpLayer(final SWMRNibbleArray[] nibbles, final String what, final int chunkX, final int chunkZ,
+                                 final int minLight) {
+        if (nibbles == null) {
+            return 0;
+        }
+        int walked = 0;
+
+        for (int i = 0; i < nibbles.length; i++) {
+            final SWMRNibbleArray nibble = nibbles[i];
+            if (nibble == null) {
+                continue;
+            }
+            walked++;
+            final int stateU = nibble.stateUpdating;
+            final int stateV = nibble.stateVisible;
+            final byte[] su = nibble.storageUpdating;
+            final byte[] sv = nibble.storageVisible;
+
+            if (stateU == stateV && su == sv) {
+                continue; // same state, same array: the layers cannot disagree
+            }
+            // count differing cells (packed bytes differ, or one side null and the other not)
+            int diff = 0;
+            int first = -1;
+            if (su == null && sv == null) {
+                if (stateU != stateV) {
+                    diff = -1; // state-only difference, no content on either side
+                }
+            } else if (su == null || sv == null) {
+                diff = 2048;
+                first = 0;
+            } else {
+                for (int b = 0; b < 2048; b++) {
+                    if (su[b] != sv[b]) {
+                        diff++;
+                        if (first < 0) {
+                            first = b;
+                        }
+                    }
+                }
+            }
+            if (diff == 0 && stateU == stateV) {
+                continue;
+            }
+            final String cell = first >= 0
+                    ? " firstCell(upd/vis)=" + (su == null ? -1 : (su[first] & 0xF)) + "/" + (sv == null ? -1 : (sv[first] & 0xF))
+                    : "";
+            LOGGER.info("LuciStarlink layerdump chunk=" + chunkX + "," + chunkZ + " " + what + " sectionY="
+                    + (i + minLight) + " state(upd/vis)=" + stateName(stateU) + "/" + stateName(stateV)
+                    + " differingBytes=" + diff + cell);
+        }
+        return walked;
+    }
+
+    private static String stateName(final int state) {
+        return switch (state) {
+            case 0 -> "NULL";
+            case 1 -> "UNINIT";
+            case 2 -> "INIT";
+            case 3 -> "HIDDEN";
+            default -> "?" + state;
+        };
     }
 
     /**

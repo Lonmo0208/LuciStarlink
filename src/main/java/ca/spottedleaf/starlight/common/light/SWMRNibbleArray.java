@@ -53,12 +53,14 @@ public final class SWMRNibbleArray {
         }
     }
 
-    protected int stateUpdating;
-    protected volatile int stateVisible;
+    // public for the /lucistarlink layerdump diagnostic (the residue hunt reads them from the command); the engine
+    // itself keeps using the accessor methods, so the widened visibility changes no behaviour
+    public int stateUpdating;
+    public volatile int stateVisible;
 
-    protected byte[] storageUpdating;
-    protected boolean updatingDirty; // only returns whether storageUpdating is dirty
-    protected volatile byte[] storageVisible;
+    public byte[] storageUpdating;
+    public boolean updatingDirty; // only returns whether storageUpdating is dirty
+    public volatile byte[] storageVisible;
 
     public SWMRNibbleArray() {
         this(null, false); // lazy init
@@ -344,7 +346,21 @@ public final class SWMRNibbleArray {
             // but the on-disk and on-wire content is unchanged — no point sending a 2048-byte
             // DataLayer packet that the client already has.
             if (this.stateUpdating == this.stateVisible) {
-                if (this.stateUpdating == INIT_STATE_NULL || this.stateUpdating == INIT_STATE_UNINIT || this.stateUpdating == INIT_STATE_HIDDEN) {
+                // NULL/UNINIT carry no storage on either side by invariant, so equal states there mean equal layers.
+                // HIDDEN does NOT: a first write under HIDDEN allocates a fresh zeroed updating array while the
+                // visible side keeps the old light (the "set" path keeps the HIDDEN state on purpose), so equal
+                // states with DIFFERENT arrays is exactly the light-residue state measured on 2026-09-29
+                // (docs/HANDOVER.md 10.46): the client renders the stale visible array forever, because this early
+                // return skipped the merge and cleared the dirty flag. Only skip when the arrays cannot differ.
+                if (this.stateUpdating == INIT_STATE_NULL || this.stateUpdating == INIT_STATE_UNINIT) {
+                    this.updatingDirty = false;
+                    if (LuxProfiler.enabled()) {
+                        LuxProfiler.identicalSkips.increment();
+                    }
+                    return false;
+                }
+                if (this.stateUpdating == INIT_STATE_HIDDEN
+                        && this.storageUpdating == this.storageVisible) {
                     this.updatingDirty = false;
                     if (LuxProfiler.enabled()) {
                         LuxProfiler.identicalSkips.increment();
@@ -352,7 +368,8 @@ public final class SWMRNibbleArray {
                     return false;
                 }
                 // INIT state: compare byte arrays (both null or content-equal)
-                if (Arrays.equals(this.storageUpdating, this.storageVisible)) {
+                if (this.stateUpdating == INIT_STATE_INIT
+                        && Arrays.equals(this.storageUpdating, this.storageVisible)) {
                     if (this.storageUpdating != this.storageVisible) {
                         freeBytes(this.storageUpdating);
                         this.storageUpdating = this.storageVisible;
