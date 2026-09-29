@@ -1399,3 +1399,20 @@ relight 后： 与基线 0 行不同，与"清掉后" 2 行不同               
 （三个门的探针本来就同时打印两层），然后找出哪条路径写了 nibble 却没同步可见层。候选按调用点排查：
 `StarLightInterface` 的 bulk/grouped 分支、`SkyStarLightEngine.settleSkyWindow` 的 install、以及 lane 的 pack。
 修之前同样要门 + 指纹 + 同窗口 A/B，且以"玩家看到的可见层"为判据——这一条正是本次学到的东西。
+
+**10.42 的两条路线都对不上（同门同形状，只差开关）**：
+
+| 配置 | 清掉后 | 与 relight 不同 | 结论 |
+|---|---|---|---|
+| `-Dscalablelux.ownEdit=false -Dscalablelux.recomputeSky=false`（基座路径） | cleared == base == relight | 0 行 | **干净** |
+| 默认（我们的派发规则把 ≤16 块的小 burst 送基座队列） | (12,-30,-8) `block=2 raw=2 **updBlock=0**` | 2 行 | **可见层陈旧**（引擎内部对，客户端/存档那层没同步） |
+| `-Dscalablelux.inlineMinBurst=0`（强制走我们的 grouped 路径） | (12,-36,-8) `block=1 updBlock=1`、(20,-36,-8) `block=5`、(32,-38,-8) `block=4` | **10 行** | **方块光真的错**（两层都留着光） |
+
+⇒ 残留是**我们的**（基座对照干净），而且**两条路线各有各的毛病**：
+默认路线漏同步可见层（玩家看到的就是它），关闭派发规则则让我们自己的通路留下真实错光。
+所以不存在"换个开关就干净"的配置——两条都要修，且**判据要同时看两层**（`block`/`updBlock`、`sky`/`updSky`）。
+
+**下一轮的顺序**（不改动前先做）：① 在三个门里把"编辑之后每个被写过的 section 必须 `visible == updating`"变成硬不变量并跑一遍，
+量化两条路线各自有多少 section 不同步（探针已同时打印两层）；② 查 grouped 路径为什么留光——它只 seed 了 block，天光半边在
+2.0.16 之后被 `LUCIS_SKY_DEFERRED` 托管，**方块光的 decrease 是否被丢**是首要问题（历史同类：2.0.6 的 null 位置集）；
+③ 可见层那条查 publish：`StarLightInterface` 的 grouped/bulk 分支与基座 `updateVisible` 的调用点。
