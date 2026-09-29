@@ -1416,3 +1416,16 @@ relight 后： 与基线 0 行不同，与"清掉后" 2 行不同               
 量化两条路线各自有多少 section 不同步（探针已同时打印两层）；② 查 grouped 路径为什么留光——它只 seed 了 block，天光半边在
 2.0.16 之后被 `LUCIS_SKY_DEFERRED` 托管，**方块光的 decrease 是否被丢**是首要问题（历史同类：2.0.6 的 null 位置集）；
 ③ 可见层那条查 publish：`StarLightInterface` 的 grouped/bulk 分支与基座 `updateVisible` 的调用点。
+
+**10.43 不变量落地：`tools/rig/check-layers.sh`（两层一致性，一次一条命令）**
+
+判据：编辑之后每个被写过的 section 必须 `visible == updating`（`block=`/`sky=` 是客户端与存档读的那层，
+`updBlock=`/`updSky=` 是引擎自己读写的那层）。带 `--selftest`（人造坏行必须被抓到），可对任意门日志批量跑。
+拿现有日志实测：
+```
+gate-bigfill.log（inlineMinBurst=0 那次）：读数 48，两层不一致 4   —— x=12,y=-30,z=-8: sky=15 而 updSky=0
+gate-cycle.log（默认那次）：                读数 168，两层不一致 0  —— 它的错是"两层一致但值错"（0/13）
+```
+⇒ **两处错在同一个格子里同时露出的那张脸**：updating 存储被置空（HIDDEN）而 visible 还留着旧值——
+玩家看到旧光（10.42 的截图），引擎所有读返回 0（10.41 里 sweep 失效的原因）。下一个窗口从这两行数字开始，
+先确认"谁把 updating 置空、置空时该不该同步 visible、读 HIDDEN 段是否应回退高度图判 15"，再动代码。
