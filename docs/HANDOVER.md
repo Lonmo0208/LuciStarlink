@@ -1442,3 +1442,22 @@ gate-cycle.log（默认那次）：                读数 168，两层不一致 
 要找的是**置空那一步**的调用点（候选：基座引擎的 empty-section / hide 路径、`SWMRNibbleArray` 的重置），
 以及顺带决定"读 HIDDEN 段是否应按高度图回退判 15"（10.41 里 sweep 失效的同一件事）。
 `check-layers.sh` 现在每次门都会给出这个格子的两层读数，修完必须它归零。
+
+### 10.45 用户的第二个关键观察：「退出存档重新进就正常，再放再清又残留」
+
+这条把病灶钉死了：**退出重进正常 ⇒ 存档与 updating 层是对的；活着的会话里 visible 层是旧的 ⇒
+毛病只在"发布合并"这一步，且是服务器侧的**（无头门里 `lucistarlink light` 读的就是服务器自己的数组，
+`check-layers.sh` 显示 visible=2/updating=0 —— 不是客户端丢包，是服务器自己的 visible 没合并）。
+
+**发布链路已读完**（SWMRNibbleArray.updateVisible 的合并逻辑本身是对的：updating=NULL 时会把 visible 置 null 并返回 true），
+所以问题不是"合并写错"，而是**那次合并根本没发生**。`updateVisible(lightAccess)` 只遍历**当前 cache 里的 nibble**，
+且跳过 `!notifyUpdateCache && !isDirty()` 的项——所以候选只剩两类：
+① setNull/de-init 之后、publish 之前，nibble 已经不在 cache 里（cache 生命周期与 de-init 的时序错位）；
+② isDirty 在 setNull 后被 `updatingDirty=false` 影响到某个 state 相等的分支（stateVisible 已是 NULL 的场景）。
+加上 `swapUpdatingAndMarkDirty` 的"首次写交换数组"语义，visible 数组引用在 set/merge 间被换手，
+**引用身份**是下一轮要盯的点（merge 的 arraycopy 与 freeBytes 都依赖它）。
+
+**下一轮第一件事（单一任务，不发散）**：在残留门里加一步——清掉之后，把受影响 chunk 的**每一个** nibble
+（block+sky × 全 section）按「visible!=updating」过一遍并打印 section 坐标，同时给 `updateVisible` 的
+"跳过分支"加计数器。这一步会把 ①/② 变成可判的数据，然后一次修对。判据不变：三个门 + check-layers 归零 +
+四格指纹 + 同窗口 A/B。
