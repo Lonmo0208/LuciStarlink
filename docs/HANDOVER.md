@@ -1429,3 +1429,16 @@ gate-cycle.log（默认那次）：                读数 168，两层不一致 
 ⇒ **两处错在同一个格子里同时露出的那张脸**：updating 存储被置空（HIDDEN）而 visible 还留着旧值——
 玩家看到旧光（10.42 的截图），引擎所有读返回 0（10.41 里 sweep 失效的原因）。下一个窗口从这两行数字开始，
 先确认"谁把 updating 置空、置空时该不该同步 visible、读 HIDDEN 段是否应回退高度图判 15"，再动代码。
+
+**10.44 试过但**没解决问题**的一条（已回退，留作下一轮的第一候选）**：`lucis$settleGroup` 只跑
+`performLightDecrease` → `updateVisible`，**从不跑 `performLightIncrease`**（天光与方块两边都是），
+而基座自己的 per-chunk 任务和我们自己的延迟窗口都是 decrease + increase 成对跑的——这是同一条路径上的不对称。
+加了两行 increase 后跑大 fill 门：**残留依旧**（(12,-30,-8) 仍是 visible `block=2` / updating `0`，且那格 `sky=15` 而 `updSky=0`），
+所以它不是这个形状的根因，按纪律**回退**（热路径上的改动不许带着未验证的行为进树）。
+
+**当前唯一被数据锁定的病态状态**（下一轮从这里下手，别的都别猜）：
+`x=12,y=-30,z=-8`：**updating 两层都是 0，visible 两层都还是旧值**（block 2 / sky 15）。
+即"某个 section 的 updating 存储被置空/隐藏，但没有同步 visible"，而客户端渲染与存档读的正是 visible。
+要找的是**置空那一步**的调用点（候选：基座引擎的 empty-section / hide 路径、`SWMRNibbleArray` 的重置），
+以及顺带决定"读 HIDDEN 段是否应按高度图回退判 15"（10.41 里 sweep 失效的同一件事）。
+`check-layers.sh` 现在每次门都会给出这个格子的两层读数，修完必须它归零。
