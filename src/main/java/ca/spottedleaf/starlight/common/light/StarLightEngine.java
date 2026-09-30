@@ -23,6 +23,8 @@ import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.LightChunkGetter;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -34,6 +36,34 @@ import java.util.function.IntConsumer;
 public abstract class StarLightEngine {
 
     protected static final BlockState AIR_BLOCK_STATE = Blocks.AIR.defaultBlockState();
+
+    /*
+     * Server half of the residue probe. The client half lives in BaseLevelLightEngineVanillaInterface and logs the
+     * same one section; without both, "the server never notified it" and "the client never applied it" look like the
+     * same observation in the log, and they mean opposite things. -Dlucistarlink.clientPos=x,y,z arms both.
+     */
+    private static final Logger LUCIS_PROBE_LOGGER = LoggerFactory.getLogger("LuciStarlink");
+    private static final int[] LUCIS_PROBE_SECTION = lucis$parseProbeSection();
+
+    private static int[] lucis$parseProbeSection() {
+        final String raw = System.getProperty("lucistarlink.clientPos");
+        if (raw == null) {
+            return null;
+        }
+        final String[] parts = raw.split(",");
+        if (parts.length != 3) {
+            return null;
+        }
+        try {
+            return new int[] {
+                Integer.parseInt(parts[0].trim()) >> 4,
+                Integer.parseInt(parts[1].trim()) >> 4,
+                Integer.parseInt(parts[2].trim()) >> 4
+            };
+        } catch (final NumberFormatException ex) {
+            return null;
+        }
+    }
 
     protected static final AxisDirection[] DIRECTIONS = AxisDirection.values();
     protected static final AxisDirection[] AXIS_DIRECTIONS = DIRECTIONS;
@@ -60,6 +90,7 @@ public abstract class StarLightEngine {
         public final int x;
         public final int y;
         public final int z;
+        public final int localIndexOffset;
         public final Direction nms;
         public final long everythingButThisDirection;
         public final long everythingButTheOppositeDirection;
@@ -68,6 +99,7 @@ public abstract class StarLightEngine {
             this.x = x;
             this.y = y;
             this.z = z;
+            this.localIndexOffset = x + (z << 4) + (y << 8);
             this.nms = Direction.fromDelta(x, y, z);
             this.everythingButThisDirection = (long)(ALL_DIRECTIONS_BITSET ^ (1 << this.ordinal()));
             // positive is always even, negative is always odd. Flip the 1 bit to get the negative direction.
@@ -310,6 +342,12 @@ public abstract class StarLightEngine {
                 published++;
                 if (LuxProfiler.enabled()) {
                     (this.skylightPropagator ? LuxProfiler.skyNotify : LuxProfiler.blockNotify).increment();
+                }
+                if (LUCIS_PROBE_SECTION != null
+                        && chunkX == LUCIS_PROBE_SECTION[0] && chunkY == LUCIS_PROBE_SECTION[1]
+                        && chunkZ == LUCIS_PROBE_SECTION[2]) {
+                    LUCIS_PROBE_LOGGER.info("ServerLightProbe notify " + (this.skylightPropagator ? "SKY" : "BLOCK")
+                            + " sec=" + chunkX + "," + chunkY + "," + chunkZ + " notifyCache=" + this.notifyUpdateCache[index]);
                 }
                 lightAccess.onLightUpdate(this.skylightPropagator ? LightLayer.SKY : LightLayer.BLOCK, SectionPos.of(chunkX, chunkY, chunkZ));
             }
@@ -1344,13 +1382,13 @@ public abstract class StarLightEngine {
                     final int offY = posY + propagate.y;
                     final int offZ = posZ + propagate.z;
 
+                    // R5 targeting: how many neighbour cells are examined at all, and how many of those already hold
+                    // the level this propagation wants to write - the second number is the work a column rule could
+                    // skip outright (this loop is the whole structure_cube deficit: 24240 pops per pass).
                     final int sectionIndex = (offX >> 4) + 5 * (offZ >> 4) + (5 * 5) * (offY >> 4) + sectionOffset;
                     final int localIndex = (offX & 15) | ((offZ & 15) << 4) | ((offY & 15) << 8);
 
                     final SWMRNibbleArray currentNibble = this.nibbleCache[sectionIndex];
-                    // R5 targeting: how many neighbour cells are examined at all, and how many of those already hold
-                    // the level this propagation wants to write - the second number is the work a column rule could
-                    // skip outright (this loop is the whole structure_cube deficit: 24240 pops per pass).
                     if (LuxProfiler.enabled()) { LuxProfiler.bfsNeighbours++; }
                     final int currentLevel;
                     if (currentNibble != null) {
@@ -1487,6 +1525,17 @@ public abstract class StarLightEngine {
         }
     }
 
+    private static volatile boolean LUCIS_SAME_SECTION_NEIGHBOURS =
+            !"false".equalsIgnoreCase(System.getProperty("scalablelux.sameSectionNeighbours", "true"));
+
+    public static void lucis$sameSectionNeighbours(final boolean on) {
+        LUCIS_SAME_SECTION_NEIGHBOURS = on;
+    }
+
+    public static boolean lucis$sameSectionNeighbours() {
+        return LUCIS_SAME_SECTION_NEIGHBOURS;
+    }
+
     protected final void performLightDecrease(final LightChunkGetter lightAccess) {
         final BlockGetter world = lightAccess.getLevel();
         long[] queue = this.decreaseQueue;
@@ -1512,6 +1561,18 @@ public abstract class StarLightEngine {
             if (LuxProfiler.enabled()) { LuxProfiler.bfsPops++; }
             final AxisDirection[] checkDirections = OLD_CHECK_DIRECTIONS[(int)((queueValue >>> (6 + 6 + 16 + 4)) & 63)];
 
+            final int lucisFracX = posX & 15;
+            final int lucisFracY = posY & 15;
+            final int lucisFracZ = posZ & 15;
+            final boolean lucisSameSection = LUCIS_SAME_SECTION_NEIGHBOURS
+                    && lucisFracX != 0 && lucisFracX != 15
+                    && lucisFracY != 0 && lucisFracY != 15
+                    && lucisFracZ != 0 && lucisFracZ != 15;
+            final int lucisPopSection = (posX >> 4) + 5 * (posZ >> 4) + (5 * 5) * (posY >> 4) + sectionOffset;
+            final int lucisPopLocal = lucisFracX | (lucisFracZ << 4) | (lucisFracY << 8);
+            final SWMRNibbleArray lucisPopNibble = lucisSameSection ? this.nibbleCache[lucisPopSection] : null;
+            final byte[] lucisPopBytes = lucisPopNibble == null ? null : lucisPopNibble.storageUpdating;
+
             if ((queueValue & FLAG_HAS_SIDED_TRANSPARENT_BLOCKS) == 0L) {
                 // we don't need to worry about our state here.
                 for (final AxisDirection propagate : checkDirections) {
@@ -1519,15 +1580,30 @@ public abstract class StarLightEngine {
                     final int offY = posY + propagate.y;
                     final int offZ = posZ + propagate.z;
 
-                    final int sectionIndex = (offX >> 4) + 5 * (offZ >> 4) + (5 * 5) * (offY >> 4) + sectionOffset;
-                    final int localIndex = (offX & 15) | ((offZ & 15) << 4) | ((offY & 15) << 8);
-
-                    final SWMRNibbleArray currentNibble = this.nibbleCache[sectionIndex];
+                    final int sectionIndex;
+                    final int localIndex;
+                    final SWMRNibbleArray currentNibble;
                     final int lightLevel;
 
-                    if (currentNibble == null || (lightLevel = currentNibble.getUpdating(localIndex)) == 0) {
-                        // already at lowest (or unloaded), nothing we can do
-                        continue;
+                    if (lucisSameSection) {
+                        final byte[] lucisBytes = lucisPopBytes;
+                        if (lucisBytes == null) {
+                            continue;
+                        }
+                        sectionIndex = lucisPopSection;
+                        localIndex = lucisPopLocal + propagate.localIndexOffset;
+                        currentNibble = lucisPopNibble;
+                        lightLevel = (lucisBytes[localIndex >>> 1] >>> ((localIndex & 1) << 2)) & 0xF;
+                        if (lightLevel == 0) {
+                            continue;
+                        }
+                    } else {
+                        sectionIndex = (offX >> 4) + 5 * (offZ >> 4) + (5 * 5) * (offY >> 4) + sectionOffset;
+                        localIndex = (offX & 15) | ((offZ & 15) << 4) | ((offY & 15) << 8);
+                        currentNibble = this.nibbleCache[sectionIndex];
+                        if (currentNibble == null || (lightLevel = currentNibble.getUpdating(localIndex)) == 0) {
+                            continue;
+                        }
                     }
 
                     // The material-plane fast path (docs/HANDOVER.md 10.33): a section with a trustworthy plane has
@@ -1561,7 +1637,7 @@ public abstract class StarLightEngine {
                         }
                         final int emittedLight = (lucisPlane == null
                                 ? blockState.getLightEmission()
-                                : (lucisPlane.emission[localIndex] & 0xFF)) & emittedMask; // opacity cached
+                                : (lucisPlane.emission[localIndex] & 0xFF)) & emittedMask;
                         if (emittedLight != 0) {
                             // re-propagate source
                             // note: do not set recheck level, or else the propagation will fail

@@ -7,6 +7,7 @@
   "mixins": [
     "common.blockstate.BlockStateBaseMixin",
     "common.chunk.ChunkAccessMixin",
+    "common.chunk.ChunkHolderProbeMixin",
     "common.chunk.EmptyLevelChunkMixin",
     "common.chunk.ImposterProtoChunkMixin",
     "common.chunk.LevelChunkMixin",

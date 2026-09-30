@@ -114,6 +114,12 @@ loom {
             property "scalablelux.telemetrySeconds", providers.gradleProperty("probeTelemetrySeconds").getOrElse("5")
             property "scalablelux.profile", providers.gradleProperty("probeProfile").getOrElse("false")
             vmArg "-Xmx3G"
+            providers.gradleProperty("slArgs").orNull?.trim()?.split("\\s+")?.each { arg ->
+                if (arg.startsWith("-D") && arg.contains("=")) {
+                    def kv = arg.substring(2).split("=", 2)
+                    property kv[0], kv[1]
+                }
+            }
         }
         clientMultiplayer {
             client()
@@ -122,6 +128,12 @@ loom {
             programArgs "--quickPlayMultiplayer", providers.gradleProperty("clientServer").getOrElse("127.0.0.1:25565")
             property "scalablelux.telemetrySeconds", providers.gradleProperty("probeTelemetrySeconds").getOrElse("5")
             vmArg "-Xmx3G"
+            providers.gradleProperty("slArgs").orNull?.trim()?.split("\\s+")?.each { arg ->
+                if (arg.startsWith("-D") && arg.contains("=")) {
+                    def kv = arg.substring(2).split("=", 2)
+                    property kv[0], kv[1]
+                }
+            }
         }
         // A server in its OWN run directory. The default runServer shares run/ with the client, and two live JVMs
         // cannot share it: the second one dies at startup trying to take over run/logs/latest.log
