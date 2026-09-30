@@ -64,26 +64,33 @@ computing the light, not by the harness's own block loop.
 
 | workload (what a player calls it) | **LuciStarlink 2.0** | ScalableLux | 1.x (Lucis line) |
 |---|---|---|---|
-| `block_toggle_border` — placing/breaking fast along a chunk border | 5.01 ms | 4.16 ms | **0.76 ms** |
-| `structure_cube` — building a solid structure | **5.11 ms** | 5.36 ms | 3.37 ms |
-| `dense_chunk_patch` — large-area edits | **3.48 ms** | 5.74 ms | 2.85 ms |
-| `sky_hole` — a single small edit | **1.17 ms** | 1.18 ms | 3.85 ms |
+| `block_toggle_border` — placing/breaking fast along a chunk border | 5.08 ms | 5.55 ms | **4.35 ms** |
+| `structure_cube` — building a solid structure | **3.56 ms** | 7.19 ms | 6.34 ms |
+| `dense_chunk_patch` — large-area edits | **1.39 ms** | 5.16 ms | 4.14 ms |
+| `sky_hole` — a single small edit | 1.09 ms | **1.01 ms** | 1.78 ms |
 
 **Player metric** — `bench.pass_wall_actual`, the wall time of a whole pass, which *does* include the tick crossings
 a player waits through (median / best round):
 
 | workload | LuciStarlink 2.0 | ScalableLux | 1.x |
 |---|---|---|---|
-| border | 48 / 47 ms | 49 / 49 ms | 102 / 83 ms |
-| structure | 47 / 47 ms | 50 / 48 ms | 83 / 48 ms |
-| dense | 49 / 48 ms | 49 / 49 ms | 80 / 57 ms |
-| sky_hole | 49 / 49 ms | 50 / 50 ms | 70 / 48 ms |
+| border | 45 / 45 ms | 55 / 39 ms | 67 / 36 ms |
+| structure | 49 / 45 ms | 47 / 43 ms | 63 / 52 ms |
+| dense | 57 / 52 ms | 52 / 50 ms | 58 / 50 ms |
+| sky_hole | 51 / 48 ms | 48 / 41 ms | 75 / 17 ms |
 
-The window was **loaded** (CPU average 44.3%, peak 60.1% — the machine this project measures on runs other work by
+The window was **loaded** (CPU average 71%, peak 83% — the machine this project measures on runs other work by
 design). Same-session interleaving is what makes the comparison valid; absolute values are the player-facing picture,
-not a quiet-room number. The same build was measured in a lighter window (CPU average 40.0%) at border 4.30,
-structure 4.44, dense 3.75, sky_hole 0.93 — that spread is the honest resolution of this machine, so read the table as
-"within roughly ±30%", not as three significant figures.
+not a quiet-room number. Round-to-round spread is part of the reading: the 1.x column swings 2–5× between rounds on
+this machine (its IQR has always been 5–10× the others'), so its column is best compared on its best round, while
+this engine stays within 1.4×. Read the tables as "within roughly ±30%", not as three significant figures.
+
+**Known issue, stated up front (2026-09-30):** a bulk edit (a large `/fill`) that is then undone can leave light
+residue in the live session — a lit patch where the removed blocks used to be — until a relight or a relog. Two of
+the three sequences behind it are fixed (2.0.17: the publish-side merge skip and the sky sweep's entry on
+de-initialised sections); at least one sequence remains, and it reproduces in a live client while the headless
+gates pass. Diagnosis tooling ships with the mod (`/lucistarlink layerdump`) and the full state of the hunt is in
+[docs/REMAINING-WORK.md](docs/REMAINING-WORK.md) — this is the first thing to fix, before any performance work.
 
 **The honest reading:**
 

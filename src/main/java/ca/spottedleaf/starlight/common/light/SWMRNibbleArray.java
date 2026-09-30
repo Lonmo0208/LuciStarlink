@@ -390,7 +390,13 @@ public final class SWMRNibbleArray {
                     this.storageVisible = this.storageUpdating.clone();
                 } else {
                     if (this.storageUpdating != this.storageVisible) {
-                        System.arraycopy(this.storageUpdating, 0, this.storageVisible, 0, ARRAY_SIZE);
+                        // a HIDDEN section can carry a null updating array while visible holds real data (load-path
+                        // sections); the merge then means "updating is empty" - zero visible rather than crash
+                        if (this.storageUpdating == null) {
+                            java.util.Arrays.fill(this.storageVisible, (byte) 0);
+                        } else {
+                            System.arraycopy(this.storageUpdating, 0, this.storageVisible, 0, ARRAY_SIZE);
+                        }
                     }
                 }
 
@@ -472,6 +478,12 @@ public final class SWMRNibbleArray {
     public void set(final int index, final int value) {
         if (!this.updatingDirty) {
             this.swapUpdatingAndMarkDirty();
+        }
+        // defensive: a de-initialised section can carry a null updating array while still marked dirty (an external
+        // writer racing the engine's own de-init); allocate rather than crash - the section is being written anyway
+        if (this.storageUpdating == null) {
+            this.storageUpdating = this.allocateBytes();
+            java.util.Arrays.fill(this.storageUpdating, (byte) 0);
         }
         final int shift = (index & 1) << 2;
         final int i = index >>> 1;
