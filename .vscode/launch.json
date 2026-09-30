@@ -1,0 +1,269 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "BenchmarkC2meOnlyServer",
+      "presentation": {
+        "group": "Mod Development - lucistarlink",
+        "order": 0
+      },
+      "projectName": "lucistarlink",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\benchmarkC2meOnlyServerRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\benchmarkC2meOnlyServerRunVmArgs.txt",
+        "-Dfml.modFolders\u003dlucistarlink%%C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\run-benchmark-c2me-only",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    },
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "BenchmarkC2meServer",
+      "presentation": {
+        "group": "Mod Development - lucistarlink",
+        "order": 1
+      },
+      "projectName": "lucistarlink",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\benchmarkC2meServerRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\benchmarkC2meServerRunVmArgs.txt",
+        "-Dfml.modFolders\u003dlucistarlink%%C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\run-benchmark-c2me",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    },
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "BenchmarkGeneratorAcceleratorOnlyServer",
+      "presentation": {
+        "group": "Mod Development - lucistarlink",
+        "order": 2
+      },
+      "projectName": "lucistarlink",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\benchmarkGeneratorAcceleratorOnlyServerRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\benchmarkGeneratorAcceleratorOnlyServerRunVmArgs.txt",
+        "-Dfml.modFolders\u003dlucistarlink%%C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\run-benchmark-generator-accelerator-only",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    },
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "BenchmarkGeneratorAcceleratorServer",
+      "presentation": {
+        "group": "Mod Development - lucistarlink",
+        "order": 3
+      },
+      "projectName": "lucistarlink",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\benchmarkGeneratorAcceleratorServerRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\benchmarkGeneratorAcceleratorServerRunVmArgs.txt",
+        "-Dfml.modFolders\u003dlucistarlink%%C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\run-benchmark-generator-accelerator",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    },
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "BenchmarkScalableLuxServer",
+      "presentation": {
+        "group": "Mod Development - lucistarlink",
+        "order": 4
+      },
+      "projectName": "lucistarlink",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\benchmarkScalableLuxServerRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\benchmarkScalableLuxServerRunVmArgs.txt",
+        "-Dfml.modFolders\u003dlucistarlink%%C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\run-benchmark-scalablelux",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    },
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "BenchmarkServer",
+      "presentation": {
+        "group": "Mod Development - lucistarlink",
+        "order": 5
+      },
+      "projectName": "lucistarlink",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\benchmarkServerRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\benchmarkServerRunVmArgs.txt",
+        "-Dfml.modFolders\u003dlucistarlink%%C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\run-benchmark-lucistarlink",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    },
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "BenchmarkVanillaServer",
+      "presentation": {
+        "group": "Mod Development - lucistarlink",
+        "order": 6
+      },
+      "projectName": "lucistarlink",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\benchmarkVanillaServerRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\benchmarkVanillaServerRunVmArgs.txt",
+        "-Dfml.modFolders\u003dlucistarlink%%C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\run-benchmark-vanilla",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    },
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "Client",
+      "presentation": {
+        "group": "Mod Development - lucistarlink",
+        "order": 7
+      },
+      "projectName": "lucistarlink",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\clientRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\clientRunVmArgs.txt",
+        "-Dfml.modFolders\u003dlucistarlink%%C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\run",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    },
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "ClientMeasure",
+      "presentation": {
+        "group": "Mod Development - lucistarlink",
+        "order": 8
+      },
+      "projectName": "lucistarlink",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\clientMeasureRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\clientMeasureRunVmArgs.txt",
+        "-Dfml.modFolders\u003dlucistarlink%%C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\run",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    },
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "ClientMultiplayer",
+      "presentation": {
+        "group": "Mod Development - lucistarlink",
+        "order": 9
+      },
+      "projectName": "lucistarlink",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\clientMultiplayerRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\clientMultiplayerRunVmArgs.txt",
+        "-Dfml.modFolders\u003dlucistarlink%%C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\run",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    },
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "Data",
+      "presentation": {
+        "group": "Mod Development - lucistarlink",
+        "order": 10
+      },
+      "projectName": "lucistarlink",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\dataRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\dataRunVmArgs.txt",
+        "-Dfml.modFolders\u003dlucistarlink%%C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\run",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    },
+    {
+      "type": "java",
+      "request": "launch",
+      "name": "Server",
+      "presentation": {
+        "group": "Mod Development - lucistarlink",
+        "order": 11
+      },
+      "projectName": "lucistarlink",
+      "mainClass": "net.neoforged.devlaunch.Main",
+      "args": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\serverRunProgramArgs.txt"
+      ],
+      "vmArgs": [
+        "@C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\build\\moddev\\serverRunVmArgs.txt",
+        "-Dfml.modFolders\u003dlucistarlink%%C:\\Users\\admin\\Desktop\\0920\\LuciStarlink\\bin\\main"
+      ],
+      "cwd": "${workspaceFolder}\\run",
+      "env": {},
+      "console": "internalConsole",
+      "shortenCommandLine": "none"
+    }
+  ]
+}

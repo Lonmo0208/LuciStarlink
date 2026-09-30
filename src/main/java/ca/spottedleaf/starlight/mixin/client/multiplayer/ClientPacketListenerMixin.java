@@ -14,6 +14,7 @@ import net.minecraft.network.TickablePacketListener;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
+import net.minecraft.network.protocol.game.ClientboundLightUpdatePacket;
 import net.minecraft.network.protocol.game.ClientboundLightUpdatePacketData;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.LightLayer;
@@ -28,6 +29,10 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.BitSet;
 
 @Mixin(value = ClientPacketListener.class, priority = 1001)
 public abstract class ClientPacketListenerMixin extends ClientCommonPacketListenerImpl implements ClientGamePacketListener, TickablePacketListener {
@@ -43,6 +48,80 @@ public abstract class ClientPacketListenerMixin extends ClientCommonPacketListen
 
     @Shadow
     private ClientLevel level;
+
+    /*
+     * Third link of the residue probe, and the only one that can settle the wire. The two server-side probes say the
+     * section bit was set on the holder; the per-section client probe says the section never arrived. Those cannot
+     * both be true, so read what was actually put on the wire instead of what either side believes it did: the packet
+     * carries its masks, and the masks are the truth. -Dlucistarlink.clientPos=x,y,z arms this and the other two.
+     */
+    private static final Logger LUCIS_PROBE_LOGGER = LoggerFactory.getLogger("LuciStarlink");
+    private static final int[] LUCIS_PROBE_SECTION = lucis$parseProbeSection();
+
+    private static int[] lucis$parseProbeSection() {
+        final String raw = System.getProperty("lucistarlink.clientPos");
+        if (raw == null) {
+            return null;
+        }
+        final String[] parts = raw.split(",");
+        if (parts.length != 3) {
+            return null;
+        }
+        try {
+            return new int[] {
+                Integer.parseInt(parts[0].trim()) >> 4,
+                Integer.parseInt(parts[1].trim()) >> 4,
+                Integer.parseInt(parts[2].trim()) >> 4
+            };
+        } catch (final NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    /** Renders a mask as the light-section Ys it actually selects: bit i means {@code minLightSection + i}. */
+    private static String lucis$maskSections(final BitSet mask, final int minLightSection, final int count) {
+        if (mask == null) {
+            return "null";
+        }
+        final StringBuilder out = new StringBuilder();
+        for (int i = 0; i < count; i++) {
+            if (mask.get(i)) {
+                if (out.length() > 0) {
+                    out.append(',');
+                }
+                out.append(minLightSection + i);
+            }
+        }
+        return out.length() == 0 ? "-" : out.toString();
+    }
+
+    private void lucis$probeLightData(final int chunkX, final int chunkZ, final ClientboundLightUpdatePacketData data) {
+        final int[] probe = LUCIS_PROBE_SECTION;
+        if (probe == null || data == null || chunkX != probe[0] || chunkZ != probe[2]) {
+            return;
+        }
+        final LevelLightEngine engine = this.level.getChunkSource().getLightEngine();
+        final int min = engine.getMinLightSection();
+        final int count = engine.getLightSectionCount();
+        LUCIS_PROBE_LOGGER.info("ClientLightPacket chunk=" + chunkX + "," + chunkZ
+                + " minLightSection=" + min + " count=" + count
+                + " blockMask=[" + lucis$maskSections(data.getBlockYMask(), min, count) + "]"
+                + " emptyBlockMask=[" + lucis$maskSections(data.getEmptyBlockYMask(), min, count) + "]"
+                + " skyMask=[" + lucis$maskSections(data.getSkyYMask(), min, count) + "]"
+                + " emptySkyMask=[" + lucis$maskSections(data.getEmptySkyYMask(), min, count) + "]"
+                + " blockUpdates=" + data.getBlockUpdates().size()
+                + " skyUpdates=" + data.getSkyUpdates().size());
+    }
+
+    @Inject(method = "handleLightUpdatePacket", at = @At("HEAD"))
+    private void lucis$probeLightUpdatePacket(final ClientboundLightUpdatePacket packet, final CallbackInfo ci) {
+        this.lucis$probeLightData(packet.getX(), packet.getZ(), packet.getLightData());
+    }
+
+    @Inject(method = "handleLevelChunkWithLight", at = @At("HEAD"))
+    private void lucis$probeLevelChunkWithLight(final ClientboundLevelChunkWithLightPacket packet, final CallbackInfo ci) {
+        this.lucis$probeLightData(packet.getX(), packet.getZ(), packet.getLightData());
+    }
 
     /*
       Now in 1.18 Mojang has added logic to delay rendering chunks until their lighting is ready (as they are delaying
