@@ -14,7 +14,7 @@ V2=/e/LuciStarlin/LuciStarlink-LS-V2
 MODS="$ROOT/run-benchmark-scalablelux/mods"
 OUT=/e/LuciStarlin/sl-jar/fourway; mkdir -p "$OUT"
 US_JAR=/e/LuciStarlin/sl-jar/ls2-fourway-rig.jar
-PREV_JAR=/e/LuciStarlin/sl-jar/ls2-skysource-rig.jar
+PREV_JAR=/e/LuciStarlin/sl-jar/ls2-premerge-rig.jar
 SL_JAR=/e/LuciStarlin/ScalableLux-neoforge-build/ScalableLux-Master/build/libs/ScalableLux-neoforge-0.3.0-alpha.0.8-all.jar
 P='-Dlucistarlink.benchmark.prepareRing=8 -Dlucistarlink.benchmark.quiesceSettleMs=1000 -Dlucistarlink.benchmark.globalEngineBarrier=false'
 P_US="$P -Dscalablelux.imageLane=true"
@@ -62,7 +62,7 @@ run_one() { # $1 = side, $2 = workload, $3 = round
   local side=$1 wl=$2 rep=$3 task dir mod jar extra
   case "$side" in
     us)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR";   extra="$P_US";;
-    prev) task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$PREV_JAR"; extra="$P_US";;
+    usoff) task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR"; extra="$P_US -Dscalablelux.sameSectionNeighbours=false";;
     sl)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=scalablelux;      jar="$SL_JAR";   extra="$P";;
     ls1)  task=runBenchmarkServer;             dir="$ROOT/run-benchmark-lucistarlink"; mod=lucistarlink;   jar="";          extra="$P";;
   esac
@@ -72,18 +72,27 @@ run_one() { # $1 = side, $2 = workload, $3 = round
   local tag; tag="$side-$wl-r$rep"
   local out="$OUT/$tag.jsonl"; local log="$OUT/$tag.log"
   local fp=""; [ "$wl" = structure_cube ] && fp='-PbenchmarkLightFingerprint=-40,32,-40,55,96,55'
+  local rc=0 mp="" attempt
+  # one retry per run: the 2026-09-30 window lost 25 of 48 runs to a loaded machine (rc=-1 / empty result), and a
+  # retry is what turns that into a usable table instead of a half-empty one
+  for attempt in 1 2; do
   ( cd "$ROOT" && timeout 420 ./gradlew "$task" \
       -PbenchmarkWorkload="$wl" -PbenchmarkPasses=3 -PbenchmarkWarmupPasses=2 \
       -PbenchmarkOutput="$out" -PbenchmarkAllowScalableLux=true -PbenchmarkAllowLucis=true \
       -PbenchmarkExpectedMod="$mod" $fp "-PslArgs=$extra" \
       -x prepareBenchmarkScalableLuxMods --console=plain ) > "$log" 2>&1
-  local rc=$? mp hash
+  rc=$?
+  mp=$(fresh "$out" && tail -1 "$out" 2>/dev/null | sed 's/.*"minPassNanos":\([0-9]*\).*/\1/')
+  [ -n "$mp" ] && break
+  echo "  (retry $side $wl r$rep: no fresh result, rc=$rc)"
+  kill_strays
+  done
   mp=$(fresh "$out" && tail -1 "$out" 2>/dev/null | sed 's/.*"minPassNanos":\([0-9]*\).*/\1/')
   hash=$(grep -a "Lux light fingerprint box=" "$log" | tail -1 | sed 's/.*cells=[0-9]* //' | cut -c1-24)
   printf "  %-4s %-20s r%s minPass=%-9s %s rc=%s\n" "$side" "$wl" "$rep" "${mp:-NONE}" "$hash" "$rc"
 }
 
-mapfile -t SIDES < <(printf '%s\n' us prev sl ls1)
+mapfile -t SIDES < <(printf '%s\n' us usoff sl ls1)
 for rep in 1 2 3; do
   for wl in ${WORKLOADS:-block_toggle_border structure_cube dense_chunk_patch sky_hole}; do
     # 每轮轮转顺序（同一轮内四侧连续跑，窗口内交错）
@@ -95,10 +104,10 @@ for rep in 1 2 3; do
 done
 kill $SAMPLER 2>/dev/null
 echo ""; echo "=== 引擎口径 minPass（3 轮最优轮，ms） ==="
-printf "  %-22s %9s %9s %9s %9s\n" workload us prev sl ls1
+printf "  %-22s %9s %9s %9s %9s\n" workload us usoff sl ls1
 for wl in ${WORKLOADS:-block_toggle_border structure_cube dense_chunk_patch sky_hole}; do
   line=$(printf "  %-22s" "$wl")
-  for side in us prev sl ls1; do
+  for side in us usoff sl ls1; do
     v=""
     for r in 1 2 3; do f="$OUT/$side-$wl-r$r.jsonl"; fresh "$f" && v="$v $(tail -1 "$f" | sed 's/.*"minPassNanos":\([0-9]*\).*/\1/')"; done
     line+=$(printf "%9s" "$(echo $v | tr ' ' '\n' | grep -v '^$' | sort -n | head -1 | awk '{if($1)printf "%.2f",$1/1e6; else printf "?"}')")
@@ -106,10 +115,10 @@ for wl in ${WORKLOADS:-block_toggle_border structure_cube dense_chunk_patch sky_
   echo "$line"
 done
 echo ""; echo "=== 玩家口径 wall（每 pass 中位数，ms） ==="
-printf "  %-22s %9s %9s %9s %9s\n" workload us prev sl ls1
+printf "  %-22s %9s %9s %9s %9s\n" workload us usoff sl ls1
 for wl in ${WORKLOADS:-block_toggle_border structure_cube dense_chunk_patch sky_hole}; do
   line=$(printf "  %-22s" "$wl")
-  for side in us prev sl ls1; do
+  for side in us usoff sl ls1; do
     v=""
     for r in 1 2 3; do f="$OUT/$side-$wl-r$r.log"; fresh "$f" || continue
       w=$(grep -a "bench.pass_wall_actual" "$f" 2>/dev/null | sed 's/.*total_ms=//; s/ calls=\([0-9]*\).*/ \1/' | head -1)
@@ -120,4 +129,4 @@ for wl in ${WORKLOADS:-block_toggle_border structure_cube dense_chunk_patch sky_
 done
 echo ""; echo "=== 负载 ==="; awk '{gsub("cpu=","",$2); gsub("%","",$2); s+=$2; n++; if($2+0>mx)mx=$2+0} END{if(n) printf "  平均 %.1f%%，最高 %.1f%%，样本 %d\n", s/n, mx, n}' "$OUT/load-samples.txt"
 echo "=== 新鲜度审计（每侧应有 12）==="
-for side in us prev sl ls1; do n=0; for r in 1 2 3; do for wl in block_toggle_border structure_cube dense_chunk_patch sky_hole; do fresh "$OUT/$side-$wl-r$r.jsonl" && n=$((n+1)); done; done; echo "  $side $n/12"; done
+for side in us usoff sl ls1; do n=0; for r in 1 2 3; do for wl in block_toggle_border structure_cube dense_chunk_patch sky_hole; do fresh "$OUT/$side-$wl-r$r.jsonl" && n=$((n+1)); done; done; echo "  $side $n/12"; done
