@@ -3,11 +3,13 @@ package ca.spottedleaf.starlight.common.command;
 import ca.spottedleaf.starlight.common.chunk.ExtendedChunk;
 import ca.spottedleaf.starlight.common.compat.SableCompat;
 import ca.spottedleaf.starlight.common.debug.LuxProfiler;
+import ca.spottedleaf.starlight.common.light.StarLightEngine;
 import ca.spottedleaf.starlight.common.light.StarLightInterface;
 import ca.spottedleaf.starlight.common.light.StarLightLightingProvider;
 import ca.spottedleaf.starlight.common.light.SWMRNibbleArray;
 import ca.spottedleaf.starlight.common.util.WorldUtil;
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -199,6 +201,27 @@ public final class LuciStarlinkCommand {
                                         .executes(context -> startBench(context.getSource(),
                                                 IntegerArgumentType.getInteger(context, "size"),
                                                 IntegerArgumentType.getInteger(context, "passes"))))))
+                .then(Commands.literal("sameSection")
+                        .then(Commands.argument("on", BoolArgumentType.bool()).executes(context -> {
+                            final boolean on = BoolArgumentType.getBool(context, "on");
+                            StarLightEngine.lucis$sameSectionNeighbours(on);
+                            final String report = "LuciStarlink same-section neighbours = " + on;
+                            LOGGER.info(report);
+                            context.getSource().sendSuccess(() -> Component.literal(report), false);
+                            return 1;
+                        })))
+                .then(Commands.literal("window").executes(context -> {
+                    final CommandSourceStack source = context.getSource();
+                    if (!LuxProfiler.enabled()) {
+                        source.sendFailure(Component.literal(
+                                "LuciStarlink window: profiling is off (start the game with -Dscalablelux.profile=true)"));
+                        return 0;
+                    }
+                    LOGGER.info("LuciStarlink window " + LuxProfiler.windowSummary());
+                    LuxProfiler.beginWindow();
+                    source.sendSuccess(() -> Component.literal("LuciStarlink window reported and reset"), false);
+                    return 1;
+                }))
                 .then(Commands.literal("layerdump")
                         .then(Commands.argument("radius", IntegerArgumentType.integer(1, 4)).executes(context -> {
                             // The residue hunt's instrument (docs/HANDOVER.md 10.42-10.45): after a bulk edit, walk
@@ -237,7 +260,7 @@ public final class LuciStarlinkCommand {
                             source.sendSuccess(() -> Component.literal(report), false);
                             return 1;
                         }))));
-        LOGGER.debug("Registered /lucistarlink (stats, light, relight, layerdump, bench)");
+        LOGGER.debug("Registered /lucistarlink (stats, light, relight, layerdump, bench, window, sameSection)");
     }
 
     /** Prints one nibble array's sections whose visible and updating layers disagree; returns the arrays walked. */

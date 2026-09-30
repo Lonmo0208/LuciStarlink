@@ -23,8 +23,80 @@ import net.minecraft.world.level.lighting.LayerLightEventListener;
 import net.minecraft.world.level.lighting.LayerLightSectionStorage;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 import org.jetbrains.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import java.util.concurrent.atomic.LongAdder;
 
 public class BaseLevelLightEngineVanillaInterface extends LevelLightEngine implements StarLightLightingProvider, ClientStarLightLightingProvider {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("LuciStarlink");
+
+    // Client-side probe. The client half of this engine is the one the server-side rig cannot reach, so the numbers
+    // below exist to make it measurable: how many light sections arrive, how many of them find a loaded chunk (only
+    // those can dirty the renderer), and what the client's own Level reports at a fixed position.
+    // -Dlucistarlink.clientPos=x,y,z turns the per-section line on; it fires only for that section.
+    public static final LongAdder clientUpdatesBlock = new LongAdder();
+    public static final LongAdder clientUpdatesSky = new LongAdder();
+    public static final LongAdder clientUpdatesNoChunk = new LongAdder();
+
+    private static final BlockPos CLIENT_PROBE_POS = parseClientProbePos();
+
+    /** Rate limit for the periodic summary: without it, "the hook never fires" and "the section never matches"
+     *  look identical in the log, and they mean opposite things. */
+    private static volatile long clientProbeLastLog;
+
+    private static BlockPos parseClientProbePos() {
+        final String raw = System.getProperty("lucistarlink.clientPos");
+        if (raw == null) {
+            return null;
+        }
+        final String[] parts = raw.split(",");
+        if (parts.length != 3) {
+            return null;
+        }
+        try {
+            return new BlockPos(Integer.parseInt(parts[0].trim()), Integer.parseInt(parts[1].trim()), Integer.parseInt(parts[2].trim()));
+        } catch (final NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    protected void probeClientLight(final LightLayer lightType, final SectionPos pos, final DataLayer nibble, final ChunkAccess chunk) {
+        if (lightType == LightLayer.BLOCK) {
+            clientUpdatesBlock.increment();
+        } else {
+            clientUpdatesSky.increment();
+        }
+        if (chunk == null) {
+            clientUpdatesNoChunk.increment();
+        }
+        final BlockPos probe = CLIENT_PROBE_POS;
+        if (probe == null) {
+            return;
+        }
+        final long nowNanos = System.nanoTime();
+        if (nowNanos - clientProbeLastLog > 2_000_000_000L) {
+            clientProbeLastLog = nowNanos;
+            LOGGER.info("ClientLightProbe tick blk=" + clientUpdatesBlock.sum() + " sky=" + clientUpdatesSky.sum()
+                    + " noChunk=" + clientUpdatesNoChunk.sum()
+                    + " last=" + lightType + "@" + pos.x() + "," + pos.y() + "," + pos.z());
+        }
+        if (pos.x() != (probe.getX() >> 4) || pos.z() != (probe.getZ() >> 4) || pos.y() != (probe.getY() >> 4)) {
+            return;
+        }
+        try {
+            final Level level = this.lightEngine.getWorld();
+            LOGGER.info("ClientLightProbe " + lightType + " sec=" + pos.x() + "," + pos.y() + "," + pos.z()
+                    + " chunkNull=" + (chunk == null) + " nibbleNull=" + (nibble == null)
+                    + " block=" + level.getBrightness(LightLayer.BLOCK, probe)
+                    + " sky=" + level.getBrightness(LightLayer.SKY, probe)
+                    + " raw=" + level.getRawBrightness(probe, 0)
+                    + " totals blk=" + clientUpdatesBlock.sum() + " sky=" + clientUpdatesSky.sum()
+                    + " noChunk=" + clientUpdatesNoChunk.sum());
+        } catch (final Throwable ex) {
+            LOGGER.info("ClientLightProbe readback failed " + ex);
+        }
+    }
 
     protected final StarLightInterface lightEngine;
     protected final LongOpenHashSet lightingEnabledChunks = new LongOpenHashSet();
@@ -152,6 +224,7 @@ public class BaseLevelLightEngineVanillaInterface extends LevelLightEngine imple
                                               final DataLayer nibble, final boolean trustEdges) {
         // data storage changed with new light impl
         final ChunkAccess chunk = this.scalablelux$getLightEngine().getAnyChunkNow(pos.getX(), pos.getZ());
+        this.probeClientLight(lightType, pos, nibble, chunk);
         switch (lightType) {
             case BLOCK: {
                 final SWMRNibbleArray[] blockNibbles = this.blockLightMap.computeIfAbsent(CoordinateUtils.getChunkKey(pos), (final long keyInMap) -> {
