@@ -215,3 +215,18 @@ structure 3.12 vs 2.83（开=慢 10%，而 structure 本窗口四侧本身就摆
 
 **正确性回归检查（合并后立即做的）**：`gate-cycle.sh` **0/11**（残留修复仍有效）、`gate-gradient.sh` **GREEN**、
 四侧指纹 us/usoff/sl = `sky=905931078dfc5ace`（= 原版），1.x 仍是它自己的。
+
+---
+
+## 2026-10-01 凌晨的进展与最新账目
+
+**已采纳（默认开）**：冲洗闸门 `lucistarlink.flushWhenPending`（有活就结算，不等下一个 tick）。
+同 jar A/B 四格 wall 全赢（border 49<50、structure 50<51、dense 48<54、sky_hole 49<51），2.0.15 的空轮询保护保留。
+**已否决**：`recomputeMinChanges=64`（border 变慢，sky_hole 平）——MIN 保持 4。
+
+**对 SL 的诚实账（同窗口 24/24）**：引擎口径 dense 赢（3.39 vs 3.66）、border/structure/sky_hole 输 4-14%；
+玩家口径 border 赢 1 ms、structure/sky_hole 平、dense 输 1 ms。**引擎口径的绝对值已诚实化，旧表（含"3/4 赢"）不可直接比。**
+
+**下一个杠杆（团队接手）**：四格的引擎活只占 wall 的 2-10%，两侧都装进一个 tick —— 要严格超过 SL 的玩家口径，
+需要把我们的完成点在 tick 内前移（结算/发布的时序），这是调度问题不是算力问题。border 的引擎口径
+（4.55 vs 4.11）仍以基座 decrease 波为主，伙伴的 same-section 快路径实测平，下一刀在下降波的逐检查成本。

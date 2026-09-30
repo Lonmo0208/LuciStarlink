@@ -491,6 +491,8 @@ public final class StarLightInterface {
     private static final int LUCIS_INLINE_MIN_BURST = Integer.getInteger("scalablelux.inlineMinBurst", 16);
     /** A chunk with at least this many changes in one burst is settled by ONE full relight instead of per-position seeds. */
     private static final boolean LUCIS_BULK_RELIGHT = Boolean.getBoolean("scalablelux.bulkRelight");
+    /** Settle new work at the first ask instead of the next tick boundary; see lucis$flushOncePerTick. */
+    private static final boolean LUCIS_FLUSH_WHEN_PENDING = !"false".equalsIgnoreCase(System.getProperty("lucistarlink.flushWhenPending", "true"));
     private static final int LUCIS_BULK_MIN_CHANGES = Integer.getInteger("scalablelux.bulkMinChanges", 128);
     /** R5: settle a bulk skylight change by the canonical recompute instead of the seeded BFS (see the sky engine). */
     private static final boolean LUCIS_RECOMPUTE_SKY = !"false".equalsIgnoreCase(System.getProperty("scalablelux.recomputeSky", "true"));
@@ -1333,9 +1335,23 @@ public final class StarLightInterface {
         return this.lightQueue.getChunkSyncFuture(chunkX, chunkZ).thenApply(Function.identity());
     }
 
-    /** Runs the pending-edit flush at most once per server tick; called by the tick hook, hasUpdates and syncFuture. */
+    /**
+     * Runs the pending-edit flush when there is work the last flush has not seen; called by the tick hook,
+     * hasUpdates and syncFuture.
+     *
+     * <p>The gate is "nothing new arrived", not "already flushed this tick". The tick-only form was 2.0.15's win
+     * against the harness's per-chunk waitForPendingTasks polling (289 full flushes of the same idle state) and it
+     * still does that job: with the buffers drained the repeated asks return immediately, exactly as before. What it
+     * also did was park every change that arrived AFTER the tick's own flush until the NEXT tick - which is where the
+     * player-axis gap on structure/dense lives (the completion lands one tick later than the base engine's, measured
+     * 2026-10-01 as +5 and +11 ms of wall on cells whose engine work is only 5-10% of the pass). Flushing when work is
+     * pending keeps 2.0.15's saving (idle polls are still free) and settles new work at the first ask instead of the
+     * next tick boundary. Default on; -Dlucistarlink.flushWhenPending=false restores the tick-only gate for A/B.</p>
+     */
     public void lucis$flushOncePerTick() {
-        if (this.lucis$flushedThisTick) {
+        if (this.lucis$flushedThisTick && (!LUCIS_FLUSH_WHEN_PENDING
+                || (this.lucis$pendingEdits.isEmpty() && this.lucis$pendingRecomputes.isEmpty()
+                    && (this.lucis$imageLane == null || !this.lucis$imageLane.hasPending())))) {
             return;
         }
         this.lucis$flushedThisTick = true;

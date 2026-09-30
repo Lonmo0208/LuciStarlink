@@ -62,7 +62,7 @@ run_one() { # $1 = side, $2 = workload, $3 = round
   local side=$1 wl=$2 rep=$3 task dir mod jar extra
   case "$side" in
     us)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR";   extra="$P_US";;
-    usoff) task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR"; extra="$P_US -Dscalablelux.sameSectionNeighbours=false";;
+    usoff) task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR"; extra="$P_US -Dlucistarlink.flushWhenPending=false";;
     sl)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=scalablelux;      jar="$SL_JAR";   extra="$P";;
     ls1)  task=runBenchmarkServer;             dir="$ROOT/run-benchmark-lucistarlink"; mod=lucistarlink;   jar="";          extra="$P";;
   esac
@@ -92,12 +92,14 @@ run_one() { # $1 = side, $2 = workload, $3 = round
   printf "  %-4s %-20s r%s minPass=%-9s %s rc=%s\n" "$side" "$wl" "$rep" "${mp:-NONE}" "$hash" "$rc"
 }
 
-mapfile -t SIDES < <(printf '%s\n' us usoff sl ls1)
+# sides can be overridden, e.g. SIDES_LIST="us usoff" for a same-jar A/B only
+SIDES_LIST="${SIDES_LIST:-us usoff sl ls1}"
+mapfile -t SIDES < <(printf '%s\n' $SIDES_LIST)
 for rep in 1 2 3; do
   for wl in ${WORKLOADS:-block_toggle_border structure_cube dense_chunk_patch sky_hole}; do
     # 每轮轮转顺序（同一轮内四侧连续跑，窗口内交错）
-    for i in 0 1 2 3; do
-      idx=$(( (i + rep - 1) % 4 ))
+    for i in "${!SIDES[@]}"; do
+      idx=$(( (i + rep - 1) % ${#SIDES[@]} ))
       run_one "${SIDES[$idx]}" "$wl" "$rep"
     done
   done
