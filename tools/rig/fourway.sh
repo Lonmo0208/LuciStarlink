@@ -13,7 +13,7 @@ ROOT=/e/LuciStarlin/LuciStarlink
 V2=/e/LuciStarlin/LuciStarlink-LS-V2
 MODS="$ROOT/run-benchmark-scalablelux/mods"
 OUT=/e/LuciStarlin/sl-jar/fourway; mkdir -p "$OUT"
-US_JAR=/e/LuciStarlin/sl-jar/ls2-fourway-rig.jar
+US_JAR=/e/LuciStarlin/sl-jar/ls2-nightr2-rig.jar
 PREV_JAR=/e/LuciStarlin/sl-jar/ls2-premerge-rig.jar
 SL_JAR=/e/LuciStarlin/ScalableLux-neoforge-build/ScalableLux-Master/build/libs/ScalableLux-neoforge-0.3.0-alpha.0.8-all.jar
 P='-Dlucistarlink.benchmark.prepareRing=8 -Dlucistarlink.benchmark.quiesceSettleMs=1000 -Dlucistarlink.benchmark.globalEngineBarrier=false'
@@ -49,7 +49,7 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
   # four-way column identical to the pre-fix baseline; verify a marker that only the current source produces
   hits=$(unzip -p "$built" ca/spottedleaf/starlight/common/command/LuciStarlinkCommand.class 2>/dev/null | grep -ac layerdump)
   [ "$hits" -ge 1 ] || { echo "RIG-BUILD-STALE: $built has no layerdump marker (not the current source)" >&2; exit 1; }
-  cp -f "$built" "$US_JAR"
+  cp -f "" ""
   echo "us jar: $(md5sum "$US_JAR" | cut -d' ' -f1) ($id)"
   echo "prev jar: $(md5sum "$PREV_JAR" | cut -d' ' -f1)"
 fi
@@ -62,7 +62,7 @@ run_one() { # $1 = side, $2 = workload, $3 = round
   local side=$1 wl=$2 rep=$3 task dir mod jar extra
   case "$side" in
     us)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR";   extra="$P_US";;
-    usoff) task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR"; extra="$P_US -Dlucistarlink.flushWhenPending=false";;
+    usoff) task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR"; extra="$P_US -Dscalablelux.recomputeInlineMaxChunks=9999";;
     sl)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=scalablelux;      jar="$SL_JAR";   extra="$P";;
     ls1)  task=runBenchmarkServer;             dir="$ROOT/run-benchmark-lucistarlink"; mod=lucistarlink;   jar="";          extra="$P";;
   esac

@@ -1518,3 +1518,20 @@ sky_hole 0.97 vs 0.99 平、border 6.39-5.28 变慢（内联成组的 19-chunk �
 **引擎 1/4（dense）、玩家 1胜2平1负** —— 早先"引擎 3/4 赢 SL"有假象成分（部分工作没进窗口）。
 四格的引擎活都只占 wall 的 2-10%，两侧都装进一个 tick，**要严格超过 SL 的 wall，下一个杠杆是 tick 内的
 完成点前移（调度/发布时序），不是算力**。这写进 REMAINING-WORK 的 P1，是团队下一件事。
+
+### 10.50 按 burst 形状路由天光（假设、一次被污染的 A/B、默认关）
+
+**假设**：延迟窗口的成本 ∝ 面积（每 chunk 一个 cache 窗口），内联种子的成本 ∝ 组数（每 ±1 簇一次 setup）——
+所以"跨很多 chunk 的小改动"（border 19×5）想要窗口，"单 chunk 的中 burst"（sky_hole 1×25）想要种子。
+此前两次 A/B（MIN=64 一刀切）把两格捆在一起测，拆不开。
+
+**实现**：`deferSky = laneCovered || size>=64 || (size>=4 && flush 的 chunk 数 > scalablelux.recomputeInlineMaxChunks)`，
+默认 **0 = 旧行为逐字等价**（所有 ≥4 的 burst 都延迟窗口）。设 2 即启用形状规则。
+
+**为什么默认关**：启用它的 A/B 撞上测量窗口崩塌（48 run 只成 4 个，负载峰值 95.6%，服务器反复被外部杀），
+唯一成对读数 sky_hole 1.33 vs 0.81 **与假设相反**。n=1 不足为凭，但按纪律不许在被污染的窗口上采纳。
+团队在安静机器上设 `-Dscalablelux.recomputeInlineMaxChunks=2` 重测，赢了就改默认。
+
+**门**：默认关的形态 gradient GREEN、cycle 0/11（与 58fa96a 行为逐字一致）。
+**本轮教训**：两个 gradle 构建并发写 build/libs 会产出 FML 拒载的坏 jar（"expected mod not loaded"的另一来源）——
+构建必须串行；exit -1 无崩溃报告 = 进程被外部杀，先查负载再怀疑代码。

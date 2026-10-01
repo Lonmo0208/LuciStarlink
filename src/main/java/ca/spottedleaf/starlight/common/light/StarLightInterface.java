@@ -493,6 +493,14 @@ public final class StarLightInterface {
     private static final boolean LUCIS_BULK_RELIGHT = Boolean.getBoolean("scalablelux.bulkRelight");
     /** Settle new work at the first ask instead of the next tick boundary; see lucis$flushOncePerTick. */
     private static final boolean LUCIS_FLUSH_WHEN_PENDING = !"false".equalsIgnoreCase(System.getProperty("lucistarlink.flushWhenPending", "true"));
+    /** Bursts at least this big always take the deferred window regardless of chunk count (structure/dense). */
+    private static final int LUCIS_RECOMPUTE_BIG = Integer.getInteger("scalablelux.recomputeBigChanges", 64);
+    /** A burst spanning at most this many chunks takes the seeded grouped path when small. DEFAULT 0 = the old
+ *  size-only rule (every burst >= recomputeMinChanges defers). The shape rule (small 1-chunk bursts inline) is
+ *  the candidate the 2026-10-01 routing hypothesis wanted for sky_hole, but the only paired measurement taken
+ *  before the measurement window collapsed read 1.33 vs 0.81 - AGAINST it - so it ships default-off for the
+ *  team to re-measure on a quiet machine. */
+    private static final int LUCIS_RECOMPUTE_INLINE_MAX_CHUNKS = Integer.getInteger("scalablelux.recomputeInlineMaxChunks", 0);
     private static final int LUCIS_BULK_MIN_CHANGES = Integer.getInteger("scalablelux.bulkMinChanges", 128);
     /** R5: settle a bulk skylight change by the canonical recompute instead of the seeded BFS (see the sky engine). */
     private static final boolean LUCIS_RECOMPUTE_SKY = !"false".equalsIgnoreCase(System.getProperty("scalablelux.recomputeSky", "true"));
@@ -856,8 +864,19 @@ public final class StarLightInterface {
                     // glowstone reads sky=15 in its own cell - a relight gives 0 - and the counter line shows the group
                     // seeding both bursts while no window recompute ran for them. Deferring hands those cells to the
                     // window recompute, which clears the column's 15-run (2.0.9) and derives the real value.
+                    // Route the sky half by BURST SHAPE, not just size. The window recompute pays per AREA (one cache
+                    // window per changed chunk), the seeded grouped path pays per GROUP (a cache setup per +-1
+                    // cluster) - so a burst spread over many small chunks wants windows (block_toggle_border: 19
+                    // chunks x ~5 changes; forcing it inline measured 5.28-6.39 vs 4.09-4.55 across two windows)
+                    // while a one-chunk burst wants seeds (sky_hole: 1 chunk x 25 changes; its window is 256x57 cells
+                    // of expand+install for 25 seeds). big bursts (>= 64 changes, structure/dense) always want the
+                    // window: one rebuild instead of per-flush rebuilds (the R5 storm). -Dscalablelux.
+                    // recomputeInlineMaxChunks=9999 restores the size-only rule for A/B.
                     final boolean deferSky = LUCIS_RECOMPUTE_SKY && chunkNow != null
-                            && (positions.size() >= LUCIS_RECOMPUTE_MIN || laneCovered);
+                            && (laneCovered
+                                || positions.size() >= LUCIS_RECOMPUTE_BIG
+                                || (positions.size() >= LUCIS_RECOMPUTE_MIN
+                                    && this.lucis$pendingEdits.size() > LUCIS_RECOMPUTE_INLINE_MAX_CHUNKS));
 
                     // Packed longs, never boxed BlockPos: this list is built for every flush and a bulk burst holds tens
                     // of thousands of positions, which JFR showed as heavy young-generation churn in this engine and no
