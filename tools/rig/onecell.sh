@@ -6,7 +6,7 @@ set -uo pipefail
 ROOT=/e/LuciStarlin/LuciStarlink
 MODS="$ROOT/run-benchmark-scalablelux/mods"
 OUT=/e/LuciStarlin/sl-jar/onecell; mkdir -p "$OUT"
-JAR=/e/LuciStarlin/sl-jar/ls2-skysource-rig.jar
+JAR=/e/LuciStarlin/sl-jar/ls2-capflag-rig.jar
 WL=${1:?workload}
 LABEL=${2:?label}
 EXTRA=${3:-}

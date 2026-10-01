@@ -1580,3 +1580,20 @@ structure 5.10 vs 4.75（**队列慢 7%**——4096 个种子在光线程的任�
 需要专门工作窗的引擎级任务（为什么 join 的 future 永不完成：light 线程的泵在什么条件下才转）。
 本轮正面产出：**残留门的 2 格已知残留被队列路由顺带修好**（基座发布路径的副产物，门为证）。
 **回退后复测（出货状态）**：残留门回到 RESIDUE FOUND（2 格层不一致）——即 RESIDUE-FREE 依赖 capture-queue 路由，随回退一起消失；P0 的 2 格在出货构建上仍然存在，团队修 P0 时以基座队列的发布路径为已知良好参照。
+
+### 10.54 lane 浪费的早停：capture cap 标记（采纳，structure 的 lane 税 12% → 8.5%）
+
+**量化先行**（lane 开 vs 关，同构建 4 轮）：structure lane-on 7.46 vs off 6.67（**税 12%**——4096 个改动全部
+capture（含每次一对 material 查找）+ onEngineBlockWrite 的 3×3 区域标记，最后整个 buffer 在 flush 被破坏性丢弃，
+纯浪费）；border 税 1.6%；dense/sky_hole 是 lane 的受益者。
+
+**修法**（不碰任何写者语义）：capture 时 region 缓冲到达 `LANE_MAX_CHANGES` 即打 `captureCapped` 标记并停止
+capture（省掉 2048 之后的全部查找与插入）；`regionQualifies` 看到标记提前拒绝——与现有"size > cap 破坏性跳过"
+语义完全等价，只是更早更便宜。dense（恰好 2048）永不触发标记，路由逐字不变（A/B 实证：dense lane 优势 −27% 完好）。
+
+**A/B（32/32 fresh，4 轮）**：structure 5.71 vs 5.26（lane 税 12%→8.5%）、dense 3.47 vs 4.76（lane 优势完好）、
+sky_hole 0.85 vs 0.84、border 噪声内。门：cycle 0/11 ✓、gradient GREEN ✓、residue = 已知 2 格（不变）。
+
+**没解决的**：structure 剩下的 8.5% 税 = 前 2048 个 capture 的"保险费"——要知道"这区域永远不会用 lane"必须
+先 capture 到 cap，这是信息论式的先有鸡还是先有蛋（降低 cap 会把 dense 也挡在门外）。structure 引擎口径对 SL
+仍差 ~4-12%（随窗口），剩余杠杆仍是 REMAINING-WORK P1 的两项（队列调度语义、下降波逐检查成本）。

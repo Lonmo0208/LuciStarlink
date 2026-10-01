@@ -231,6 +231,19 @@ public final class ImageLane {
         }
 
         final int index = (localY + 1) * bounds.paddedArea() + (localZ + 1) * bounds.paddedWidth() + (localX + 1);
+        // Capture cap: a region whose buffered burst has reached LANE_MAX_CHANGES can never qualify (the flush
+        // rejects size > cap, and this region is already there with more changes still arriving), so every further
+        // lookup and buffer insert for it is pure waste - measured as the bulk of a 12% lane tax on structure_cube,
+        // whose 4096-change burst was fully captured only to be destructively dropped. Raise the flag instead: the
+        // flush rejects on it (equivalent to the size rule, decided earlier and cheaper) and capture for the region
+        // stops until the next settle. Dense (exactly 2048) never raises it and keeps its lane routing unchanged.
+        final RuntimeLightChangeBuffer capCheck = this.pending.get(bounds.coreRegionKey());
+
+        if (capCheck != null && capCheck.size() >= LANE_MAX_CHANGES) {
+            capCheck.markCaptureCapped();
+            this.captureAttempts++;
+            return;
+        }
         // memoized: a fill repeats one transition thousands of times, and this pair of lookups is the largest single
         // item in the lane's per-change cost
         final int[] pair = this.materialPair;
@@ -289,6 +302,11 @@ public final class ImageLane {
         // lane-owned forever was an earlier rule, and it is what made sky_hole stay slow once a warmup burst had
         // adopted its region.
         if (buffered.size() < LANE_MIN_CHANGES) {
+            return false;
+        }
+        // A region whose capture was capped has more changes than the lane will ever take - reject on the flag
+        // (decided during the burst, cheaper than the size rule and equivalent to it).
+        if (buffered.isCaptureCapped()) {
             return false;
         }
 

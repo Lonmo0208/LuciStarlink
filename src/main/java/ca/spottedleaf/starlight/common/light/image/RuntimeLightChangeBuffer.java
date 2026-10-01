@@ -15,6 +15,7 @@ public final class RuntimeLightChangeBuffer {
     private boolean hasEmissionChange;
     private boolean hasSkyChange;
     private boolean blockFastEligible;
+    private boolean captureCapped;
 
     public RuntimeLightChangeBuffer() {
         this(DEFAULT_CAPACITY);
@@ -31,6 +32,17 @@ public final class RuntimeLightChangeBuffer {
         hasEmissionChange = false;
         hasSkyChange = false;
         blockFastEligible = true;
+        captureCapped = false;
+    }
+
+    /** Set by the capture once the region's burst reaches the lane's change cap: the region can never qualify, so
+     *  the flush rejects it on this flag (equivalent to the size rule, decided earlier) and capture stops. */
+    public void markCaptureCapped() {
+        this.captureCapped = true;
+    }
+
+    public boolean isCaptureCapped() {
+        return captureCapped;
     }
 
     public void add(int index, int oldMaterial, int newMaterial) {
