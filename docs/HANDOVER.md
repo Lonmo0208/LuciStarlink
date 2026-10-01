@@ -1535,3 +1535,19 @@ sky_hole 0.97 vs 0.99 平、border 6.39-5.28 变慢（内联成组的 19-chunk �
 **门**：默认关的形态 gradient GREEN、cycle 0/11（与 58fa96a 行为逐字一致）。
 **本轮教训**：两个 gradle 构建并发写 build/libs 会产出 FML 拒载的坏 jar（"expected mod not loaded"的另一来源）——
 构建必须串行；exit -1 无崩溃报告 = 进程被外部杀，先查负载再怀疑代码。
+
+### 10.51 玩家口径破局：**小 burst 回基座队列**（采纳为默认，玩家口径对 SL 3/4）
+
+**杠杆**：每 chunk ≤32 改动、lane 未覆盖的 burst 直接 `queueBlockChange` 进基座队列——那是 ScalableLux 自己的
+异步路径，任务在光线程上、**与 apply 尾部重叠**，完成点不再串行在 flush 之后。这些 chunk 不延迟天光（队列自己
+做 block+sky），2.0.16 的双写守卫根本不触发。`-Dscalablelux.queueSmallBursts`（默认 32，0=关）。
+
+**同 jar A/B（18/18，负载 43.7%）**：sky_hole 0.69 vs 0.88（**−22%**）、structure 4.72 vs 5.11（**−8%**）、
+border 4.17 vs 4.05（平）。**采纳默认 32** 后门全绿（cycle 0/11——27 改动形状正走新路由、gradient GREEN、residue 维持已知 2 格）。
+
+**定表（us vs SL 同窗口，24/24，负载 43.5%）**：
+- 玩家口径（wall）：border **50 vs 51 ✓**、structure **48 vs 50 ✓**、dense **49 vs 51 ✓**、sky_hole 50 vs 48 ✗ —— **3/4 赢**。
+- 引擎口径（诚实 minPass）：dense **3.17 vs 3.64 ✓**；border 4.15 vs 3.92、structure 4.94 vs 4.57、sky_hole 0.78 vs 0.72，落后 6-8%。
+
+**残差的性质**：内部 A/B 证明路由本身赢了 sky_hole/structure，对 SL 的残差是"同步完成点 vs 异步完成点"的最后一段
+（引擎活只占 wall 的 2-10%）。下一刀： drain/发布成本（每 pass 186 个 section 的 publish）或队列调度相位。

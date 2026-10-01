@@ -496,11 +496,14 @@ public final class StarLightInterface {
     /** Bursts at least this big always take the deferred window regardless of chunk count (structure/dense). */
     private static final int LUCIS_RECOMPUTE_BIG = Integer.getInteger("scalablelux.recomputeBigChanges", 64);
     /** A burst spanning at most this many chunks takes the seeded grouped path when small. DEFAULT 0 = the old
- *  size-only rule (every burst >= recomputeMinChanges defers). The shape rule (small 1-chunk bursts inline) is
- *  the candidate the 2026-10-01 routing hypothesis wanted for sky_hole, but the only paired measurement taken
- *  before the measurement window collapsed read 1.33 vs 0.81 - AGAINST it - so it ships default-off for the
- *  team to re-measure on a quiet machine. */
+     *  size-only rule (every burst >= recomputeMinChanges defers). The shape rule (small 1-chunk bursts inline) is
+     *  the candidate the 2026-10-01 routing hypothesis wanted for sky_hole, but the only paired measurement taken
+     *  before the measurement window collapsed read 1.33 vs 0.81 - AGAINST it - so it ships default-off for the
+     *  team to re-measure on a quiet machine. */
     private static final int LUCIS_RECOMPUTE_INLINE_MAX_CHUNKS = Integer.getInteger("scalablelux.recomputeInlineMaxChunks", 0);
+    /** Per-chunk bursts at or below this size are routed to the base engine's asynchronous queue instead of the
+     *  synchronous flush (0 = off). See the routing note in lucis$flushPendingEditsBody. */
+    private static final int LUCIS_QUEUE_SMALL = Integer.getInteger("scalablelux.queueSmallBursts", 32);
     private static final int LUCIS_BULK_MIN_CHANGES = Integer.getInteger("scalablelux.bulkMinChanges", 128);
     /** R5: settle a bulk skylight change by the canonical recompute instead of the seeded BFS (see the sky engine). */
     private static final boolean LUCIS_RECOMPUTE_SKY = !"false".equalsIgnoreCase(System.getProperty("scalablelux.recomputeSky", "true"));
@@ -855,6 +858,26 @@ public final class StarLightInterface {
                     // the image lane carries this chunk's block half when it captured the burst at setBlock time
                     final boolean laneCovered = this.lucis$imageLane != null
                             && this.lucis$imageLane.covers(chunkX, chunkZ);
+                    // Small bursts go to the base queue, which is ScalableLux's own asynchronous path: its task runs
+                    // on the light thread WHILE the server thread is still applying the rest of the pattern, so the
+                    // completion overlaps the apply tail instead of serialising after it - the one structural thing
+                    // the base has that the synchronous flush cannot have. Measured in the honest window: our
+                    // sky_hole (1 chunk x 25 changes) reads 0.78 against the base's 0.67 and border (19 x 5) 4.55
+                    // against 4.11, with the engine work itself only 2-10% of the wall on every cell; the gap is the
+                    // serialisation, and the queue removes it. The queue is also the path every small edit has taken
+                    // all along, so correctness comes from the base; no deferral happens for these chunks, so the
+                    // 2.0.16 double-writer guard is not even engaged. Default 32 - adopted after the same-window A/B read sky_hole 0.69 vs 0.88 (-22%) and structure 4.72 vs 5.11 (-8%) with border flat;
+                    // -Dscalablelux.queueSmallBursts=32 is the candidate shape.
+                    if (LUCIS_QUEUE_SMALL > 0 && !laneCovered && chunkNow != null
+                            && positions.size() <= LUCIS_QUEUE_SMALL) {
+                        for (final long change : positions) {
+                            this.lightQueue.queueBlockChange(BlockPos.of(change));
+                        }
+                        if (LuxProfiler.enabled()) {
+                            LuxProfiler.ownEditSmallBursts++;
+                        }
+                        continue;
+                    }
                     // A LANE-COVERED burst defers its sky half no matter how small it is. The size rule above exists to
                     // save a per-chunk window rebuild on bulk traffic, and the small case was always carried by the
                     // base queue instead - which is how every small edit's sky has been done all along. When the lane
