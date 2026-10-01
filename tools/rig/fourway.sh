@@ -95,7 +95,7 @@ run_one() { # $1 = side, $2 = workload, $3 = round
 # sides can be overridden, e.g. SIDES_LIST="us usoff" for a same-jar A/B only
 SIDES_LIST="${SIDES_LIST:-us usoff sl ls1}"
 mapfile -t SIDES < <(printf '%s\n' $SIDES_LIST)
-for rep in 1 2 3; do
+for rep in $(seq 1 ${ROUNDS:-3}); do
   for wl in ${WORKLOADS:-block_toggle_border structure_cube dense_chunk_patch sky_hole}; do
     # 每轮轮转顺序（同一轮内四侧连续跑，窗口内交错）
     for i in "${!SIDES[@]}"; do
