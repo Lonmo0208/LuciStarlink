@@ -13,7 +13,7 @@ ROOT=/e/LuciStarlin/LuciStarlink
 V2=/e/LuciStarlin/LuciStarlink-LS-V2
 MODS="$ROOT/run-benchmark-scalablelux/mods"
 OUT=/e/LuciStarlin/sl-jar/fourway; mkdir -p "$OUT"
-US_JAR=/e/LuciStarlin/sl-jar/ls2-queueroute-rig.jar
+US_JAR=/e/LuciStarlin/sl-jar/ls2-capq-rig.jar
 PREV_JAR=/e/LuciStarlin/sl-jar/ls2-premerge-rig.jar
 SL_JAR=/e/LuciStarlin/ScalableLux-neoforge-build/ScalableLux-Master/build/libs/ScalableLux-neoforge-0.3.0-alpha.0.8-all.jar
 P='-Dlucistarlink.benchmark.prepareRing=8 -Dlucistarlink.benchmark.quiesceSettleMs=1000 -Dlucistarlink.benchmark.globalEngineBarrier=false'
@@ -61,8 +61,8 @@ trap 'kill $SAMPLER 2>/dev/null' EXIT
 run_one() { # $1 = side, $2 = workload, $3 = round
   local side=$1 wl=$2 rep=$3 task dir mod jar extra
   case "$side" in
-    us)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR";   extra="$P_US -Dscalablelux.queueSmallBursts=99999";;
-    usoff) task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR"; extra="$P_US -Dscalablelux.recomputeInlineMaxChunks=9999";;
+    us)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR";   extra="$P_US";;
+    usoff) task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR"; extra="$P_US -Dscalablelux.captureQueue=false";;
     sl)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=scalablelux;      jar="$SL_JAR";   extra="$P";;
     ls1)  task=runBenchmarkServer;             dir="$ROOT/run-benchmark-lucistarlink"; mod=lucistarlink;   jar="";          extra="$P";;
   esac

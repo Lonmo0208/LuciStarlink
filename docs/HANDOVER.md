@@ -1560,3 +1560,22 @@ structure 5.10 vs 4.75（**队列慢 7%**——4096 个种子在光线程的任�
 ——两侧对 sky_hole 是**同一条路由**（25 ≤ 32），29% 的差是 n=3 窗口噪声（sky_hole 在 0.64-1.33 间摆）。
 **结论：维持默认 32**；structure 保留 grouped+延迟窗口。引擎口径剩下的 4-8% 残差与窗口噪声同量级，
 **判定它需要安静机器上的 n≥6 对照**（REMATIC-WORK P1），本轮到此为止。
+
+### 10.53 capture 时入队：实现、两种形态、全部实测失败（已回退，代码不在树里）
+
+按设计稿实现了完整版（capture 钩子 + committed 集合 + flush 跳过 + lane 区域拒收），两个形态都上了门和 A/B：
+
+1. **join 保序形态**：跨阈值的 chunk 在 flush 里 join 它的队列 future 再跑窗口——**服务器线程死锁**，
+   watchdog park 在 `flushPendingEditsBody` 的 join 上（run-diag crash 2026-10-02_01.18），残留门整跑崩掉。
+   这就是 own-scheduler 备忘录里"等待引擎结算的挂起"类的活体标本：**future 在服务器线程 park 期间永不完成**。
+2. **整 chunk 提交形态**（无 join，跨阈值即全量重排队）：三个门全绿——**残留门历史首次 RESIDUE-FREE**
+   （405 板整块走基座队列，基座自己的发布路径把那 2 格可见层正确同步了）；但 A/B（32/32 fresh）抓到
+   结构性回归：**dense 5.76 vs 4.37（−25%）**——dense 的 chunk 在第 33 改动被提交，`regionHasQueueCommitted`
+   让 lane 拒收区域，**dense 失去了 lane**（capture 提交先于 lane 达标判定，不可逆）。border/structure/sky_hole
+   也无一受益（窗口偏负载，但方向一致）。
+
+**结论**：capture 时入队的全部三种形态（join / 整 chunk 提交 / 跨阈值拆分）都被实测否决。
+代码已回退（未提交即无痕），保持 master（7420e7e 线 + 文档）为已验证状态。
+**border/structure 引擎口径的最后一截，在"队列调度语义被修透"之前不可达**——那是一个独立的、
+需要专门工作窗的引擎级任务（为什么 join 的 future 永不完成：light 线程的泵在什么条件下才转）。
+本轮正面产出：**残留门的 2 格已知残留被队列路由顺带修好**（基座发布路径的副产物，门为证）。
