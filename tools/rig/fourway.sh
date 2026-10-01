@@ -61,7 +61,7 @@ trap 'kill $SAMPLER 2>/dev/null' EXIT
 run_one() { # $1 = side, $2 = workload, $3 = round
   local side=$1 wl=$2 rep=$3 task dir mod jar extra
   case "$side" in
-    us)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR";   extra="$P_US -Dscalablelux.queueSmallBursts=32";;
+    us)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR";   extra="$P_US -Dscalablelux.queueSmallBursts=99999";;
     usoff) task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR"; extra="$P_US -Dscalablelux.recomputeInlineMaxChunks=9999";;
     sl)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=scalablelux;      jar="$SL_JAR";   extra="$P";;
     ls1)  task=runBenchmarkServer;             dir="$ROOT/run-benchmark-lucistarlink"; mod=lucistarlink;   jar="";          extra="$P";;
