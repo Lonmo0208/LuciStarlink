@@ -294,3 +294,24 @@ lane 区域达标（多 chunk 各 25 改动可跨过 64）——一旦达标，l
 **测量纪律（新）**：`onecell.sh` 的相位表带 profiler 自身开销——border 同构建 minPass 4.3（profiler 关）
 vs 8.3（开），**profiler-on 的绝对值禁止与 profiler-off 的表对比**；相位表的相对结论（下降波主导）仍有效。
 另外窗内 95.6% 峰值部分来自测量自身叠加——任何时刻只跑一个测量进程（脚本已保证）。
+
+## 2026-10-02 更新：两个机制区的划分 + 三次否定（HANDOVER §10.56）
+
+**四格分两个机制区，minPass 的成分不同，杠杆也不同**：
+- **重算区 dense / structure**：lane/grouped **同步**在服务器线程完成，`waitUs` ≈ 0（dense 5~126 µs、
+  structure 287~482 µs）→ **minPass ≈ apply + 我们自己的同步 settle**。杠杆 = settle 本身。
+- **队列区 border / sky_hole**：小 burst 进基座队列，`waitUs` 5.6~7.4 ms / 0.6~2.0 ms →
+  **minPass ≈ 队列任务的完成时刻**。杠杆 = 队列调度（= P1 的 token 语义），不是算力。
+
+**structure 的成本集中在一个点**：`settleRecomputeNanos` = **6.8 ms / 7.5 ms pass**（延迟天光窗口重算，
+`StarLightInterface` 1050-1065 的天光 settle 块：setupCaches + settleSkyWindow + performLightDecrease +
+performLightIncrease + updateVisible）。这是四格里唯一"一个函数占满一整格"的位置。
+
+**已否掉、不要再试**（每条都有 A/B 记录）：
+1. lane capture 上下文缓存（每 chunk 一次线程/chunk/状态检查）——structure +1.6 ms、border +0.7 ms（§10.56）。
+2. `imageLaneMaxChanges=8192`（lane 吃 4096 burst）——structure +1.8~3.0 ms，4/4 轮。
+3. `imageLaneMinChanges=8`（lane 吃 border 的 19×5）——7.48 vs ~5.0 ms（19 次小 region 采纳）。
+4. （更早）capture 时入队三形态、own-scheduler、12 次 border 尝试、全队列 99999、MIN=64 一刀切——见 §10.53/10.55/§10.29。
+
+**方法纪律（本轮新增）**：单次 onecell 探针在 structure 上不可信（跨窗口 6.1~10.9 ms）；探针只挑候选，
+采纳必须靠配对 A/B。本仪器噪声地板 ≈0.5 ms（用 dense 上的逐字 no-op 旋钮标定）。

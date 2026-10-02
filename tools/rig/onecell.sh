@@ -6,7 +6,7 @@ set -uo pipefail
 ROOT=/e/LuciStarlin/LuciStarlink
 MODS="$ROOT/run-benchmark-scalablelux/mods"
 OUT=/e/LuciStarlin/sl-jar/onecell; mkdir -p "$OUT"
-JAR=/e/LuciStarlin/sl-jar/ls2-capflag-rig.jar
+JAR=${LUCIS_RIG_JAR:-/e/LuciStarlin/sl-jar/ls2-capflag-rig.jar}
 WL=${1:?workload}
 LABEL=${2:?label}
 EXTRA=${3:-}
@@ -14,7 +14,9 @@ REP=${4:-1}
 export JAVA_HOME='C:\Users\Administrator\.gradle\jdks\eclipse_adoptium-21-amd64-windows.2'
 export PATH="/c/Users/Administrator/.gradle/jdks/eclipse_adoptium-21-amd64-windows.2/bin:$PATH"
 export JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStoreType=WINDOWS-ROOT
-P='-Dlucistarlink.benchmark.prepareRing=8 -Dlucistarlink.benchmark.quiesceSettleMs=1000 -Dlucistarlink.benchmark.globalEngineBarrier=false -Dscalablelux.profile=true'
+P='-Dlucistarlink.benchmark.prepareRing=8 -Dlucistarlink.benchmark.quiesceSettleMs=1000 -Dlucistarlink.benchmark.globalEngineBarrier=false'
+# the profiler costs ~2x on some cells, so a timing comparison must be able to leave it out: LUCIS_PROF=""
+P="$P ${LUCIS_PROF--Dscalablelux.profile=true}"
 
 kill_strays() {
   powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | Where-Object { \$_.CommandLine -match 'gameDir|fml.modFolders|run-benchmark' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }" >/dev/null 2>&1

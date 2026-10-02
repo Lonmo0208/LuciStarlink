@@ -13,7 +13,11 @@ ROOT=/e/LuciStarlin/LuciStarlink
 V2=/e/LuciStarlin/LuciStarlink-LS-V2
 MODS="$ROOT/run-benchmark-scalablelux/mods"
 OUT=/e/LuciStarlin/sl-jar/fourway; mkdir -p "$OUT"
-US_JAR=/e/LuciStarlin/sl-jar/ls2-capflag-rig.jar
+# ls2-thrproof-rig.jar is THIS round's build (the own-edit server-thread proof, and nothing else: the capture
+# context cache was rejected by its own A/B - structure +1.6 ms - and removed); ls2-capflag-rig.jar is the
+# verified baseline it is measured against, byte-frozen.
+US_JAR=/e/LuciStarlin/sl-jar/ls2-thrproof-rig.jar
+USOLD_JAR=/e/LuciStarlin/sl-jar/ls2-capflag-rig.jar
 PREV_JAR=/e/LuciStarlin/sl-jar/ls2-premerge-rig.jar
 SL_JAR=/e/LuciStarlin/ScalableLux-neoforge-build/ScalableLux-Master/build/libs/ScalableLux-neoforge-0.3.0-alpha.0.8-all.jar
 P='-Dlucistarlink.benchmark.prepareRing=8 -Dlucistarlink.benchmark.quiesceSettleMs=1000 -Dlucistarlink.benchmark.globalEngineBarrier=false'
@@ -49,8 +53,14 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
   # four-way column identical to the pre-fix baseline; verify a marker that only the current source produces
   hits=$(unzip -p "$built" ca/spottedleaf/starlight/common/command/LuciStarlinkCommand.class 2>/dev/null | grep -ac layerdump)
   [ "$hits" -ge 1 ] || { echo "RIG-BUILD-STALE: $built has no layerdump marker (not the current source)" >&2; exit 1; }
-  cp -f "" ""
-  echo "us jar: $(md5sum "$US_JAR" | cut -d' ' -f1) ($id)"
+  cp -f "$built" "$US_JAR"
+  us_md5=$(md5sum "$US_JAR" | cut -d' ' -f1)
+  old_md5=$(md5sum "$USOLD_JAR" | cut -d' ' -f1)
+  echo "us jar: $us_md5 ($id)"
+  echo "usold jar: $old_md5"
+  # an A/B between two identical jars measures the window, not the change - the stale-jar trap that once made a
+  # whole column read as the pre-fix baseline
+  [ "$us_md5" = "$old_md5" ] && echo "AB-SIDES-IDENTICAL: us and usold are the same jar, this run proves nothing" >&2
   echo "prev jar: $(md5sum "$PREV_JAR" | cut -d' ' -f1)"
 fi
 
@@ -62,6 +72,10 @@ run_one() { # $1 = side, $2 = workload, $3 = round
   local side=$1 wl=$2 rep=$3 task dir mod jar extra
   case "$side" in
     us)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR";   extra="$P_US";;
+    usold) task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$USOLD_JAR"; extra="$P_US";;
+    # the lane allowed to own bursts up to 8192 changes: structure's 4096-change chunk is then lane-handled
+    # instead of captured-and-rejected, dense (2048) is untouched by construction (it never reached 2048+ before)
+    us8k)  task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR"; extra="$P_US -Dscalablelux.imageLaneMaxChanges=8192";;
     usoff) task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR"; extra="$P_US -Dscalablelux.imageLane=false";;
     sl)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=scalablelux;      jar="$SL_JAR";   extra="$P";;
     ls1)  task=runBenchmarkServer;             dir="$ROOT/run-benchmark-lucistarlink"; mod=lucistarlink;   jar="";          extra="$P";;
@@ -105,11 +119,11 @@ for rep in $(seq 1 ${ROUNDS:-3}); do
   done
 done
 kill $SAMPLER 2>/dev/null
-echo ""; echo "=== 引擎口径 minPass（3 轮最优轮，ms） ==="
-printf "  %-22s %9s %9s %9s %9s\n" workload us usoff sl ls1
+echo ""; echo "=== 引擎口径 minPass（${ROUNDS:-3} 轮最优轮，ms） ==="
+printf "  %-22s %9s %9s %9s %9s %9s\n" workload us usold usoff sl ls1
 for wl in ${WORKLOADS:-block_toggle_border structure_cube dense_chunk_patch sky_hole}; do
   line=$(printf "  %-22s" "$wl")
-  for side in us usoff sl ls1; do
+  for side in us usold usoff sl ls1; do
     v=""
     for r in 1 2 3; do f="$OUT/$side-$wl-r$r.jsonl"; fresh "$f" && v="$v $(tail -1 "$f" | sed 's/.*"minPassNanos":\([0-9]*\).*/\1/')"; done
     line+=$(printf "%9s" "$(echo $v | tr ' ' '\n' | grep -v '^$' | sort -n | head -1 | awk '{if($1)printf "%.2f",$1/1e6; else printf "?"}')")
@@ -117,12 +131,12 @@ for wl in ${WORKLOADS:-block_toggle_border structure_cube dense_chunk_patch sky_
   echo "$line"
 done
 echo ""; echo "=== 玩家口径 wall（每 pass 中位数，ms） ==="
-printf "  %-22s %9s %9s %9s %9s\n" workload us usoff sl ls1
+printf "  %-22s %9s %9s %9s %9s %9s\n" workload us usold usoff sl ls1
 for wl in ${WORKLOADS:-block_toggle_border structure_cube dense_chunk_patch sky_hole}; do
   line=$(printf "  %-22s" "$wl")
-  for side in us usoff sl ls1; do
+  for side in us usold usoff sl ls1; do
     v=""
-    for r in 1 2 3; do f="$OUT/$side-$wl-r$r.log"; fresh "$f" || continue
+    for r in $(seq 1 ${ROUNDS:-3}); do f="$OUT/$side-$wl-r$r.log"; fresh "$f" || continue
       w=$(grep -a "bench.pass_wall_actual" "$f" 2>/dev/null | sed 's/.*total_ms=//; s/ calls=\([0-9]*\).*/ \1/' | head -1)
       [ -n "$w" ] && v="$v $(echo $w | awk '{if($2>0) printf "%.1f", $1/$2}')"; done
     line+=$(printf "%9s" "$(echo $v | tr ' ' '\n' | grep -v '^$' | sort -n | awk '{a[NR]=$1} END{if(NR)printf "%.0f",a[int((NR+1)/2)]; else printf "?"}')")
@@ -131,4 +145,4 @@ for wl in ${WORKLOADS:-block_toggle_border structure_cube dense_chunk_patch sky_
 done
 echo ""; echo "=== 负载 ==="; awk '{gsub("cpu=","",$2); gsub("%","",$2); s+=$2; n++; if($2+0>mx)mx=$2+0} END{if(n) printf "  平均 %.1f%%，最高 %.1f%%，样本 %d\n", s/n, mx, n}' "$OUT/load-samples.txt"
 echo "=== 新鲜度审计（每侧应有 12）==="
-for side in us usoff sl ls1; do n=0; for r in 1 2 3; do for wl in block_toggle_border structure_cube dense_chunk_patch sky_hole; do fresh "$OUT/$side-$wl-r$r.jsonl" && n=$((n+1)); done; done; echo "  $side $n/12"; done
+for side in us usold usoff sl ls1; do n=0; for r in 1 2 3; do for wl in block_toggle_border structure_cube dense_chunk_patch sky_hole; do fresh "$OUT/$side-$wl-r$r.jsonl" && n=$((n+1)); done; done; echo "  $side $n/12"; done

@@ -1621,3 +1621,50 @@ un-commit（join 现在安全）+ lane 拒收 stayed 区域。结果：**cycle �
 对 SL 的安静窗口 n=6 账：**dense、sky_hole 双轴赢；border/structure 引擎 +4~12%、wall 平（8 项 4 赢 2 平 2 输）**。
 border/structure 的剩余差距在"同步 flush 的最后一段 + lane 保险费"里，量级 0.3-0.8ms，与窗口噪声部分重叠；
 它的下一步属于两个专门的引擎任务（队列调度语义、下降波逐检查成本），都已在 REMAINING-WORK P1 排队。
+
+### 10.56 会话（2026-10-02）：三条"零风险"优化**全部被自己的 A/B 否掉**——方法论留在这一节
+
+用户要求"先构建一个可用的给我，然后继续优化、彻底赢过 SL"。构建交付了
+（`E:\LuciStarlin\dist\lucistarlink-2.0.17+1.21.1.jar`，md5 `0e6750dff05057c75a38cff925fa8ffa`，
+modId `lucistarlink`，从 `6a5b03b` 构建；`build/libs` 里当时放的是 rig 包，直接发出去会 FML 拒载）。
+本条记的是优化部分的三次否定。
+
+**（1）lane capture 上下文缓存（实现并回退）**。理由看似无懈可击：捕获在**每一个** block change 上，
+而 lane 存在的意义就是集中 burst（dense 2048、structure 4096 **同 chunk**），于是把"线程判定（一路 getter 链
+到 mainThreadExecutor）、chunk 查找、LIGHT 状态检查、bounds 构造"从每改动一次降为每 chunk 一次。
+实现 + 门全绿（cycle 0/11、gradient GREEN、residue = 已知 2 格）。**同窗口 A/B（3 轮 × 4 格 × 3 侧，36/36
+fresh，负载 44.3%）判负：structure 6.11→8.12（+1.6 ms，4/4 轮一致）、border +0.7 ms、dense −0.9 ms。**
+二分定位：把 ImageLane.java 单独回退（保留同轮的另一个改动）后 structure 回到 **7.35 vs 基线 7.41** ——
+**是 capture 补丁本身**。机理未查明（它每改动做的活严格更少）；最可疑的是它改变了 lane 的**状态迁移**：
+缓冲区现在在 `hasSameLight` 之前就被 `pending.put` 建出来，一个空的 region 条目会让 `hasPending()` /
+`covers()` 看到旧代码不会存在的 region，而这两个函数正是**路由判据**。没有继续追，补丁已删除
+（stash drop），代码不在树里。
+
+**（2）`imageLaneMaxChanges=8192`（只改旋钮）**：让 lane 吃下 structure 的 4096 改动（现在会 capture 2048 后
+被 cap 拒收，纯浪费）。**单次 onecell 探针读出 6.37 vs 基线 7.35（−13%，看起来是大胜）**，门也全绿
+（cycle 0/11、gradient 21/21、residue 不变）。**配对 A/B 直接推翻：structure 9.38/9.91/10.02/10.67 vs
+7.22/6.95/8.20/8.77 —— 4/4 轮，+1.8~3.0 ms。** 同一轮里 dense（2048 改动 < 两个 cap，此旋钮对它是**逐字
+no-op**）读出 −0.7 ms 最优轮，且每轮两边互相重叠——这条给出了**本仪器在该格/该口径下的噪声地板 ≈0.5 ms**，
+也证明 structure 的回归（+1.8 起，4/4 轮）是真的。**结论：cap 2048 是对的，4096 单 chunk burst 交给
+grouped nibble 路径更划算。**
+
+**（3）`imageLaneMinChanges=8`（只改旋钮）**：让 lane 收 border 的 19×5 改动。**7.48 ms vs 基线 ~5.0 —— 大负**
+（`blkDecNanos` 8.9 ms：19 个"小于 MIN"的 region 各自付一次 lane 的固定成本）。**border 留在基座队列。**
+
+**两次被否的教训（写进纪律）**：
+- **"每改动做的活严格更少" 不是 lane 改动成立的充分理由**——capture 坐在路由判据的边界上，
+  改动它的时序就改路由。
+- **单次 onecell 探针在 structure 上不可信**（该格跨窗口 6.1~10.9 ms）；（2）的正确性完全靠配对 A/B 才看见。
+  探针只配用来**挑候选**，不配用来**采纳**。
+- 本轮唯一保留的代码改动是 `StarLightInterface.lucis$ownEditInline` 的**服务端线程证明缓存**
+  （每改动省一条 getter 链）：structure 上 7.35 vs 7.41（平），语义逐字不变，随本轮末的同窗口 A/B 确认。
+
+**本轮的正面产出（相位事实，供下一步用）**：四格分**两个机制区**，minPass 的成分完全不同——
+- **重算区（dense / structure）**：lane/grouped 路径**同步**在服务器线程上完成，`waitUs` ≈ 0
+  （dense 5~126 µs、structure 287~482 µs），**minPass ≈ apply + 我们自己的同步 settle**；
+- **队列区（border / sky_hole）**：小 burst 进基座队列，`waitUs` = 5.6~7.4 ms（border）/ 0.6~2.0 ms（sky_hole），
+  **minPass ≈ apply + 队列任务的完成时刻**，与我们算得多快无关。
+以及 structure 的成本是**集中在一点**的：`settleRecomputeNanos`（延迟天光窗口重算）= **6.8 ms / 7.5 ms pass**。
+这两条把"下一步该动哪"从"引擎整体"缩小到了两个具体位置。
+**环境陷阱（浪费了两次时间）**：本机 Git Bash 里的 `python` 是 Windows Store 的占位 stub，**退出码 0 但什么都不做**
+（heredoc 脚本静默无效果）——脚本一律用 bash/awk/sed 或文件工具。
