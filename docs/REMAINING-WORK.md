@@ -273,3 +273,24 @@ lane 区域达标（多 chunk 各 25 改动可跨过 64）——一旦达标，l
 
 **验收（不变）**：三个门 + check-layers 归零 + 四格指纹 + 安静机器 n≥6 的 us-vs-SL（ROUNDS=6 已支持）。
 预期收益：border/structure 引擎口径 −0.4/−0.8 ms（apply 与光工作的重叠），wall 已平，不指望再动。
+
+---
+
+## 2026-10-02 深夜：capture 时入队第三尝试的机理级关闭 + 测量纪律新条目
+
+**队列调度语义已解透**（这是 P1 第一项的一半）：`propagateChanges()`——把任务派发到 scalablelux-N 工作线程的
+唯一入口——**只被原版光照 tick 调用**（服务器线程）。`queueBlockChange` 只进 dirtyPos。所以：
+- 任何"apply 中途 join 队列 future"的写法 = 等"被 park 的服务器线程永远走不到的下一个 tick" = 自锁
+  （三次实验：无 pump 自锁；无 join 提交毒化 lane（dense −25%）；pump+join **形状相关死锁**——
+  64 格跨阈值通过、405 格挂死，问题在 SchedulingUtil 的 5×5 chunk 锁 token 消化，未解透）。
+- **"capture 时重叠 apply"在本架构下关闭**。重开的前置 = 解透 SchedulingUtil token 语义（own-scheduler 领地）。
+
+**P1 的两项更新**：
+1. ~~队列调度语义~~ → **已解透一半**（泵=光照 tick 已确认；剩 token 消化语义，属于上条的前置）。
+2. border/structure 引擎残差（+4~12%，随窗口）的最后一段 = 同步 flush 的收尾 + lane 保险费（structure 8.5%
+   不可约）+ 测量噪声。在两项引擎任务（token 语义、下降波逐检查成本）之前，**没有已知的、安全的、
+   单工作窗能完成的杠杆**——12 次尝试 + 伙伴快路径平 + 三次 capture 实验构成完整的否定记录。
+
+**测量纪律（新）**：`onecell.sh` 的相位表带 profiler 自身开销——border 同构建 minPass 4.3（profiler 关）
+vs 8.3（开），**profiler-on 的绝对值禁止与 profiler-off 的表对比**；相位表的相对结论（下降波主导）仍有效。
+另外窗内 95.6% 峰值部分来自测量自身叠加——任何时刻只跑一个测量进程（脚本已保证）。
