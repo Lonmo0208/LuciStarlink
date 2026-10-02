@@ -215,6 +215,18 @@ public final class LuxProfiler {
     public static long settleNanos;
     public static long settleRecomputeCalls;
     public static long settleRecomputeNanos;
+    /**
+     * The deferred sky window recompute split into the five things it does: the cache window setup, the window
+     * routine itself ({@code settleSkyWindow}, whose own expand/sweep/bfs/install split sits behind
+     * {@code -Dscalablelux.recomputeDebug}), and the two engine drains plus the publish that the install step seeds.
+     * structure_cube spends 6.8 ms of a 7.5 ms pass inside this block, so "which of the five" is the question that
+     * decides where the next change goes; one nanoTime pair each per recompute (~1-3 a pass) costs nothing.
+     */
+    public static long skyRecSetupNanos;
+    public static long skyRecWindowNanos;
+    public static long skyRecDecreaseNanos;
+    public static long skyRecIncreaseNanos;
+    public static long skyRecVisibleNanos;
 
     /**
      * Wraps the whole settle (the group settles and the deferred sky recompute). This is the phase the harness sees as
@@ -309,6 +321,11 @@ public final class LuxProfiler {
         settleNanos = 0;
         settleRecomputeCalls = 0;
         settleRecomputeNanos = 0;
+        skyRecSetupNanos = 0;
+        skyRecWindowNanos = 0;
+        skyRecDecreaseNanos = 0;
+        skyRecIncreaseNanos = 0;
+        skyRecVisibleNanos = 0;
         ownEditSmallBursts = 0;
         ownEditBulkRelights = 0;
         ownEditRecomputes = 0;
@@ -400,6 +417,9 @@ public final class LuxProfiler {
                 + " settleNanos=" + settleNanos
                 + " settleRecomputeCalls=" + settleRecomputeCalls
                 + " settleRecomputeNanos=" + settleRecomputeNanos
+                + " skyRecSetupUs=" + skyRecSetupNanos / 1000 + " skyRecWindowUs=" + skyRecWindowNanos / 1000
+                + " skyRecDecUs=" + skyRecDecreaseNanos / 1000 + " skyRecIncUs=" + skyRecIncreaseNanos / 1000
+                + " skyRecVisUs=" + skyRecVisibleNanos / 1000
                 + " smallBursts=" + ownEditSmallBursts
                 + " bulkRelights=" + ownEditBulkRelights
                 + " recomputes=" + ownEditRecomputes + " blockSkipped=" + ownEditBlockSkipped + " recomputeNanos=" + ownEditRecomputeNanos

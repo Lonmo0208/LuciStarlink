@@ -1668,3 +1668,44 @@ grouped nibble 路径更划算。**
 这两条把"下一步该动哪"从"引擎整体"缩小到了两个具体位置。
 **环境陷阱（浪费了两次时间）**：本机 Git Bash 里的 `python` 是 Windows Store 的占位 stub，**退出码 0 但什么都不做**
 （heredoc 脚本静默无效果）——脚本一律用 bash/awk/sed 或文件工具。
+
+### 10.57 采纳：下降波在"有材质平面"的 section 里不再走调色板（2026-10-02，structure 6/8 配对准赢）
+
+**先拆相位再动手**（这是上一节写的计划）。`-Dscalablelux.recomputeDebug=true` 已带内部相位表，
+再加上本轮给 `settleSkyWindow` 调用点补的五段计时（`skyRecSetupUs / skyRecWindowUs / skyRecDecUs /
+skyRecIncUs / skyRecVisUs`，都在 SLPROF 行里），structure 的延迟天光重算（6.8 ms / 7.5 ms pass）拆开是：
+
+| 相位 | 实测 |
+|---|---|
+| 窗口例程本身（expand/sweep/bfs/install） | 243-5791 µs（其中 bfs 40-4160，随种子数 4352↔10759 双峰） |
+| **`performLightDecrease`（天光变暗波）** | **137-1899 µs ← 主项** |
+| `performLightIncrease` | **0 µs** |
+| 发布 `updateVisible` | 10-12 µs |
+| setupCaches | 1-2 µs |
+
+**改动**：`StarLightEngine.performLightDecrease` 的两处检查在"有平面"时**仍每格走一次调色板**
+（`section.states.get(localIndex)`）。而平面只在该 section **没有任何 state 用形状做光遮挡**时才存在
+（`ImageMaterialPlanes.enginePlane` 里 `maybeHas(useShapeForLightOcclusion)` 直接拒绝），
+且 `scalablelux$isConditionallyFullOpaque = canOcclude & useShapeForLightOcclusion` —— 所以平面路径里
+那个标志**恒为 false**，两边分支都不可达（平面的 opacity 字节永远不是 -1），
+`blockState` 在平面路径里根本没被读过。10.33 的"~50 ns -> ~2 ns"只换掉了两次读，**没换掉这次 fetch**。
+改法就是让 `getBlockState` 变成 `lucisPlane == null ? ... : null`，并把 emitted 推送的 flags 写成
+`lucisPlane != null ? FLAG_WRITE_LEVEL : (状态判定)`。语义逐字等价（可证，见上）。
+
+**实测（配对同窗口，两侧都带同一套相位计数器）**：
+- 3 轮 × 4 格：us vs ussplit 最优轮 **border 3.91 vs 4.24、structure 4.82 vs 5.28、dense 3.58 vs 3.66、
+  sky_hole 0.93 vs 0.86**；逐轮 6 胜 6 负、按格求和 −0.90 ms。
+- 加测 5 轮 × 2 格：**structure 4 胜 1 负（均值 −0.39 ms，6/8 累计）**、border 2 胜 3 负（均值 +0.14 ms，平）。
+- 玩家口径：structure 47-50 vs 48-51、border 49-51 vs 48-50 —— **不动**。
+- 门：cycle 0/11 ✓、gradient 21/21 GREEN ✓、residue = 已知 2 格（不变）✓。
+
+**为什么收益只有 ~0.4 ms**：加了每格检查计数（`bfsNeighbours` ~30-36k/pass）后算出来，
+**每格检查成本两边都是 55-62 ns，没有下降** —— 也就是说这次 fetch 在这些 section 上本来就只有几纳秒
+（结构/边界负载的 section 只有 2-3 个 state，调色板查找是线性数组）。55 ns 里的主体是内存访问
+（nibble 数组、section 缓存的 cache miss）和循环自身的分支，不是可删的工作。**这条也解释了 10.29
+"border 引擎口径在现有架构里已封顶"**：下降波是访存受限的。
+
+**下一步（写进 REMAINING-WORK）**：`performLightIncrease` 是唯一还没吃平面的重活
+（它的检查仍然 `getBlockState` + `getLightBlock(world,pos)` 每格一次）。但它不是逐字等价：
+平面的 opacity 对树叶有 `foliage && opacity == 0 -> 1` 的规则，而 palette 路径用的是
+`getOpacityIfCached()`（无此规则）—— 换过去是**语义变更**，必须自带门 + 配对 A/B，不能顺手做。

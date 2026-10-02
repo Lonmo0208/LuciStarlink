@@ -315,3 +315,18 @@ performLightIncrease + updateVisible）。这是四格里唯一"一个函数占�
 
 **方法纪律（本轮新增）**：单次 onecell 探针在 structure 上不可信（跨窗口 6.1~10.9 ms）；探针只挑候选，
 采纳必须靠配对 A/B。本仪器噪声地板 ≈0.5 ms（用 dense 上的逐字 no-op 旋钮标定）。
+
+## 2026-10-02 续：采纳"下降波平面快路径"（HANDOVER §10.57）
+
+**已采纳**：`performLightDecrease` 在有材质平面的 section 里不再 fetch blockState（可证的逐字等价；
+structure 6/8 配对准赢、均值 −0.39 ms；border 平；玩家口径不动；门全绿）。
+**新增仪器**：SLPROF 行现在带 `skyRecSetupUs / skyRecWindowUs / skyRecDecUs / skyRecIncUs / skyRecVisUs`
+——延迟天光重算的五段分解，下一个动它的人先看这五个数。
+
+**下一步候选（按证据排序）**：
+1. **`performLightIncrease` 吃平面**（唯一还没吃平面的重活）。注意它不是逐字等价：平面 opacity 对树叶有
+   `foliage && opacity == 0 -> 1`，palette 路径用 `getOpacityIfCached()`（无此规则）。要自带门 + 配对 A/B。
+2. **下降波是访存受限的**（55-62 ns/检查，删掉 fetch 也不降）：真正的大头是 nibble 数组/section 缓存的
+   cache miss。要动就得动数据布局（把 5×5 cache 的 nibble 引用收进连续数组、或按 section 预取），
+   属于引擎级改造，不是单窗工作。
+3. 队列区的 border/sky_hole 仍卡在 P1 的 token 语义上，无变化。

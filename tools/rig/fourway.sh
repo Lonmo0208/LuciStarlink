@@ -13,10 +13,12 @@ ROOT=/e/LuciStarlin/LuciStarlink
 V2=/e/LuciStarlin/LuciStarlink-LS-V2
 MODS="$ROOT/run-benchmark-scalablelux/mods"
 OUT=/e/LuciStarlin/sl-jar/fourway; mkdir -p "$OUT"
-# ls2-thrproof-rig.jar is THIS round's build (the own-edit server-thread proof, and nothing else: the capture
-# context cache was rejected by its own A/B - structure +1.6 ms - and removed); ls2-capflag-rig.jar is the
-# verified baseline it is measured against, byte-frozen.
-US_JAR=/e/LuciStarlin/sl-jar/ls2-thrproof-rig.jar
+# ls2-planedec-rig.jar is THIS round's build: the decrease wave stops walking the palette when a material plane
+# answers both numbers. ls2-split-rig.jar is the SAME baseline plus the five-phase counters (skyRec*) and no
+# behaviour change - it is the "before" side of the paired run, so both sides carry identical instrumentation and
+# the phase split is read from the same window. ls2-capflag-rig.jar is the byte-frozen verified baseline.
+US_JAR=/e/LuciStarlin/sl-jar/ls2-planedec-rig.jar
+USSPLIT_JAR=/e/LuciStarlin/sl-jar/ls2-split-rig.jar
 USOLD_JAR=/e/LuciStarlin/sl-jar/ls2-capflag-rig.jar
 PREV_JAR=/e/LuciStarlin/sl-jar/ls2-premerge-rig.jar
 SL_JAR=/e/LuciStarlin/ScalableLux-neoforge-build/ScalableLux-Master/build/libs/ScalableLux-neoforge-0.3.0-alpha.0.8-all.jar
@@ -73,6 +75,8 @@ run_one() { # $1 = side, $2 = workload, $3 = round
   case "$side" in
     us)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR";   extra="$P_US";;
     usold) task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$USOLD_JAR"; extra="$P_US";;
+    # baseline + the five-phase counters, no behaviour change: the "before" side of a phase-level comparison
+    ussplit) task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$USSPLIT_JAR"; extra="$P_US";;
     # the lane allowed to own bursts up to 8192 changes: structure's 4096-change chunk is then lane-handled
     # instead of captured-and-rejected, dense (2048) is untouched by construction (it never reached 2048+ before)
     us8k)  task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR"; extra="$P_US -Dscalablelux.imageLaneMaxChanges=8192";;

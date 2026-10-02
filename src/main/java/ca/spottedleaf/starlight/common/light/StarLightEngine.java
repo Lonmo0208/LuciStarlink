@@ -1610,12 +1610,22 @@ public abstract class StarLightEngine {
                     // its opacity/emission extracted once and kept in step by the write funnel, so the examination
                     // reads two flat bytes instead of walking the palette (~50 ns -> ~2 ns). Shape-occluding sections
                     // have no plane and fall through to the palette path below, unchanged; the fallback is what makes
-                    // this exact rather than approximate. blockState is still fetched here because the sided branch
-                    // below needs the state itself.
+                    // this exact rather than approximate.
+                    //
+                    // 2026-10-02: with a plane present the state is not read AT ALL, so the palette walk is skipped.
+                    // A plane exists only when no state in the section uses its shape for light occlusion
+                    // (ImageMaterialPlanes.enginePlane refuses on maybeHas(useShapeForLightOcclusion)), and
+                    // scalablelux$isConditionallyFullOpaque is canOcclude & useShapeForLightOcclusion - so inside the
+                    // plane path that flag is false for every cell, the sided branch below is unreachable (a plane's
+                    // opacity byte is never -1) and both numbers come from the plane. The walk that used to run here
+                    // was the ~50 ns of the 10.33 note that the plane never removed: it replaced the two reads, not
+                    // the fetch. Measured before the change: this loop is the dominant phase of the deferred sky
+                    // recompute (skyRecDecUs 137-1899 us of a 7.5 ms structure_cube pass).
                     final ca.spottedleaf.starlight.common.light.image.ImageMaterialPlanes.Plane lucisPlane =
                             this.lucis$materialPlane(sectionIndex);
-                    final BlockState blockState = this.getBlockState(sectionIndex, localIndex);
-                    if (blockState == null) {
+                    final BlockState blockState = lucisPlane == null ? this.getBlockState(sectionIndex, localIndex) : null;
+
+                    if (blockState == null && lucisPlane == null) {
                         continue;
                     }
                     final int opacityCached = lucisPlane == null
@@ -1648,7 +1658,10 @@ public abstract class StarLightEngine {
                                     ((offX + (offZ << 6) + (offY << 12) + encodeOffset) & ((1L << (6 + 6 + 16)) - 1))
                                             | ((emittedLight & 0xFL) << (6 + 6 + 16))
                                             | (((long)ALL_DIRECTIONS_BITSET) << (6 + 6 + 16 + 4))
-                                            | (((ExtendedAbstractBlockState)blockState).scalablelux$isConditionallyFullOpaque() ? (FLAG_WRITE_LEVEL | FLAG_HAS_SIDED_TRANSPARENT_BLOCKS) : FLAG_WRITE_LEVEL);
+                                            // a plane-backed section is provably free of conditionally-full-opaque states
+                                            // (see the note at the plane lookup), so this flag is plane ? false : state
+                                            | (lucisPlane != null ? FLAG_WRITE_LEVEL
+                                                    : (((ExtendedAbstractBlockState)blockState).scalablelux$isConditionallyFullOpaque() ? (FLAG_WRITE_LEVEL | FLAG_HAS_SIDED_TRANSPARENT_BLOCKS) : FLAG_WRITE_LEVEL));
                         }
 
                         currentNibble.set(localIndex, 0);
@@ -1751,12 +1764,22 @@ public abstract class StarLightEngine {
                     // its opacity/emission extracted once and kept in step by the write funnel, so the examination
                     // reads two flat bytes instead of walking the palette (~50 ns -> ~2 ns). Shape-occluding sections
                     // have no plane and fall through to the palette path below, unchanged; the fallback is what makes
-                    // this exact rather than approximate. blockState is still fetched here because the sided branch
-                    // below needs the state itself.
+                    // this exact rather than approximate.
+                    //
+                    // 2026-10-02: with a plane present the state is not read AT ALL, so the palette walk is skipped.
+                    // A plane exists only when no state in the section uses its shape for light occlusion
+                    // (ImageMaterialPlanes.enginePlane refuses on maybeHas(useShapeForLightOcclusion)), and
+                    // scalablelux$isConditionallyFullOpaque is canOcclude & useShapeForLightOcclusion - so inside the
+                    // plane path that flag is false for every cell, the sided branch below is unreachable (a plane's
+                    // opacity byte is never -1) and both numbers come from the plane. The walk that used to run here
+                    // was the ~50 ns of the 10.33 note that the plane never removed: it replaced the two reads, not
+                    // the fetch. Measured before the change: this loop is the dominant phase of the deferred sky
+                    // recompute (skyRecDecUs 137-1899 us of a 7.5 ms structure_cube pass).
                     final ca.spottedleaf.starlight.common.light.image.ImageMaterialPlanes.Plane lucisPlane =
                             this.lucis$materialPlane(sectionIndex);
-                    final BlockState blockState = this.getBlockState(sectionIndex, localIndex);
-                    if (blockState == null) {
+                    final BlockState blockState = lucisPlane == null ? this.getBlockState(sectionIndex, localIndex) : null;
+
+                    if (blockState == null && lucisPlane == null) {
                         continue;
                     }
                     final int opacityCached = lucisPlane == null
@@ -1789,7 +1812,10 @@ public abstract class StarLightEngine {
                                     ((offX + (offZ << 6) + (offY << 12) + encodeOffset) & ((1L << (6 + 6 + 16)) - 1))
                                             | ((emittedLight & 0xFL) << (6 + 6 + 16))
                                             | (((long)ALL_DIRECTIONS_BITSET) << (6 + 6 + 16 + 4))
-                                            | (((ExtendedAbstractBlockState)blockState).scalablelux$isConditionallyFullOpaque() ? (FLAG_WRITE_LEVEL | FLAG_HAS_SIDED_TRANSPARENT_BLOCKS) : FLAG_WRITE_LEVEL);
+                                            // a plane-backed section is provably free of conditionally-full-opaque states
+                                            // (see the note at the plane lookup), so this flag is plane ? false : state
+                                            | (lucisPlane != null ? FLAG_WRITE_LEVEL
+                                                    : (((ExtendedAbstractBlockState)blockState).scalablelux$isConditionallyFullOpaque() ? (FLAG_WRITE_LEVEL | FLAG_HAS_SIDED_TRANSPARENT_BLOCKS) : FLAG_WRITE_LEVEL));
                         }
 
                         currentNibble.set(localIndex, 0);

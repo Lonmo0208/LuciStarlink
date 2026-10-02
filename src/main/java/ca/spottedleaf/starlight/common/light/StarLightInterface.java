@@ -1027,15 +1027,29 @@ public final class StarLightInterface {
                     final boolean lucisSkyProbe = this.lucis$imageLane != null
                             && this.lucis$imageLane.lucis$skyWindowProbe(chunkX, chunkZ, range);
 
+                    // the five phases, timed separately: on structure_cube this whole block is 6.8 ms of a 7.5 ms pass,
+                    // so "which of the five" is the question that decides where the next change goes
+                    final long lucisSetup0 = System.nanoTime();
                     skyEngine.setupCaches(this.lightAccess, chunkX * 16 + 7, 128, chunkZ * 16 + 7, true, true);
+                    final long lucisSetup1 = System.nanoTime();
                     try {
                         // the settle pushes both directions, so both propagations have to run (decrease first, as the
                         // engine does everywhere else) before the section is published
                         skyEngine.settleSkyWindow(this.lightAccess, chunk, range[0], range[1], range,
                                 this.lucis$imageLane == null ? null : this.lucis$imageLane.lucis$skyWindowSource());
+                        final long lucisWindow1 = System.nanoTime();
                         skyEngine.performLightDecrease(this.lightAccess);
+                        final long lucisDec1 = System.nanoTime();
                         skyEngine.performLightIncrease(this.lightAccess);
+                        final long lucisInc1 = System.nanoTime();
                         skyEngine.updateVisible(this.lightAccess);
+                        final long lucisVis1 = System.nanoTime();
+
+                        LuxProfiler.skyRecSetupNanos += lucisSetup1 - lucisSetup0;
+                        LuxProfiler.skyRecWindowNanos += lucisWindow1 - lucisSetup1;
+                        LuxProfiler.skyRecDecreaseNanos += lucisDec1 - lucisWindow1;
+                        LuxProfiler.skyRecIncreaseNanos += lucisInc1 - lucisDec1;
+                        LuxProfiler.skyRecVisibleNanos += lucisVis1 - lucisInc1;
                     } finally {
                         skyEngine.destroyCaches();
                     }
