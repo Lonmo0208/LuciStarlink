@@ -1597,3 +1597,27 @@ sky_hole 0.85 vs 0.84、border 噪声内。门：cycle 0/11 ✓、gradient GREEN
 **没解决的**：structure 剩下的 8.5% 税 = 前 2048 个 capture 的"保险费"——要知道"这区域永远不会用 lane"必须
 先 capture 到 cap，这是信息论式的先有鸡还是先有蛋（降低 cap 会把 dense 也挡在门外）。structure 引擎口径对 SL
 仍差 ~4-12%（随窗口），剩余杠杆仍是 REMAINING-WORK P1 的两项（队列调度语义、下降波逐检查成本）。
+
+### 10.55 capture 时入队（第三次尝试：pump + join）：**同形状相关的死锁，裁决确认，架构关闭**
+
+读调度代码锁死了死锁机理：`propagateChanges()`（把任务派发到 scalablelux-N 工作线程）**只被原版光照 tick 调用**
+（服务器线程每 tick 一次）。`queueBlockChange` 只进 dirtyPos——**任务在下一个光照 tick 之前根本没被调度**。
+所以第一次尝试的 join 等的是"下一个光照 tick"，而光照 tick 在被 park 的服务器线程上 = 自锁。
+
+**第三次尝试**：capture 时 `queueBlockChange` + 立即手动 `propagateChanges()`（任务立刻进工人）+ 跨阈值
+un-commit（join 现在安全）+ lane 拒收 stayed 区域。结果：**cycle 门全绿（0/11）、gradient 门 GREEN
+（64 格跨阈值的 join 通过！）——但残留门的 405-fill 跨阈值 join 挂死**（watchdog 10.25.58，park 在 join，
+60 秒击杀）。**死锁与形状/负载相关**：小跨阈值（64 格）通过，大跨阈值（405 格）挂死——worker 的
+5×5 chunk 锁 token 或调度队列在某类负载下不被消化，机理在 SchedulingUtil/ExecutorManager 内部，未解透。
+
+**裁决（三个实验、三种形态，全部实测失败）**：
+1. 无 pump + join：自锁（tick 泵在服务器线程上）。
+2. 无 join + 整 chunk 提交：dense −25%（capture 提交毒化 lane 资格）。
+3. pump + join：**形状相关的死锁**（64 格过、405 格挂）。
+"capture 时重叠 apply"在本架构下（vanilla-tick 泵 + 锁 token 工作池 + 无法预知的 burst 大小）**关闭**。
+任何重开都需要先解透 SchedulingUtil 的 token 消化语义——那是own-scheduler 备忘录的领地。
+
+**当前最终状态 = master（fe22bfb + 本文档）**：冲洗闸门 + 队列路由 32 + cap 标记，
+对 SL 的安静窗口 n=6 账：**dense、sky_hole 双轴赢；border/structure 引擎 +4~12%、wall 平（8 项 4 赢 2 平 2 输）**。
+border/structure 的剩余差距在"同步 flush 的最后一段 + lane 保险费"里，量级 0.3-0.8ms，与窗口噪声部分重叠；
+它的下一步属于两个专门的引擎任务（队列调度语义、下降波逐检查成本），都已在 REMAINING-WORK P1 排队。
