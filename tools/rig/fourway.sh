@@ -13,13 +13,11 @@ ROOT=/e/LuciStarlin/LuciStarlink
 V2=/e/LuciStarlin/LuciStarlink-LS-V2
 MODS="$ROOT/run-benchmark-scalablelux/mods"
 OUT=/e/LuciStarlin/sl-jar/fourway; mkdir -p "$OUT"
-# ls2-planedec-rig.jar is THIS round's build: the decrease wave stops walking the palette when a material plane
-# answers both numbers. ls2-split-rig.jar is the SAME baseline plus the five-phase counters (skyRec*) and no
-# behaviour change - it is the "before" side of the paired run, so both sides carry identical instrumentation and
-# the phase split is read from the same window. ls2-capflag-rig.jar is the byte-frozen verified baseline.
+# ls2-stack2-rig.jar is THIS round's build: the 15-sea skip (exact) + the increase-wave plane fast path, stacked.
+# ls2-planedec-rig.jar is the adopted 10.57 baseline (decrease plane only) and the paired reference.
 US_JAR=/e/LuciStarlin/sl-jar/ls2-planedec-rig.jar
 USSPLIT_JAR=/e/LuciStarlin/sl-jar/ls2-split-rig.jar
-USOLD_JAR=/e/LuciStarlin/sl-jar/ls2-capflag-rig.jar
+USOLD_JAR=/e/LuciStarlin/sl-jar/ls2-planedec-rig.jar
 PREV_JAR=/e/LuciStarlin/sl-jar/ls2-premerge-rig.jar
 SL_JAR=/e/LuciStarlin/ScalableLux-neoforge-build/ScalableLux-Master/build/libs/ScalableLux-neoforge-0.3.0-alpha.0.8-all.jar
 P='-Dlucistarlink.benchmark.prepareRing=8 -Dlucistarlink.benchmark.quiesceSettleMs=1000 -Dlucistarlink.benchmark.globalEngineBarrier=false'
