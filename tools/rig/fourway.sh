@@ -73,6 +73,9 @@ run_one() { # $1 = side, $2 = workload, $3 = round
   case "$side" in
     us)   task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR";   extra="$P_US";;
     usold) task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$USOLD_JAR"; extra="$P_US";;
+    # the shipped-but-default-off WindowSource (2.0.17, byte-identical, metric never priced): sky windows of
+    # lane-covered chunks source material+light from the region image
+    usky)  task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$US_JAR"; extra="$P_US -Dscalablelux.imageLaneSky=true";;
     # baseline + the five-phase counters, no behaviour change: the "before" side of a phase-level comparison
     ussplit) task=runBenchmarkScalableLuxServer; dir="$ROOT/run-benchmark-scalablelux"; mod=lucistarlinkrig; jar="$USSPLIT_JAR"; extra="$P_US";;
     # the lane allowed to own bursts up to 8192 changes: structure's 4096-change chunk is then lane-handled
