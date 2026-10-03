@@ -1794,3 +1794,29 @@ structure × 12 轮配对（预注册判定规则：**均值 ≤ −0.15 ms 且 
 **优化战役最终状态**：菜单上所有杠杆已计价；两条精确优化的信号在 n=12 仍不可认证；
 对 SL 的定表不变（§10.59 台账）：structure 平、dense 胜 3.6%、border 负 4.4%、sky_hole 负 8%，
 玩家口径 1胜3平0负。**下一个能改变表格的事件是安静测量窗口**——那需要使用者安排机器。
+
+### 10.61 残留门 P0 结案：两格是仪器伪影，顺带修掉一个真隐患（2026-10-04）
+
+**P0 的两格**（`4,-32,-12` / `4,-30,-12`，残留门自 10.47 起每次必报）用 layerdump 实证解剖：
+`chunk=0,-1 sky sectionY=-2 state(upd/vis)=NULL/NULL` —— relight 后该 section 被规范**去初始化**
+（ScalableLux 对全开放天空 section 的合法表示：不存数据，读者走高度图回退得 15）。
+门却拿两个不同语义的字段判等：`sky=` 走语义读者（NULL → 回退 → 15，**用户看到的值，正确**）、
+`updSky=` 读原始 updating 存储（NULL → 0）—— **按构造必炸**。READ2 与 READ3 的用户可见值全程相同，
+**从未有可见残留**。check-layers 的“两层不一致”同源。
+
+**但解剖顺带抓到真隐患**：NULL 态 section 上挂着非空 updating 数组（`updateVisible` 早跳注释假设
+“NULL 两侧都无存储”——layerdump 证明该不变量为假）。危险链：脏标记被早跳清掉后，下一次 `set()` 的
+swap 会把游离数组**变成可见层**，下次合并把它当活光合并 → 真·可见残留。修两处（SWMR 核心）：
+1. `swapUpdatingAndMarkDirty`：写入 NULL/UNINIT 态 section 时两侧从空开始（游离 updating、陈旧可见
+   一并丢弃；可见侧按契约在锁内改）；
+2. `updateVisible` 的 NULL/UNINIT 早跳改为要求两侧存储确实为空，合并分支丢弃游离数组而非泄漏。
+
+**仪器同步升级**（伪影与合法状态提升不再误报）：探针行加 `bSt=/sSt=`（block/sky 各自的 SWMR 状态）；
+gate-residue 的判据只比用户可见字段（block=/sky=/raw=）；gate-cycle/gate-bigfill 剥离状态字母
+（首次写入 U→I 是合法提升）；check-layers 按层豁免去初始化 section（block 看 bSt、sky 看 sSt，
+一侧豁免不掩盖另一侧真残留；selftest 仍能抓人造坏行）。
+
+**门**（ls2-swmrguard-rig.jar，md5 e63291c4…）：cycle 0/11 ✓、bigfill NO-RESIDUE ✓、
+residue **RESIDUE-FREE（历史首次，判据正确意义下）** ✓、gradient 21/21 ✓、
+check-layers 四日志全 0（豁免计数透明）✓。中途一次 cycle 10/11 红是门判据吃进状态字母的伪影
+（光照值逐格相同），修判据后全绿——加固本身从未被门否定。

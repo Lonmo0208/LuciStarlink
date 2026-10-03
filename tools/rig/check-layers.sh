@@ -15,12 +15,27 @@ check_one() {
       total++
       b=$5; s=$6; ub=$8; us=$9
       sub("block=", "", b); sub("sky=", "", s); sub("updBlock=", "", ub); sub("updSky=", "", us)
-      if (b != ub || s != us) {
+      # 去初始化的 section（状态 N/U，2026-10-04 探针起带 bSt/sSt）读原始 updating 是 0、读语义层走
+      # 高度图回退 —— 两层“不一致”是表示差异，不是残留（残留门的 2 格伪影）。真残留发生在 I/H 态。
+      # 豁免按层分开：block 差异看 bSt，sky 差异看 sSt —— 一侧去初始化不掩盖另一侧的真残留。
+      bSt = "I"; sSt = "I"
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^bSt=/) bSt = substr($i, 5)
+        if ($i ~ /^sSt=/) sSt = substr($i, 5)
+      }
+      bBad = (b != ub && bSt != "N" && bSt != "U")
+      sBad = (s != us && sSt != "N" && sSt != "U")
+      if (bBad || sBad) {
         bad++
         if (bad <= 5) printf "    x=%s y=%s z=%s visible(block/sky)=%s/%s updating=%s/%s\n", $2, $3, $4, b, s, ub, us
+      } else if ((b != ub || s != us)) {
+        skipped++
       }
     }
-    END { printf "  %s: 读数 %d，两层不一致 %d\n", (bad ? "** 不一致 **" : "OK"), total, bad+0 }' "$log"
+    END {
+      printf "  %s: 读数 %d，两层不一致 %d%s\n", (bad ? "** 不一致 **" : "OK"), total, bad+0,
+        (skipped ? "（另有 " skipped " 条为去初始化 section 的表示差异，已豁免）" : "")
+    }' "$log"
 }
 if [ "${1:-}" = "--selftest" ]; then
   tmp=$(mktemp)

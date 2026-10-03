@@ -149,7 +149,7 @@ printf 'say CYC-DONE2\nstop\n' > $DP/data/cycletest/function/done2.mcfunction
 
 timeout 320 ./gradlew runServerDiag ${SLARGS:+-PslArgs="$SLARGS"} --console=plain > "$LOG" 2>&1
 echo "engine knobs: ${SLARGS:-<defaults>}"
-grep -a "LuciStarlink light " "$LOG" | sed 's/.*LuciStarlink //' > /tmp/cyc-all.txt
+grep -a "LuciStarlink light " "$LOG" | sed -E 's/.*LuciStarlink //; s/ bSt=[NUHI?]+ sSt=[NUHI?]+//' > /tmp/cyc-all.txt
 total=$(wc -l < /tmp/cyc-all.txt); nprobes=14
 echo "readings total=$total (expect $((nprobes*12)) = 12 x $nprobes, the 12th being the post-relight read)"
 if [ "$total" -lt $((nprobes*12)) ]; then echo "INCOMPLETE RUN ($total) - 不可判"; exit 1; fi

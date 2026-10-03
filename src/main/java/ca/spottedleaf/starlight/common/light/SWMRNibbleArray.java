@@ -321,6 +321,23 @@ public final class SWMRNibbleArray {
             return;
         }
 
+        // A write into a de-initialised section starts from EMPTY on both sides: the de-init decided this section
+        // carries no stored data, so neither a stray updating array left by a write that raced the de-init nor the
+        // stale visible layer may survive it. Before this guard, the swap below copied the stray updating array
+        // into play and left the stale visible untouched - the next updateVisible then merged the stray into the
+        // visible layer as if it were live light (the residue the layerdump caught at 2026-10-04). Visible-side
+        // fields are mutated under the monitor, per the SWMR contract.
+        if (this.stateUpdating == INIT_STATE_NULL || this.stateUpdating == INIT_STATE_UNINIT) {
+            synchronized (this) {
+                if (this.storageVisible != null) {
+                    freeBytes(this.storageVisible);
+                    this.storageVisible = null;
+                }
+                this.stateVisible = this.stateUpdating;
+            }
+            this.storageUpdating = null;
+        }
+
         if (this.storageUpdating == null) {
             this.storageUpdating = allocateBytes();
             Arrays.fill(this.storageUpdating, (byte)0);
@@ -346,18 +363,21 @@ public final class SWMRNibbleArray {
             // but the on-disk and on-wire content is unchanged — no point sending a 2048-byte
             // DataLayer packet that the client already has.
             if (this.stateUpdating == this.stateVisible) {
-                // NULL/UNINIT carry no storage on either side by invariant, so equal states there mean equal layers.
-                // HIDDEN does NOT: a first write under HIDDEN allocates a fresh zeroed updating array while the
-                // visible side keeps the old light (the "set" path keeps the HIDDEN state on purpose), so equal
-                // states with DIFFERENT arrays is exactly the light-residue state measured on 2026-09-29
-                // (docs/HANDOVER.md 10.46): the client renders the stale visible array forever, because this early
-                // return skipped the merge and cleared the dirty flag. Only skip when the arrays cannot differ.
+                // NULL/UNINIT mean "no stored data": skip only when BOTH sides actually carry none. The layerdump at
+                // the residue gate (2026-10-04) caught a section in state NULL/NULL with a non-null updating array -
+                // a write (or pack) that landed after a de-init through a path that allocates without re-raising the
+                // state. Skipping on the state comparison alone kept that stray array forever, and the next set()
+                // swaps it into the visible layer as if it were live light - the residue shape again. A stray array
+                // on a de-initialised section is stale by definition (the de-init decided the section has no stored
+                // data), so it falls through to the merge below, which drops it and nulls the visible side.
                 if (this.stateUpdating == INIT_STATE_NULL || this.stateUpdating == INIT_STATE_UNINIT) {
-                    this.updatingDirty = false;
-                    if (LuxProfiler.enabled()) {
-                        LuxProfiler.identicalSkips.increment();
+                    if (this.storageUpdating == null && this.storageVisible == null) {
+                        this.updatingDirty = false;
+                        if (LuxProfiler.enabled()) {
+                            LuxProfiler.identicalSkips.increment();
+                        }
+                        return false;
                     }
-                    return false;
                 }
                 if (this.stateUpdating == INIT_STATE_HIDDEN
                         && this.storageUpdating == this.storageVisible) {
@@ -384,6 +404,13 @@ public final class SWMRNibbleArray {
 
             // Original merge logic
             if (this.stateUpdating == INIT_STATE_NULL || this.stateUpdating == INIT_STATE_UNINIT) {
+                // the section is de-initialised: "no stored data" is the truth on BOTH sides. A stray updating
+                // array here is stale (see the equal-state comment above) - drop it rather than letting the
+                // storageVisible = null below leak it.
+                if (this.storageUpdating != null) {
+                    freeBytes(this.storageUpdating);
+                    this.storageUpdating = null;
+                }
                 this.storageVisible = null;
             } else {
                 if (this.storageVisible == null) {

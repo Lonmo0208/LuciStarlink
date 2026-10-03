@@ -61,6 +61,7 @@ lucistarlink light 0 -34 -16
 lucistarlink light -2 -37 -16
 lucistarlink light 4 -38 -12
 lucistarlink stats
+lucistarlink layerdump 1
 EOF
 done
 printf 'say RES-READ1\n' >> $DP/data/residuetest/function/read1.mcfunction
@@ -78,13 +79,9 @@ echo "engine knobs: ${SLARGS:-<defaults>}"
 grep -a "LuciStarlink light " "$LOG" | sed 's/.*LuciStarlink //' > /tmp/res-all.txt
 total=$(wc -l < /tmp/res-all.txt)
 echo "readings total=$total (expect 48 = 3 x 16)"
-# 判据只看用户可见字段（block=/sky=/raw=，客户端与存档读的层）；updBlock=/updSky= 是原始 updating 存储
-# 的诊断输出 —— 一个被规范去初始化的 section（NULL，全开放天空的合法表示）读语义是高度图回退、读原始
-# 存储是 0，两者按构造不同（2026-10-04 layerdump 实证：残留门的“P0 两格”就是这个伪影，可见层无残留）。
-vis() { sed -E 's/ updBlock=[0-9]+ updSky=[0-9]+//; s/ bSt=[NUHI?-]+ sSt=[NUHI?-]+//; s/ sable=[a-z]+//; s/ state=.*//'; }
-head -16 /tmp/res-all.txt | vis > /tmp/res-r1.txt
-sed -n '17,32p' /tmp/res-all.txt | vis > /tmp/res-r2.txt
-tail -n +33 /tmp/res-all.txt | vis > /tmp/res-r3.txt
+head -16 /tmp/res-all.txt > /tmp/res-r1.txt
+sed -n '17,32p' /tmp/res-all.txt > /tmp/res-r2.txt
+tail -n +33 /tmp/res-all.txt > /tmp/res-r3.txt
 echo "=== 拆除后 vs relight 后（必须逐格相同）==="
 if [ "$total" -lt 48 ]; then echo "INCOMPLETE RUN ($total readings) - 不可判"; exit 1; fi
 if diff -q /tmp/res-r2.txt /tmp/res-r3.txt >/dev/null; then echo "RESIDUE-FREE: READ2 == READ3"; else

@@ -112,6 +112,8 @@ public final class LuciStarlinkCommand {
                             final ExtendedChunk extended = (ExtendedChunk) chunk;
                             final String layers = " updBlock=" + nibbleAt(extended.scalablelux$getBlockNibbles(), sectionIndex, localIndex)
                                     + " updSky=" + nibbleAt(extended.scalablelux$getSkyNibbles(), sectionIndex, localIndex)
+                                    + " bSt=" + stateAt(extended.scalablelux$getBlockNibbles(), sectionIndex)
+                                    + " sSt=" + stateAt(extended.scalablelux$getSkyNibbles(), sectionIndex)
                                     + " sable=" + SableCompat.isSablePlotChunk(level, pos.getX() >> 4, pos.getZ() >> 4);
                             final String report = "LuciStarlink light " + pos.toShortString()
                                     + " block=" + level.getBrightness(LightLayer.BLOCK, pos)
@@ -594,6 +596,31 @@ public final class LuciStarlinkCommand {
         final SWMRNibbleArray nibble = nibbles[sectionIndex];
 
         return nibble == null ? "null" : String.valueOf(nibble.getUpdating(localIndex));
+    }
+
+    /**
+     * The SWMR state letter of one nibble array: {@code N}ull, {@code U}ninit, {@code I}nit, {@code H}idden, or
+     * {@code -}/null for an absent array. Diagnostics: a de-initialised section (N/U) reads 0 from the raw updating
+     * layer while the semantic reader derives from the heightmap, so a visible-vs-updating "mismatch" on such a
+     * section is a representation difference, not residue - the layer tools use these letters to tell the two apart
+     * (the 2-cell residue-gate finding of 2026-10-04 was exactly that artifact).
+     */
+    private static String stateAt(final SWMRNibbleArray[] nibbles, final int sectionIndex) {
+        if (nibbles == null || sectionIndex < 0 || sectionIndex >= nibbles.length) {
+            return "-";
+        }
+        final SWMRNibbleArray nibble = nibbles[sectionIndex];
+
+        if (nibble == null) {
+            return "null";
+        }
+        return switch (nibble.stateUpdating) {
+            case 0 -> "N";
+            case 1 -> "U";
+            case 2 -> "I";
+            case 3 -> "H";
+            default -> "?";
+        };
     }
 
     private static StarLightInterface engineOf(final ServerLevel level) {

@@ -67,7 +67,7 @@ EOF
 
 timeout 320 ./gradlew runServerDiag ${SLARGS:+-PslArgs="$SLARGS"} --console=plain > "$LOG" 2>&1
 echo "engine knobs: ${SLARGS:-<defaults>}"
-grep -a "LuciStarlink light " "$LOG" | sed 's/.*LuciStarlink //' > /tmp/bf-all.txt
+grep -a "LuciStarlink light " "$LOG" | sed -E 's/.*LuciStarlink //; s/ bSt=[NUHI?]+ sSt=[NUHI?]+//' > /tmp/bf-all.txt
 n=12; total=$(wc -l < /tmp/bf-all.txt)
 echo "readings total=$total (expect $((n*4)) = 4 x $n: base / placed / cleared / relight)"
 if [ "$total" -lt $((n*4)) ]; then echo "INCOMPLETE RUN ($total)"; exit 1; fi
