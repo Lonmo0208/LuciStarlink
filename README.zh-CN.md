@@ -17,7 +17,7 @@
 | 层 | 代码归属 | 说明 |
 |---|---|---|
 | 光照存储、增量传播 BFS、区块/世界生成管线、原版接口、客户端发包路径 | **ScalableLux**（Spottedleaf、ishland、RelativityMC）—— LGPL-3.0-only | 引擎主体。包名（`ca.spottedleaf.starlight.*`）与 `scalablelux$` 混入前缀**故意保留**，好让每个文件的出处一眼可见。由 NeoForge 1.21.1 回溯树 `0.3.0-alpha.0.8` 产出。 |
-| **本版本拿来被评判的更新回路** | **LuciStarlink** | 新增 21 个文件 + 改动 29 个 ScalableLux 文件（+1734/−457）。即下面的五条机制。 |
+| **本版本拿来被评判的更新回路** | **LuciStarlink** | 新增 30 个文件 + 改动 24 个 ScalableLux 文件（相对基座导入点 +9,824/−440；新增文件里有一部分是仅测量用的 lane 与自测）。即下面的五条机制，外加其末尾补记的四条后采纳机制。 |
 | 遥测、profiler、游戏内命令、Sable 兼容、配置、存档保证、测量用 entrypoint | **LuciStarlink** | 从 1.x 线继承下来的做法（见下）。 |
 | 1.x 自己的引擎（区域图像 region images） | **一行都没有** | Lucis 那套要靠整块区域图像和自有的材料抽取；在本底座上移植过，结论是不可行（`docs/NEW-ENGINE-TEARDOWN.md`、`docs/PORT-LUCIS-IDEAS.md`）。 |
 
@@ -43,45 +43,60 @@
 
 开关**默认都是开的**；要关掉可以手动指定（`-Dscalablelux.ownEdit=false`、`-Dscalablelux.recomputeSky=false`，见"配置"）。这个列表原来还带着第三个开关 `scalablelux.batchDecrease`，已随它控制的代码一起删除。
 
+在那份清单之后，又有四条机制被实现、测量并采纳（每条都带配对 A/B，见 `docs/HANDOVER.md` §10.48–10.57）：
+**"有活就结算"的冲洗闸门**（tick 自身冲洗之后到达的改动在第一次被询问时就结算，不再等下一个 tick ——
+玩家口径的改善来源）、**小批量回基座队列**（每区块 ≤32 格改动的 burst 走 ScalableLux 自己的异步路径，
+与 apply 尾部重叠 —— sky_hole −22%、structure −8%）、**capture cap 标记**（区域缓冲到达 lane 上限就立刻
+停止捕获 —— structure 的 lane 税 12% → 8.5%），以及**减光波的平面快路径**（有材质平面的 section 里一次
+邻居检查只读两个平铺字节、不再走调色板 —— 这一条把 structure_cube 对 ScalableLux 的差距收口成平手）。
+
 ## 性能
 
-以下数字来自本项目自己的测试台（`run-benchmark-scalablelux`）：同一个会话、三方**交替**运行、同一张地图、固定种子、
+以下数字来自本项目自己的测试台（`run-benchmark-scalablelux`）：同一个会话、**交替**运行、同一张地图、固定种子、
 每次测量前世界已静默。协议：`-Dlucistarlink.benchmark.prepareRing=8 -Dlucistarlink.benchmark.quiesceSettleMs=1000
--Dlucistarlink.benchmark.globalEngineBarrier=false`，每次运行 3 个测量 pass，交替 3 轮，取中位数。
+-Dlucistarlink.benchmark.globalEngineBarrier=false`，每次运行 3 个测量 pass。
+
+下表是**当前战绩：同一个会话里对 ScalableLux 交替六轮**（2026-10-03，24/24 轮有效，机器负载均值 43% ——
+这台机器按设计就同时跑别的东西），取每格最好轮。
 
 **引擎口径** —— `minPassNanos`：从 pass 起点量到**引擎自己报告"做完了"**那一刻（harness 的 `waitCompleteNanos`），
 所以它主要由引擎算光的时间决定，而不是 harness 的 setBlock 循环。
 
-| 档位（玩家的说法） | **LuciStarlink 2.0** | ScalableLux | 1.x（Lucis 线） |
+| 档位（玩家的说法） | **LuciStarlink 2.0** | ScalableLux | 结论 |
 |---|---|---|---|
-| `block_toggle_border` —— 沿区块边界快速拆放 | 5.01 ms | 4.16 ms | **0.76 ms** |
-| `structure_cube` —— 盖一个实心建筑 | **5.11 ms** | 5.36 ms | 3.37 ms |
-| `dense_chunk_patch` —— 大面积改动 | **3.48 ms** | 5.74 ms | 2.85 ms |
-| `sky_hole` —— 一次很小的改动 | **1.17 ms** | 1.18 ms | 3.85 ms |
+| `block_toggle_border` —— 沿区块边界快速拆放 | 4.03 ms | **3.86 ms** | ScalableLux 快 4% |
+| `structure_cube` —— 盖一个实心建筑 | **4.71 ms** | 4.70 ms | 平 |
+| `dense_chunk_patch` —— 大面积改动 | **3.49 ms** | 3.62 ms | **LuciStarlink 快 3.6%** |
+| `sky_hole` —— 一次很小的改动 | 0.66 ms | **0.61 ms** | ScalableLux 快 8% |
 
-**玩家口径** —— `bench.pass_wall_actual`，一个 pass 的墙钟时间，**包含**玩家要等的跨 tick（中位数 / 最好一轮）：
+逐轮计：24 个配对轮里 13 轮归 LuciStarlink。**玩家口径** —— `bench.pass_wall_actual`，一个 pass 的墙钟时间，
+**包含**玩家要等的跨 tick：四格对两个引擎都在"一个 tick 的地板"上（49–50 ms；dense 49 对 50）——
+1 胜 3 平 0 负。绝对值是玩家视角的画像、不是安静房间的数字；**请把这里的每张表读成"约 ±30% 以内"，
+不要读成三位有效数字**。
 
-| 档位 | LuciStarlink 2.0 | ScalableLux | 1.x |
-|---|---|---|---|
-| border | 48 / 47 ms | 49 / 49 ms | 102 / 83 ms |
-| structure | 47 / 47 ms | 50 / 48 ms | 83 / 48 ms |
-| dense | 49 / 48 ms | 49 / 49 ms | 80 / 57 ms |
-| sky_hole | 49 / 49 ms | 50 / 50 ms | 70 / 48 ms |
+**对 1.x 线（Lucis）**：最近一次同窗口三方对照在 2026-09-29/30、在下列机制采纳**之前** —— 引擎口径上
+structure 与 dense 已经领先（+45% 和约 2.8×），border 与 sky_hole 落后；玩家口径上 1.x 要跨进第二个 tick
+（64–117 ms）。1.x 一列此后没有重跑过，因此**刻意**不与上表并排引用；它在这台机器上的轮间摆动是 2–5×，
+只能按最好轮比较。
 
-这份数据的窗口是**带负载的**（CPU 平均 44.3%、峰值 60.1% —— 这台机器按设计就同时跑别的东西）。让对比成立的是
-**同会话交替**。同一个 build 在更轻的窗口（CPU 平均 40.0%）读到 border 4.30、structure 4.44、dense 3.75、
-sky_hole 0.93 —— 这个跨度就是这台机器的真实分辨率：**请把上表读成"约 ±30% 以内"，不要读成三位有效数字**。
+**残留问题，置顶并已结案（2026-10-04）**：玩家在实机客户端报过的光照残留家族 —— 大片 `/fill` 撤掉后原地留亮 ——
+**已闭环**。两个真缺陷已修（2.0.17：发布侧的合并跳过、天光 sweep 对去初始化 section 的入口），最后一次门上
+报的两格经 `/lucistarlink layerdump` 解剖证实是**仪器伪影**：那个 section 被*合法地去初始化*（ScalableLux 对
+全开放天空的规范表示），用户可见值一直都正确，门此前拿语义读者和原始存储两个字段判等。解剖的副产物是一个
+真隐患 —— 去初始化 section 上的游离 updating 数组可能在下一次写入时变成可见层 —— **已修**；残留门在修正
+判据下读出 **RESIDUE-FREE**。`relight` 仍是修复*别的*光照引擎所写存档的手段。
 
 **诚实读法：**
 
 - **玩家口径上 LuciStarlink 与 ScalableLux 都在"一个 tick 的地板"上**：所有读数 47–50 ms = 20 TPS。两个引擎都在
   同一个 tick 内收尾，这个量具分不开它们——谁都别在这里声称"更快"。1.x 在这一口径上确实落后（64–117 ms），
   因为它要跨进第二个 tick。
-- **引擎口径上 1.x 在四格里的三格领先**，原因**是架构性的、不是调参差距**：1.x 的世界光照存储**就是**它的平坦镜像，
-  一次改动 = 写一个字节 + 推队列；本引擎必须从世界推导材质、再写回 ScalableLux 的 nibble。四格差距的实测分解：
-  **约 1.2× 来自本项目自己那层**（捕获、结算、打包、发布），其余是**基座引擎本身**——同一负载下光基座 ScalableLux
-  的 apply 后引擎时间就是 4028 µs 对 1.x 的 2331 µs，那时我们这层还没参与。
-- **`sky_hole` 是本引擎唯一赢的一格**（0.72 对 0.86 ms，1.19×）：25 处改动足够小，延迟结算比按位置播种的洪泛便宜。
+- **引擎口径对 ScalableLux 的现状：dense 胜、structure 平、border 与 sky_hole 小负。** 两个小负是**已被测量
+  关闭的路线**留下的已知税、不是调参差距：队列区的两格（border、sky_hole）把小批量交给基座队列，而我们的
+  预队列缓冲让任务晚一拍记账起步（能消掉这一拍的三次 capture 时入队尝试全部死锁，路线已关闭）；两个引擎
+  共同的减光波是**访存受限**的（每次邻居检查约 55–62 ns），只有数据布局改造才动得了它。1.x 在部分引擎格上
+  领先的原因是架构性的：它的世界光照存储**就是**它的平坦镜像，一次改动 = 写一个字节 + 推队列；本引擎必须
+  从世界推导材质、再写回 ScalableLux 的 nibble。
 - **不是速度，而是正确性**：本引擎产出的光照与原版和 ScalableLux **逐位相同**。每次运行都在测量箱上打印逐格指纹
   （`sky=905931078dfc5ace`），从 2026-09-27 起**四档全部**带指纹（此前只有 `structure_cube`）。1.x 的是
   `641356fc41163add`，与两者都不相同。2.0.9 就是靠它抓到并修掉一个真实缺陷（一次批量改动曾让受影响格子的天光保持
@@ -113,7 +128,7 @@ sky_hole 0.93 —— 这个跨度就是这台机器的真实分辨率：**请把
 |---|---|---|
 | `parallelism` | 核数 / 3 | 光照引擎的工作线程并行度（底座的键） |
 | `enabled` | `true` | 是否安装光照引擎。`false` 让所有维度留在原版引擎 —— 兼容逃生口，也是在真实服务器上做 A/B 的办法。改动需要重启 |
-| `telemetrySeconds` | `30` | `SLTELEM` 行的间隔秒数（队列深度、脏格数、池化传播器数）；`0` 关闭 |
+| `telemetrySeconds` | `0`（关） | `SLTELEM` 行的间隔秒数（队列深度、脏格数、池化传播器数）；默认关闭 —— 需要定时健康行时设正数秒 |
 | `profile` | `false` | 开发用 profiler 计数器打到日志 |
 | `batchLimit` | `1` | 逐改动钩子在进入完整调度路径前攒多少个改动（`1` = 底座行为）。实测中性，留作 A/B |
 

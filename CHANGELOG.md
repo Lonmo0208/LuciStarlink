@@ -6,6 +6,55 @@ the 1.x branch's own changelog; for what belongs to whom see [NOTICE](NOTICE) an
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 
+## 2.0.17 — 2026-10-04
+
+**The light-residue family is closed.** Three fixes stack up:
+
+- **The publish-side merge skip** (`SWMRNibbleArray.updateVisible`): the HIDDEN/HIDDEN early return compared states
+  only and never the array contents, so a section whose visible layer held stale light never merged. It now skips
+  only when the arrays cannot differ; the merge itself zero-fills a null updating array instead of crashing.
+- **The sky sweep's entry on de-initialised sections**: the column sweep read the gate cell one above the window;
+  when the section holding it carried no stored sky data (HIDDEN/NULL — a state a removed bulk edit leaves behind)
+  it read 0 and the whole column kept its shadow until a relight. The entry now falls back to the heightmap: a
+  column whose first blocker sits at or below the gate cell is open sky and the run provably continues. Two crash
+  guards came with it (a defensive allocation in `set()` and a zero-fill on the merge path).
+- **The stray-array hardening (the autopsy's bycatch).** The last two cells the residue gate kept flagging were
+  autopsied with the new `/lucistarlink layerdump` diagnostic and shown to be an *instrument artifact*: the section
+  was legitimately de-initialised (ScalableLux's canonical representation of fully-open sky — its semantic reader
+  derives 15 from the heightmap while the raw updating read is 0), and the user-visible light had been correct all
+  along. The autopsy did expose a real latent defect: a stray updating array left on a de-initialised section
+  survived the merge skip and would become the visible layer on the next write. `swapUpdatingAndMarkDirty` now
+  starts a de-initialised section from empty on both sides, and the NULL/UNINIT merge drops stray arrays instead of
+  leaking them. The residue gate reads **RESIDUE-FREE** under its corrected criterion (it now judges only the
+  user-visible fields), and the light probe prints the per-layer SWMR state (`bSt=`/`sSt=`) so legitimate
+  representation changes can no longer masquerade as residue.
+
+**Performance, measured and adopted** (each with a paired A/B; details in `docs/HANDOVER.md` §10.48–10.57):
+
+- **The flush-when-pending gate** — a change arriving after the tick's own flush settles at the first ask instead
+  of waiting for the next tick; against the previous behaviour it won all four cells on the player axis.
+- **Small-burst queue routing** (`scalablelux.queueSmallBursts`, default 32) — bursts of at most 32 changes per
+  chunk take ScalableLux's own asynchronous path, which overlaps the apply tail: sky_hole −22%, structure −8%.
+- **The capture cap flag** — a region whose captured burst crosses the lane cap stops capturing at once instead of
+  feeding a buffer the flush will reject: structure's lane tax 12% → 8.5%, dense untouched.
+- **The decrease-wave plane fast path** — a neighbour examination in a section with a material plane reads two flat
+  bytes and no longer walks the palette (provably identical: a plane exists only where no state uses its shape for
+  light occlusion). structure_cube went from +8–13% behind ScalableLux to a tie over six interleaved rounds.
+
+Current standing vs ScalableLux (six interleaved rounds, one session, 2026-10-03): engine metric dense −3.6%,
+structure tied, border +4% and sky_hole +8% behind; player axis one win, three ties, no losses.
+
+**Telemetry is off by default** (owner request): `telemetrySeconds` defaults to `0`, so the periodic `SLTELEM`
+console line no longer prints on servers that never asked for it. Measurement runs set the value explicitly and are
+unaffected; a server that wants the line sets `telemetrySeconds` in `config/lucistarlink.properties` or
+`-Dscalablelux.telemetrySeconds`.
+
+Also probed and **rejected by their own paired A/Bs** in this cycle, kept off the default path: the lane
+capture-context cache, `imageLaneMaxChanges=8192`, `imageLaneMinChanges=8`, the sky-window 15-sea skip and the
+increase-wave plane path (both provably exact but unmeasurable below this machine's noise floor), and the shipped
+`imageLaneSky` WindowSource (measured 2–4× *slower* on its own phase — it stays default-off).
+
+
 ## 2.0.16 — 2026-09-28
 
 **A deferred sky recompute now owns its chunk.** A burst is split between two paths - the first position of each

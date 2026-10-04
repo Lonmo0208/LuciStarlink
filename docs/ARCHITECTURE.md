@@ -126,7 +126,7 @@ before a pass is timed, and the box-scoped barrier stops a pass being charged fo
 
 | Surface | How to enable | What it gives |
 |---|---|---|
-| `SLTELEM` line | `-Dscalablelux.telemetrySeconds=N` (default 30) | queue depth, dirty positions, pooled propagators, engine counters |
+| `SLTELEM` line | `-Dscalablelux.telemetrySeconds=N` (default 0 = off) | queue depth, dirty positions, pooled propagators, engine counters |
 | `LuxProfiler` counters | `-Dscalablelux.profile=true` | per-phase counters (BFS pops, level skips, apply waits, own-edit counters) |
 | Windowed-settle timings | `-Dscalablelux.recomputeDebug=true` | expand / halo / sweep / shell / BFS / install µs per settle |
 | `/lucistarlink stats\|light\|relight` | in game, permission level 2 | live engine state, a position's light, and the repair path |
