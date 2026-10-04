@@ -16,9 +16,11 @@ import net.neoforged.neoforge.event.tick.ServerTickEvent;
  * bounded by construction, but it has no way to see whether the engine is keeping up - this is that
  * visibility, and it is the port of the Lucis telemetry line.
  *
- * <p>Interval: {@code -Dscalablelux.telemetrySeconds} (default 30; 0 disables). Reads are
- * approximate by design - taken without blocking the engine, and a stale-by-one figure is fine for
- * a health line. Lines are prefixed {@code SLTELEM} so they can be grepped or filtered out.</p>
+ * <p>Interval: {@code -Dscalablelux.telemetrySeconds} or {@code telemetrySeconds} in
+ * {@code config/lucistarlink.properties} (default 0 = OFF; a positive value is the interval in
+ * seconds). Reads are approximate by design - taken without blocking the engine, and a
+ * stale-by-one figure is fine for a health line. Lines are prefixed {@code SLTELEM} so they can be
+ * grepped or filtered out.</p>
  *
  * <p>Driven from both the server tick (so an idle server still reports) and the light engine's own
  * update entry point (so the line always exists even if the tick hook is unavailable).</p>

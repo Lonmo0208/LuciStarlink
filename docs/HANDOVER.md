@@ -1820,3 +1820,14 @@ gate-residue 的判据只比用户可见字段（block=/sky=/raw=）；gate-cycl
 residue **RESIDUE-FREE（历史首次，判据正确意义下）** ✓、gradient 21/21 ✓、
 check-layers 四日志全 0（豁免计数透明）✓。中途一次 cycle 10/11 红是门判据吃进状态字母的伪影
 （光照值逐格相同），修判据后全绿——加固本身从未被门否定。
+
+### 10.62 遥测行默认关闭（2026-10-04，机主要求）
+
+服务器后台每 30 秒一行 `SLTELEM dim=… tasks=0 dirty=0 …` 被机主要求取消。改动：`telemetrySeconds`
+默认 **30 → 0（关）**（`Config.java`，含注释说明缘由），启动日志改为报告解析后的值
+（`telemetry 0 (0 = off, the default)`），`LuxTelemetry` javadoc 同步。
+**测量与 dev 路径不受影响**：build.gradle 的三个 run 配置显式传 5/10，测量服的
+`config/lucistarlink.properties` 显式写 30（文件里已存在的键会被保留）。
+**现役服务器的立即关闭**：`config/lucistarlink.properties` 把 `telemetrySeconds=30` 改成 0
+（该文件是首次启动时按当时默认写死的，代码默认值改了它也不会变），或删掉该行/整个文件重启再生。
+想要回这行健康监控：同键设正数秒数，或 `-Dscalablelux.telemetrySeconds=30`。

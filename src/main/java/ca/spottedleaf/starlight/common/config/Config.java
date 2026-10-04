@@ -68,8 +68,12 @@ public class Config {
         }
 
         ENABLED = getBoolean(properties, newProperties, "enabled", "scalablelux.enabled", true);
+        // telemetry is OFF by default (2026-10-04, owner request): the periodic SLTELEM console line is a
+        // monitoring tool for measurement runs, not something every server should print. The measurement rig
+        // and the dev run configurations set the value explicitly, so they are unaffected; a server that
+        // wants the line sets telemetrySeconds in this file or -Dscalablelux.telemetrySeconds.
         TELEMETRY_SECONDS = getIntWithSystemProperty(properties, newProperties,
-                "telemetrySeconds", "scalablelux.telemetrySeconds", 30);
+                "telemetrySeconds", "scalablelux.telemetrySeconds", 0);
         PROFILE = getBoolean(properties, newProperties, "profile", "scalablelux.profile", false);
         PROFILE_INTERVAL_NANOS = getLongWithSystemProperty(properties, newProperties,
                 "profileIntervalNanos", "scalablelux.profileIntervalNanos", 2_000_000_000L);
